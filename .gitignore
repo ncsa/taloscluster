@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.egg-info/
+kubeconfig
+talosconfig
+talossecrets.yaml
+secrets.yaml
