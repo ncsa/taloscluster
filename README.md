@@ -16,10 +16,18 @@ Requires `talosctl` and `kubectl` on PATH. With
 [uv](https://docs.astral.sh/uv/) nothing else is needed:
 
 ```bash
-uv run clusterctl --help
+uv tool install git+https://github.com/ncsa/clusterctl   # install
+uv tool upgrade clusterctl                                # update
 ```
 
-Or with pip: `python3 -m venv .venv && . .venv/bin/activate && pip install -e .`
+Or run it without installing:
+
+```bash
+uvx --from git+https://github.com/ncsa/clusterctl clusterctl --help
+```
+
+From a checkout of this repo: `uv run clusterctl --help`, or with pip:
+`python3 -m venv .venv && . .venv/bin/activate && pip install -e .`
 
 ## Quick start
 
