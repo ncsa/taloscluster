@@ -6,3 +6,4 @@ kubeconfig
 talosconfig
 talossecrets.yaml
 secrets.yaml
+cluster.yaml
