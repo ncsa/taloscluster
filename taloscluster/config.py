@@ -38,6 +38,7 @@ class Machine:
     disk: int          # GB, boot volume
     extensions: tuple[str, ...]        # resolved: base + cluster + pool, sorted
     config_patches: tuple[str, ...]    # freeform YAML docs, cluster + pool
+    tags: dict[str, str] = field(default_factory=dict)  # node labels, cluster + pool
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,8 @@ class Config:
     # extensions/patches applied to every node, on top of BASE_EXTENSIONS
     talos_extensions: list[str]
     talos_config_patches: list[str]
+    # extra tags exposed by talos as kubernetes node labels (machine.nodeLabels)
+    tags: dict[str, str]
 
     controlplane: dict[str, Any]       # count / flavor / disk
     workers: dict[str, dict[str, Any]] # pool -> {count, flavor, disk, extensions?, config_patches?}
@@ -97,6 +100,7 @@ class Config:
                 disk=_int(cp["disk"], "disk", "pool 'controlplane'"),
                 extensions=self._resolve_extensions(cp),
                 config_patches=self._resolve_patches(cp),
+                tags=self._resolve_tags(cp),
             )
 
         for pool, p in self.workers.items():
@@ -110,6 +114,7 @@ class Config:
                     disk=_int(p["disk"], "disk", f"pool '{pool}'"),
                     extensions=self._resolve_extensions(p),
                     config_patches=self._resolve_patches(p),
+                    tags=self._resolve_tags(p),
                 )
         return out
 
@@ -122,6 +127,12 @@ class Config:
         merged.update(self.talos_extensions)
         merged.update(pool.get("extensions", []) or [])
         return tuple(sorted(merged))
+
+    def _resolve_tags(self, pool: dict[str, Any]) -> dict[str, str]:
+        # cluster-wide tags first, pool-specific tags override on key collision
+        merged = {str(k): str(v) for k, v in self.tags.items()}
+        merged.update({str(k): str(v) for k, v in (pool.get("tags", {}) or {}).items()})
+        return merged
 
     def _resolve_patches(self, pool: dict[str, Any]) -> tuple[str, ...]:
         # cluster-wide freeform patches first, then pool-specific (pool wins as
@@ -167,6 +178,7 @@ def load_config(root: Path) -> Config:
         kubernetes_version=_require(d, "kubernetes", "version", where=where),
         talos_extensions=list(talos.get("extensions", []) or []),
         talos_config_patches=list(talos.get("config_patches", []) or []),
+        tags=dict(d.get("tags", {}) or {}),
         controlplane=_require(d, "controlplane", where=where),
         workers=d.get("workers", {}) or {},
         openstack_url=_require(d, "openstack", "url", where=where),

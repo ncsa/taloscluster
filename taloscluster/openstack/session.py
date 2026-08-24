@@ -40,9 +40,22 @@ def connect(cfg: Config, secrets: Secrets) -> Connection:
     )
 
 
-def _has_all_tags(obj: Any, required: Iterable[str]) -> bool:
+def project_name(conn: Connection) -> str:
+    """Name of the OpenStack project the application credential is scoped to.
+
+    Read from the keystone token itself (no extra API call, no identity-read
+    permission needed) -- and it is the PROJECT name (e.g. "bbdb"), not the
+    user name that owns the credential.
+    """
+    return conn.session.auth.get_access(conn.session).project_name or ""
+
+
+def _has_all_tags(obj: Any, required: Iterable[str], any_of: Iterable[str] = ()) -> bool:
     tags = set(getattr(obj, "tags", None) or [])
-    return set(required).issubset(tags)
+    if not set(required).issubset(tags):
+        return False
+    any_of = set(any_of)
+    return not any_of or bool(tags & any_of)
 
 
 class Inventory:
@@ -51,7 +64,9 @@ class Inventory:
     def __init__(self, conn: Connection, cluster: str):
         self.conn = conn
         self.cluster = cluster
-        self._filter = naming.base_tags(cluster)
+        self._filter = [naming.tag_cluster(cluster)]
+        # accept the pre-rename managed-by value too (see naming.LEGACY_MANAGED_BY)
+        self._managed = naming.managed_tags()
         # kind -> {name -> object}
         self._by_name: dict[str, dict[str, Any]] = {}
 
@@ -68,14 +83,16 @@ class Inventory:
         }
         for kind, lister in listers.items():
             self._by_name[kind] = {
-                o.name: o for o in lister() if _has_all_tags(o, self._filter) and o.name
+                o.name: o
+                for o in lister()
+                if _has_all_tags(o, self._filter, self._managed) and o.name
             }
         # floating ips have no name field; network.tf keyed them by `description`,
         # so index them that way (and tag them for the ownership filter).
         self._by_name["ips"] = {
             o.description: o
             for o in net.ips()
-            if _has_all_tags(o, self._filter) and o.description
+            if _has_all_tags(o, self._filter, self._managed) and o.description
         }
         # Nova servers (boot volume is managed by Nova via block-device-mapping
         # with delete_on_termination, so we don't track Cinder volumes -- they
@@ -83,7 +100,7 @@ class Inventory:
         self._by_name["servers"] = {
             s.name: s
             for s in self.conn.compute.servers(details=True)
-            if _has_all_tags(s, self._filter) and s.name
+            if _has_all_tags(s, self._filter, self._managed) and s.name
         }
         return self
 

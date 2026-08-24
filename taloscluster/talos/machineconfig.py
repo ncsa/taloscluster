@@ -43,7 +43,23 @@ class Endpoints:
     kubeapi_vip: str   # private fixed ip announced by controlplanes
 
 
-def _machine_patch(m: Machine, cfg: Config, ep: Endpoints, installer_image: str) -> dict:
+def _label_value(value: str) -> str:
+    """Make a value safe as a kubernetes label value: spaces become `_`
+    (an OpenStack project name may contain spaces, a label value may not)."""
+    return str(value).replace(" ", "_")
+
+
+def _node_labels(m: Machine, default_tags: dict[str, str] | None) -> dict[str, str]:
+    """role/pool first, then defaults (project name), then cluster.yaml tags —
+    later wins, so a user tag can override a default."""
+    labels = {"ncsa/role": m.role, "ncsa/pool": m.pool}
+    labels.update(default_tags or {})
+    labels.update(m.tags)
+    return {k: _label_value(v) for k, v in labels.items()}
+
+
+def _machine_patch(m: Machine, cfg: Config, ep: Endpoints, installer_image: str,
+                   default_tags: dict[str, str] | None = None) -> dict:
     interfaces = (
         [{"interface": "eth0", "dhcp": True, "vip": {"ip": ep.kubeapi_vip}}]
         if m.role == "controlplane"
@@ -53,7 +69,7 @@ def _machine_patch(m: Machine, cfg: Config, ep: Endpoints, installer_image: str)
         "machine": {
             "network": {"interfaces": interfaces},
             "certSANs": [ep.kubeapi_fip],
-            "nodeLabels": {"ncsa/role": m.role, "ncsa/pool": m.pool},
+            "nodeLabels": _node_labels(m, default_tags),
             "kubelet": {
                 "extraArgs": {"rotate-server-certificates": True},
                 # pin node ip to the private net so pod traffic never rides tailscale
@@ -118,17 +134,19 @@ def build_configs(
     ep: Endpoints,
     secrets_path: Path,
     installer_images: dict[tuple[str, ...], str],
+    default_tags: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Return {hostname -> machine-config YAML string} for every machine."""
     endpoint = f"https://{ep.kubeapi_fip}:6443"
     configs: dict[str, str] = {}
 
-    with tempfile.TemporaryDirectory(prefix="clusterctl-mc-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="taloscluster-mc-") as tmp:
         workdir = Path(tmp)
         for host, m in machines.items():
             installer_image = installer_images[m.extensions]
             patches: list[Path] = [
-                _write(workdir, f"{host}-machine", _machine_patch(m, cfg, ep, installer_image)),
+                _write(workdir, f"{host}-machine",
+                       _machine_patch(m, cfg, ep, installer_image, default_tags)),
                 _write(workdir, f"{host}-hostname", _hostname_patch(m)),
             ]
             if m.role == "controlplane":

@@ -1,4 +1,4 @@
-"""`clusterctl init`: scaffold a new cluster directory.
+"""`taloscluster init`: scaffold a new cluster directory.
 
 Writes the two files a cluster needs before the first converge — cluster.yaml
 (desired state, committable) and secrets.yaml (credentials, gitignored, 0600) —
@@ -20,8 +20,14 @@ from .state import SECRETS_FILE as TALOS_SECRETS_FILE
 CLUSTER_TEMPLATE = """\
 # Cluster definition — desired state, safe to commit (note: the `security`
 # allowlists reveal which source addresses may reach your apis).
-# Edit and run `clusterctl plan` / `clusterctl converge`.
+# Edit and run `taloscluster plan` / `taloscluster converge`.
 name: {name}
+
+# extra tags exposed by talos as kubernetes node labels (machine.nodeLabels);
+# the openstack project name is always added as ncsa/project (spaces -> _).
+# per-pool tags: are also supported and override these on key collision.
+# tags:
+#   team: platform
 
 talos:
   version: v1.13.8
@@ -67,9 +73,9 @@ tailscale:
 """
 
 SECRETS_TEMPLATE = """\
-# Secrets for this cluster — never commit (gitignored by `clusterctl init`).
+# Secrets for this cluster — never commit (gitignored by `taloscluster init`).
 openstack:
-  # application credential: openstack application credential create clusterctl
+  # application credential: openstack application credential create taloscluster
   credential_id: "CHANGE-ME"
   credential_secret: "CHANGE-ME"
 tailscale:
@@ -112,8 +118,8 @@ def init(root: Path, name: str) -> None:
     log("next steps")
     info(f"1. edit {SECRETS_FILE}: openstack application credential + tailscale key")
     info(f"2. edit {CLUSTER_FILE}: name, versions, pools, openstack endpoint, allowlists")
-    info("3. clusterctl plan      # dry-run, changes nothing")
-    info("4. clusterctl converge  # create the cluster")
+    info("3. taloscluster plan      # dry-run, changes nothing")
+    info("4. taloscluster converge  # create the cluster")
 
 
 def _ensure_gitignore(root: Path) -> None:
@@ -132,6 +138,6 @@ def _ensure_gitignore(root: Path) -> None:
     with path.open("a") as f:
         if present and not path.read_text().endswith("\n"):
             f.write("\n")
-        f.write("# added by clusterctl init\n")
+        f.write("# added by taloscluster init\n")
         f.writelines(f"{e}\n" for e in missing)
     info(f".gitignore: added {', '.join(missing)}")

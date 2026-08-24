@@ -1,4 +1,4 @@
-"""Shared fixtures for the clusterctl test suite.
+"""Shared fixtures for the taloscluster test suite.
 
 Pure unit tests: no cloud access, no talosctl/kubectl binaries. The
 ``make_config`` fixture exercises the real :func:`load_config` loader by
@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 import yaml
 
-from clusterctl.config import load_config
+from taloscluster.config import load_config
 
 # A minimal but fully valid cluster.yaml shape. Every key ``load_config``
 # hard-requires is present; pools carry count/flavor/disk so ``_validate``

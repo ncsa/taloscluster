@@ -1,13 +1,13 @@
-# clusterctl
+# taloscluster
 
-`clusterctl` provisions and manages [Talos Linux](https://www.talos.dev/)
+`taloscluster` provisions and manages [Talos Linux](https://www.talos.dev/)
 Kubernetes clusters on OpenStack from a single declarative file. You describe
-the cluster you want in `cluster.yaml`; `clusterctl converge` makes reality
+the cluster you want in `cluster.yaml`; `taloscluster converge` makes reality
 match it — create, scale up, scale down (drain first), and rolling
 Talos/Kubernetes upgrades are all the same command. Re-running is always safe.
 
 There is no state file. Every resource is named deterministically and tagged
-(`managed-by=clusterctl`, `cluster=<name>`); converge discovers what exists by
+(`managed-by=taloscluster`, `cluster=<name>`); converge discovers what exists by
 tag, creates what's missing, and never touches resources it didn't create.
 
 ## Install
@@ -16,30 +16,41 @@ Requires `talosctl` and `kubectl` on PATH. With
 [uv](https://docs.astral.sh/uv/) nothing else is needed:
 
 ```bash
-uv tool install git+https://github.com/ncsa/clusterctl   # install
-uv tool upgrade clusterctl                                # update
+uv tool install git+https://github.com/ncsa/taloscluster   # install
+uv tool upgrade taloscluster                                # update
 ```
 
 Or run it without installing:
 
 ```bash
-uvx --from git+https://github.com/ncsa/clusterctl clusterctl --help
+uvx --from git+https://github.com/ncsa/taloscluster taloscluster --help
 ```
 
-From a checkout of this repo: `uv run clusterctl --help`, or with pip:
+From a checkout of this repo: `uv run taloscluster --help`, or with pip:
 `python3 -m venv .venv && . .venv/bin/activate && pip install -e .`
+
+To hack on it, install it editable so the `taloscluster` command runs your
+working tree (edits take effect immediately, no reinstall):
+
+```bash
+git clone https://github.com/ncsa/taloscluster && cd taloscluster
+uv tool install --editable .          # editable install on PATH
+uv sync --extra dev && uv run pytest  # dev deps + tests
+```
+
+`uv tool uninstall taloscluster` removes it again.
 
 ## Quick start
 
 ```bash
-clusterctl init mycluster   # scaffold cluster.yaml, secrets.yaml, .gitignore
+taloscluster init mycluster   # scaffold cluster.yaml, secrets.yaml, .gitignore
 vi secrets.yaml             # openstack application credential + tailscale key
 vi cluster.yaml             # versions, pools, openstack endpoint, allowlists
-clusterctl plan             # dry-run: print every action, change nothing
-clusterctl converge         # build the cluster
+taloscluster plan             # dry-run: print every action, change nothing
+taloscluster converge         # build the cluster
 ```
 
-The machine running clusterctl must be on the tailnet — the initial bootstrap
+The machine running taloscluster must be on the tailnet — the initial bootstrap
 reaches the first controlplane node by its tailscale name.
 
 ## Commands
@@ -49,9 +60,10 @@ reaches the first controlplane node by its tailscale name.
 | `init [NAME]` | scaffold `cluster.yaml` / `secrets.yaml` / `.gitignore`; never overwrites existing files |
 | `plan` | dry-run converge: print every create/update/delete |
 | `converge` | make the cluster match cluster.yaml (phases: image → secrets → network/SG → discover → scale-down → upgrade → compute → bootstrap → kubeconfig → health) |
-| `status` | list managed OpenStack resources + `kubectl get nodes` |
+| `status` | show the OpenStack url/region/project, managed resources, kube-api/ingress floating ips + `kubectl get nodes` (`-o yaml` for machine-readable output) |
+| `check` | compare `talos.version` / `kubernetes.version` against the newest upstream releases and against what the nodes run; exits 1 if an update, a drifted node or a leftover cordon was found (`-o yaml` for machine-readable output) |
 | `dashboard [NODE...]` | `talosctl dashboard` on all (reachable) nodes, or just the ones given |
-| `env` | print `export OS_*` lines for the openstack CLI: `eval "$(clusterctl env)"` |
+| `env` | print `export OS_*` lines for the openstack CLI: `eval "$(taloscluster env)"` |
 | `image download\|remove` | build/upload the Glance boot image, or delete it (converge never deletes it) |
 | `destroy` | delete every managed resource + local state; the shared boot image is kept |
 
@@ -62,8 +74,8 @@ Options: every command takes `-C DIR` to operate on another cluster directory.
 Typical `cluster.yaml` edits and what converge does with them: bump a pool
 `count` to add nodes; lower it to drain + remove them; bump `talos.version`
 or `kubernetes.version` for a rolling upgrade (existing nodes are upgraded
-*before* new ones are added); edit a `security` allowlist to reconcile the
-security-group rules.
+*before* new ones are added — `taloscluster check` tells you which bumps are
+available); edit a `security` allowlist to reconcile the security-group rules.
 
 ## The three files
 
@@ -121,3 +133,21 @@ workers:
 Extra extensions take effect on the node's first upgrade pass (on OpenStack
 the boot image is the first-boot system; the factory installer image applies
 on `talosctl upgrade`), which converge handles automatically.
+
+## Tags (node labels)
+
+Every node carries kubernetes node labels via talos (`machine.nodeLabels`):
+`ncsa/role`, `ncsa/pool`, and `ncsa/project` — the OpenStack project name the
+application credential is scoped to (spaces replaced by `_`). Extra tags go in
+`cluster.yaml`, cluster-wide at the top level or per pool (pool wins, and a
+user tag may override a default):
+
+```yaml
+tags:
+  team: platform
+
+workers:
+  gpu:
+    tags:
+      workload: gpu
+```

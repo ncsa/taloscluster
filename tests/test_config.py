@@ -1,12 +1,12 @@
-"""Tests for clusterctl.config: machines expansion, extension/patch resolution,
+"""Tests for taloscluster.config: machines expansion, extension/patch resolution,
 validation errors, warnings, and cached_property semantics."""
 
 from __future__ import annotations
 
 import pytest
 
-from clusterctl.config import ConfigError, validate_warnings
-from clusterctl.naming import BASE_EXTENSIONS
+from taloscluster.config import ConfigError, validate_warnings
+from taloscluster.naming import BASE_EXTENSIONS
 
 # ---------------------------------------------------------------------------
 # machines expansion
@@ -189,3 +189,38 @@ def test_machines_is_cached_property(make_config):
     first = cfg.machines
     second = cfg.machines
     assert first is second
+
+
+# ---------------------------------------------------------------------------
+# tags
+# ---------------------------------------------------------------------------
+
+def test_tags_default_empty(make_config):
+    cfg = make_config()
+    assert cfg.tags == {}
+    assert cfg.machines["testcluster-controlplane-01"].tags == {}
+
+
+def test_tags_cluster_wide_reach_every_machine(make_config):
+    cfg = make_config({"tags": {"team": "platform"}})
+    for m in cfg.machines.values():
+        assert m.tags == {"team": "platform"}
+
+
+def test_tags_pool_overrides_cluster(make_config):
+    cfg = make_config({
+        "tags": {"team": "platform", "tier": "shared"},
+        "workers": {"worker": {
+            "count": 1, "flavor": "f", "disk": 20,
+            "tags": {"tier": "gpu"},
+        }},
+    })
+    assert cfg.machines["testcluster-worker-01"].tags == {"team": "platform", "tier": "gpu"}
+    assert cfg.machines["testcluster-controlplane-01"].tags == {
+        "team": "platform", "tier": "shared"
+    }
+
+
+def test_tags_values_coerced_to_str(make_config):
+    cfg = make_config({"tags": {"cost-center": 1234}})
+    assert cfg.machines["testcluster-controlplane-01"].tags == {"cost-center": "1234"}

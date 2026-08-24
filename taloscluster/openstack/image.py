@@ -76,7 +76,7 @@ def _build_image(conn: Connection, talos_version: str, ext_set, name: str) -> No
     if dry_run():
         return
 
-    workdir = Path(tempfile.mkdtemp(prefix="clusterctl-image-"))
+    workdir = Path(tempfile.mkdtemp(prefix="taloscluster-image-"))
     try:
         raw = workdir / "talos.raw"
         _download_and_decompress(url, raw)

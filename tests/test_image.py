@@ -1,4 +1,4 @@
-"""Tests for clusterctl.openstack.image._download_and_decompress.
+"""Tests for taloscluster.openstack.image._download_and_decompress.
 
 The function streams an xz-compressed Talos raw image from the factory and
 lzma-decompresses it to disk. We monkeypatch ``requests.get`` with a fake
@@ -12,7 +12,7 @@ import lzma
 
 import pytest
 
-from clusterctl.openstack import image
+from taloscluster.openstack import image
 
 
 class FakeResponse:

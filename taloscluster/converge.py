@@ -18,20 +18,22 @@ import os
 import shlex
 import subprocess
 import time
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
+import requests
+import yaml
 from openstack import exceptions as os_exceptions
 from openstack.connection import Connection
 
-from . import naming
+from . import naming, versions
 from .config import Config, Machine, load_config, load_secrets, validate_warnings
 from .errors import ReconcileError, preflight_tools
 from .k8s import kubectl
 from .openstack import compute, image, network, security
 from .openstack.network import NetworkRefs, _fixed_ip
-from .openstack.session import REGION, Inventory, connect
+from .openstack.session import REGION, Inventory, connect, project_name
 from .output import action, dry_run, info, log, warn
 from .state import State
 from .talos import factory, machineconfig, talosctl
@@ -85,7 +87,7 @@ def converge(root: Path, assume_yes: bool = False) -> None:
 
     # write the client talosconfig now that the endpoint (fip) is known. cp-01's
     # tailscale name goes in as the context endpoint so a hand-typed `talosctl`
-    # needs no -e; -n stays mandatory. clusterctl itself still passes both.
+    # needs no -e; -n stays mandatory. taloscluster itself still passes both.
     if state.secrets_exist() and refs.kubeapi_fip and not dry_run():
         talosconfig_path.write_text(
             talosctl.gen_talosconfig(
@@ -98,10 +100,16 @@ def converge(root: Path, assume_yes: bool = False) -> None:
     ep = Endpoints(kubeapi_fip=refs.kubeapi_fip, kubeapi_vip=refs.kubeapi_vip)
 
     # ---- machine configs (need the fip/vip from the network phase) -------
+    # every node gets the openstack project name as a default node label
+    # (spaces -> _ happens in machineconfig, label values can't hold spaces)
+    project = project_name(conn)
+    default_tags = {"ncsa/project": project} if project else {}
+
     configs: dict[str, str] = {}
     if state.secrets_exist() and refs.kubeapi_fip:
         configs = machineconfig.build_configs(
-            cfg, secrets, machines, ep, secrets_path, installer_images
+            cfg, secrets, machines, ep, secrets_path, installer_images,
+            default_tags=default_tags,
         )
 
     # ---- 4. DISCOVER: is the cluster reachable? --------------------------
@@ -234,14 +242,6 @@ def _wait_version(talosconfig: Path, endpoint: str, node: str, want: str,
     )
 
 
-def _latest_patch(minor: str) -> str:
-    """Newest patch release of a kubernetes minor, e.g. "1.35" -> "v1.35.7"."""
-    with urllib.request.urlopen(  # noqa: S310 - fixed https host
-        f"https://dl.k8s.io/release/stable-{minor}.txt", timeout=15
-    ) as resp:
-        return resp.read().decode().strip()
-
-
 def _k8s_upgrade_path(cur: str, want: str) -> list[str]:
     """The versions to step through to get from `cur` to `want`.
 
@@ -271,14 +271,37 @@ def _k8s_upgrade_path(cur: str, want: str) -> list[str]:
     for m in range(cur_minor + 1, want_minor):  # strictly intermediate hops
         label = f"{cur_major}.{m}"
         try:
-            path.append(_latest_patch(label))
-        except OSError as e:
+            path.append(versions.latest_kubernetes_patch(label))
+        except (OSError, requests.RequestException) as e:
             warn(f"could not resolve latest {label} patch ({e}); using {label}.0")
             path.append(f"v{label}.0")
     path.append(want)
     if len(path) > 1:
         info(f"stepping through minors: {' -> '.join(path)}")
     return path
+
+
+def _uncordon_stale(kubeconfig: Path, host: str) -> None:
+    """Lift a cordon `talosctl upgrade` left behind on `host`, if any.
+
+    Talos cordons the node it is upgrading and uncordons it on completion, so
+    normally there is nothing to do here -- but the uncordon is skipped whenever
+    the upgrade's client-side watch dies (see talosctl.upgrade) or the run is
+    interrupted. The node then stays SchedulingDisabled: nothing schedules onto
+    it, and every subsequent health check fails on "some nodes are not
+    schedulable" while kube-api looks perfectly healthy, which is exactly the
+    kind of drift converge exists to remove.
+
+    Only ever lifts a cordon -- taloscluster never cordons a node it keeps, so a
+    cordon on a managed node is always stale. A node cordoned BY HAND for
+    maintenance therefore gets lifted too; that is the trade converge makes
+    everywhere else (cluster.yaml wins over manual state).
+    """
+    if host not in kubectl.unschedulable(kubeconfig):
+        return
+    info(f"{host} is cordoned (leftover from the upgrade); uncordoning")
+    if not kubectl.uncordon(kubeconfig, host):
+        warn(f"could not uncordon {host}; run `kubectl uncordon {host}` by hand")
 
 
 def _health_or_kube_fallback(talosconfig: Path, endpoint: str, vip: str,
@@ -415,6 +438,7 @@ def _upgrade(cfg: Config, machines: dict[str, Machine], inv: Inventory,
         info(f"{host}: {cur_ver or '?'} -> {cfg.talos_version} ({want_image})")
         talosctl.upgrade(talosconfig, endpoint, ip, want_image)
         _wait_version(talosconfig, endpoint, ip, cfg.talos_version)
+        _uncordon_stale(kubeconfig, host)
         if not _health_or_kube_fallback(talosconfig, endpoint, refs.kubeapi_vip,
                                         kubeconfig, timeout="10m"):
             raise ReconcileError(f"cluster unhealthy after upgrading {host}; aborting rollout")
@@ -440,26 +464,216 @@ def _upgrade(cfg: Config, machines: dict[str, Machine], inv: Inventory,
             info(f"{cur or '?'} -> {step}")
             talosctl.upgrade_k8s(talosconfig, endpoint, cp1_ip, step)
             cur = step
+        # upgrade-k8s cordons each node in turn as it swaps the kubelet; a run
+        # that was interrupted leaves that cordon behind on whichever node it
+        # was working on
+        for node in kubectl.unschedulable(kubeconfig):
+            if node in machines:
+                _uncordon_stale(kubeconfig, node)
 
 
 # ---------------------------------------------------------------------------
 # status + destroy
 # ---------------------------------------------------------------------------
 
-def status(root: Path) -> None:
+_STATUS_KINDS = (
+    "networks", "subnets", "routers", "security_groups", "ports", "ips", "servers",
+)
+
+
+def _endpoint(inv: Inventory, name: str) -> dict[str, str]:
+    """The public floating ip + private VIP of a reserved endpoint (kubeapi /
+    ingress). Both live on the port named `name`; the fip is keyed by its
+    description (floating ips have no name field)."""
+    fip = inv.get("ips", name)
+    return {
+        "floating_ip": getattr(fip, "floating_ip_address", "") or "",
+        "vip": _fixed_ip(inv.get("ports", name)),
+    }
+
+
+def status(root: Path, output: str = "text") -> None:
     cfg = load_config(root)
     secrets = load_secrets(root)
     conn = connect(cfg, secrets)
     inv = Inventory(conn, cfg.name).load()
+    kubeconfig_path = root / "kubeconfig"
+
+    openstack_info = {
+        "url": cfg.openstack_url,
+        "region": REGION,
+        "project": project_name(conn),
+    }
+    kubeapi = _endpoint(inv, naming.kubeapi_name(cfg.name))
+    ingress = _endpoint(inv, naming.ingress_name(cfg.name))
+    api_url = f"https://{kubeapi['floating_ip']}:6443" if kubeapi["floating_ip"] else ""
+    up = kubectl.cluster_up(kubeconfig_path)
+
+    if output == "yaml":
+        print(yaml.safe_dump({
+            "cluster": cfg.name,
+            "openstack": openstack_info,
+            "kubernetes": {**kubeapi, "endpoint": api_url},
+            "ingress": ingress,
+            "resources": {k: sorted(inv.all(k)) for k in _STATUS_KINDS},
+            "nodes": kubectl.node_summary(kubeconfig_path) if up else [],
+        }, sort_keys=False).rstrip())
+        return
+
     log(f"status: {cfg.name}")
-    for kind in ("networks", "subnets", "routers", "security_groups", "ports", "ips", "servers"):
+    info(f"openstack: {openstack_info['url']} "
+         f"(region {openstack_info['region']}, "
+         f"project {openstack_info['project'] or '?'})")
+    for kind in _STATUS_KINDS:
         names = sorted(inv.all(kind))
         info(f"{kind}: {len(names)}")
         for n in names:
             info(f"    {n}")
-    kubeconfig_path = root / "kubeconfig"
-    if kubectl.cluster_up(kubeconfig_path):
+    log("endpoints")
+    info(f"kube api: {api_url or '(pending)'} "
+         f"(vip {kubeapi['vip'] or '(pending)'})")
+    info(f"ingress:  {ingress['floating_ip'] or '(pending)'} "
+         f"(vip {ingress['vip'] or '(pending)'})")
+    if up:
         print(kubectl.get_nodes_wide(kubeconfig_path))
+
+
+def _running_versions(root: Path, cfg: Config) -> list[dict[str, Any]]:
+    """Per-node {name, talos, kubernetes} as reported by the cluster itself.
+
+    Deliberately local-only and cheap: ONE talos discovery call (which already
+    carries each member's talos version) plus the local kubeconfig -- no
+    OpenStack call and no per-node `talosctl version`, so a node whose apid is
+    not answering directly is still reported at the version discovery knows.
+    An empty version means "not known", never "wrong version".
+    """
+    talosconfig_path = root / "talosconfig"
+    kubeconfig_path = root / "kubeconfig"
+    endpoint = f"{cfg.name}-controlplane-01"
+
+    up = kubectl.cluster_up(kubeconfig_path)
+    kubelets = {
+        n["name"]: n["version"]
+        for n in (kubectl.node_summary(kubeconfig_path) if up else [])
+    }
+    # a cordon left behind by an interrupted upgrade is invisible in a version
+    # comparison but breaks every health check, so report it here too
+    cordoned = set(kubectl.unschedulable(kubeconfig_path)) if up else set()
+    discovered = (talosctl.members(talosconfig_path, endpoint)
+                  if talosconfig_path.is_file() else {})
+    return [
+        {
+            "name": host,
+            "talos": discovered[host].version if host in discovered else "",
+            "kubernetes": kubelets.get(host, ""),
+            "cordoned": host in cordoned,
+        }
+        for host in sorted(set(discovered) | set(kubelets))
+    ]
+
+
+def _component_check(name: str, configured: str, latest: str,
+                     latest_patch: str) -> dict[str, Any]:
+    """One row of the version report: what cluster.yaml pins vs what upstream has.
+
+    Two separate questions, because they have different answers:
+      latest_patch  the newest patch of the SAME minor -- a safe, in-place bump
+      latest        the newest release overall -- may cross a minor (for
+                    kubernetes that means a multi-step upgrade, see
+                    _k8s_upgrade_path)
+    """
+    return {
+        "component": name,
+        "configured": configured,
+        "latest_patch": latest_patch,
+        "latest": latest,
+        "patch_available": bool(latest_patch) and versions.is_older(configured, latest_patch),
+        "minor_available": bool(latest) and versions.is_older(configured, latest)
+                           and versions.minor(configured) != versions.minor(latest),
+    }
+
+
+def check(root: Path, output: str = "text") -> int:
+    """Compare cluster.yaml's pinned versions against the newest upstream
+    releases (and against what the cluster actually runs).
+
+    Read-only and cloud-free: it asks factory.talos.dev / dl.k8s.io what exists,
+    talos discovery + the local kubeconfig what is running, and changes nothing.
+    Returns 1 if an update or a drift was found, 0 if everything is current, so
+    it can gate a CI job.
+    """
+    cfg = load_config(root)
+    report: dict[str, Any] = {"cluster": cfg.name, "components": [], "nodes": []}
+
+    try:
+        talos_all = versions.talos_versions()
+        talos_latest = versions.latest_talos(talos_all)
+        talos_patch = versions.latest_talos_patch(versions.minor(cfg.talos_version), talos_all)
+    except (requests.RequestException, ValueError) as e:
+        warn(f"could not reach the talos image factory ({e}); talos not checked")
+        talos_latest = talos_patch = ""
+    try:
+        k8s_latest = versions.latest_kubernetes()
+        k8s_patch = versions.latest_kubernetes_patch(versions.minor(cfg.kubernetes_version))
+    except (requests.RequestException, ValueError) as e:
+        warn(f"could not reach dl.k8s.io ({e}); kubernetes not checked")
+        k8s_latest = k8s_patch = ""
+
+    report["components"] = [
+        _component_check("talos", cfg.talos_version, talos_latest, talos_patch),
+        _component_check("kubernetes", cfg.kubernetes_version, k8s_latest, k8s_patch),
+    ]
+    report["nodes"] = _running_versions(root, cfg)
+    # a node running something other than cluster.yaml's pin: converge would fix it
+    drift = [
+        n for n in report["nodes"]
+        if (n["talos"] and n["talos"] != cfg.talos_version)
+        or (n["kubernetes"] and versions.parse(n["kubernetes"])
+            != versions.parse(cfg.kubernetes_version))
+    ]
+    report["drift"] = [n["name"] for n in drift]
+    cordoned = [n["name"] for n in report["nodes"] if n.get("cordoned")]
+    report["cordoned"] = cordoned
+    outdated = [c for c in report["components"] if c["patch_available"] or c["minor_available"]]
+    report["up_to_date"] = not outdated and not drift and not cordoned
+
+    if output == "yaml":
+        print(yaml.safe_dump(report, sort_keys=False).rstrip())
+        return 0 if report["up_to_date"] else 1
+
+    log(f"check: {cfg.name}")
+    for c in report["components"]:
+        info(f"{c['component']:<11} cluster.yaml {c['configured']:<10} "
+             f"latest patch {c['latest_patch'] or '?':<10} "
+             f"latest {c['latest'] or '?'}")
+    if report["nodes"]:
+        log("running on the cluster")
+        for n in report["nodes"]:
+            info(f"{n['name']:<28} talos {n['talos'] or '(unknown)':<10} "
+                 f"kubelet {n['kubernetes'] or '(not joined)'}"
+                 f"{'   SchedulingDisabled' if n.get('cordoned') else ''}")
+    else:
+        info("cluster not reachable; reporting cluster.yaml only")
+
+    log("summary")
+    for c in outdated:
+        target = c["latest_patch"] if c["patch_available"] else c["latest"]
+        key = "talos.version" if c["component"] == "talos" else "kubernetes.version"
+        info(f"{c['component']}: {c['configured']} -> {target} available "
+             f"(bump {key} in cluster.yaml, then `taloscluster converge`)")
+        if c["minor_available"] and c["latest"] != target:
+            info(f"    newest {c['component']} is {c['latest']} "
+                 f"({versions.minor(c['latest'])} is a minor upgrade)")
+    if drift:
+        info(f"{len(drift)} node(s) not on the configured versions "
+             f"({', '.join(n['name'] for n in drift)}); `taloscluster converge` would upgrade them")
+    if cordoned:
+        info(f"{len(cordoned)} node(s) cordoned ({', '.join(cordoned)}): nothing schedules "
+             "there and `talosctl health` fails on them; `taloscluster converge` uncordons, "
+             f"or `kubectl uncordon {cordoned[0]}`")
+    if report["up_to_date"]:
+        info("cluster.yaml pins the newest releases and every node is on them")
+    return 0 if report["up_to_date"] else 1
 
 
 def dashboard(root: Path, nodes: list[str] | None = None) -> None:
@@ -467,7 +681,7 @@ def dashboard(root: Path, nodes: list[str] | None = None) -> None:
 
     Three sources, in order of what each one knows:
 
-      openstack   every machine clusterctl manages, including one that was just
+      openstack   every machine taloscluster manages, including one that was just
                   created and has not booted talos yet
       discovery   the talos-level address of the ones that did boot
       apid probe  which of those actually answer right now
@@ -479,7 +693,7 @@ def dashboard(root: Path, nodes: list[str] | None = None) -> None:
     cfg = load_config(root)
     talosconfig_path = root / "talosconfig"
     if not talosconfig_path.is_file():
-        raise ReconcileError(f"missing {talosconfig_path} (run `clusterctl converge` first)")
+        raise ReconcileError(f"missing {talosconfig_path} (run `taloscluster converge` first)")
     # cp-01's tailscale name, the endpoint every other talos call here uses
     endpoint = f"{cfg.name}-controlplane-01"
 
@@ -524,9 +738,9 @@ def dashboard(root: Path, nodes: list[str] | None = None) -> None:
 
 def print_env(root: Path) -> None:
     """Print the OS_* auth exports (from cluster.yaml + secrets.yaml) so the
-    `openstack` CLI can use the same application credential clusterctl does:
+    `openstack` CLI can use the same application credential taloscluster does:
 
-        eval "$(clusterctl env)"
+        eval "$(taloscluster env)"
         openstack image show ...
 
     Note: this writes the credential secret to stdout -- intended for eval, not
@@ -585,7 +799,7 @@ def image_remove(root: Path, assume_yes: bool = False) -> None:
                 "On Ceph-backed clouds (like Radiant) each boot volume is a "
                 "copy-on-write clone of the image, so the image cannot be deleted "
                 "while any cluster's nodes still exist. Note: you usually do NOT "
-                "need to delete the image -- `clusterctl image download` updates "
+                "need to delete the image -- `taloscluster image download` updates "
                 "its properties in place. To rebuild it, `destroy` the dependent "
                 "cluster(s) first, then `image remove`."
             ) from e
@@ -602,7 +816,7 @@ def destroy(root: Path, assume_yes: bool = False) -> None:
     fips = inv.all("ips")
     log(f"destroy {cfg.name}: {len(servers)} servers, {len(ports)} ports, "
         f"{len(fips)} floating ips, network + router + security group")
-    warn("this deletes all clusterctl-managed OpenStack resources for this cluster "
+    warn("this deletes all taloscluster-managed OpenStack resources for this cluster "
          "(the shared boot image is NOT deleted), and removes talossecrets.yaml "
          "-- the cluster identity -- along with the talosconfig/kubeconfig derived "
          "from it. The next converge will be a brand-new cluster.")

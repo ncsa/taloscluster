@@ -1,4 +1,4 @@
-"""Tests for clusterctl.talos.machineconfig: the per-node patch builders and
+"""Tests for taloscluster.talos.machineconfig: the per-node patch builders and
 the ``build_configs`` orchestrator.
 
 No ``talosctl`` binary is needed: ``build_configs`` shells out via
@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from clusterctl.config import Secrets
-from clusterctl.talos import machineconfig
-from clusterctl.talos.machineconfig import INSTALL_DISK, Endpoints
+from taloscluster.config import Secrets
+from taloscluster.talos import machineconfig
+from taloscluster.talos.machineconfig import INSTALL_DISK, Endpoints
 
 FIP = "203.0.113.10"
 VIP = "192.168.0.10"
@@ -77,6 +77,34 @@ def test_machine_patch_nodelabels_carry_role_and_pool(cfg, ep):
         "ncsa/role": "controlplane", "ncsa/pool": "controlplane"
     }
     assert wk_patch["machine"]["nodeLabels"] == {"ncsa/role": "worker", "ncsa/pool": "worker"}
+
+
+def test_machine_patch_nodelabels_include_tags_and_defaults(make_config, ep):
+    cfg = make_config({
+        "tags": {"team": "platform"},
+        "workers": {"worker": {
+            "count": 1, "flavor": "gp.xlarge", "disk": 50,
+            "tags": {"workload": "batch"},
+        }},
+    })
+    m = cfg.machines["testcluster-worker-01"]
+    patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER,
+                                         default_tags={"ncsa/project": "my project"})
+    assert patch["machine"]["nodeLabels"] == {
+        "ncsa/role": "worker",
+        "ncsa/pool": "worker",
+        "ncsa/project": "my_project",  # spaces in the project name become _
+        "team": "platform",
+        "workload": "batch",
+    }
+
+
+def test_machine_patch_user_tag_overrides_default(make_config, ep):
+    cfg = make_config({"tags": {"ncsa/project": "override"}})
+    m = cfg.machines["testcluster-controlplane-01"]
+    patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER,
+                                         default_tags={"ncsa/project": "bbdb"})
+    assert patch["machine"]["nodeLabels"]["ncsa/project"] == "override"
 
 
 def test_machine_patch_kubelet_node_ip_pinned_to_cidr(cfg, ep):

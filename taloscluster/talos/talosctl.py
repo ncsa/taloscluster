@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -84,7 +85,7 @@ def gen_talosconfig(cluster: str, endpoint: str, secrets_path: Path,
     """The client talosconfig (CA + context), the heir of terraform's
     talos_client_configuration.
 
-    clusterctl always passes -e/-n explicitly, so only the CA/context matter to
+    taloscluster always passes -e/-n explicitly, so only the CA/context matter to
     it. `client_endpoint` (controlplane-01's tailscale name) is baked in as the
     context endpoint so a `talosctl ...` typed by hand needs no -e.
 
@@ -132,14 +133,33 @@ def reachable(talosconfig: Path, endpoint: str, node: str) -> bool:
     return rc == 0
 
 
-def member_addresses(talosconfig: Path, endpoint: str) -> dict[str, str]:
-    """hostname -> address, from talos cluster discovery (`get members`).
+@dataclass(frozen=True)
+class Member:
+    """One entry of talos cluster discovery (`get members`)."""
+
+    address: str
+    version: str      # talos version the member reports, e.g. "v1.13.9" ("" if odd)
+
+
+def _member_version(operating_system: str) -> str:
+    """"Talos (v1.13.9)" -> "v1.13.9" (the shape `get members` reports)."""
+    if "(" in operating_system and operating_system.endswith(")"):
+        return operating_system[operating_system.index("(") + 1:-1].strip()
+    return ""
+
+
+def members(talosconfig: Path, endpoint: str) -> dict[str, Member]:
+    """hostname -> Member, from talos cluster discovery (`get members`).
 
     Covers nodes that booted and joined the talos cluster but never became
     kubernetes nodes, which is why this beats asking kubectl. Each member
     reports several addresses; we prefer its tailscale (100.64/10) one because
     it is unique per node -- among the private ips, controlplane-01 also
     carries the shared kube-api VIP, which would target the wrong node.
+
+    Discovery also reports each member's talos version, so ONE call answers
+    "which nodes exist, where, and on what version" -- no per-node
+    `talosctl version` fan-out, which would need every node's apid to answer.
 
     Returns {} if discovery itself is unreachable (a cluster that has never
     bootstrapped), leaving the caller to fall back to OpenStack's private ips.
@@ -149,7 +169,7 @@ def member_addresses(talosconfig: Path, endpoint: str) -> dict[str, str]:
     )
     if rc != 0:
         return {}
-    members: dict[str, str] = {}
+    found: dict[str, Member] = {}
     decoder = json.JSONDecoder()
     idx, n = 0, len(out)
     while idx < n:
@@ -159,12 +179,21 @@ def member_addresses(talosconfig: Path, endpoint: str) -> dict[str, str]:
             break
         obj, idx = decoder.raw_decode(out, idx)  # `-o json` is a stream, not an array
         host = (obj.get("metadata") or {}).get("id") or ""
-        addrs = (obj.get("spec") or {}).get("addresses") or []
+        spec = obj.get("spec") or {}
+        addrs = spec.get("addresses") or []
         if not host or not addrs:
             continue
         tailscale = [a for a in addrs if a.startswith("100.64.")]
-        members[host] = tailscale[0] if tailscale else addrs[0]
-    return members
+        found[host] = Member(
+            address=tailscale[0] if tailscale else addrs[0],
+            version=_member_version(str(spec.get("operatingSystem") or "")),
+        )
+    return found
+
+
+def member_addresses(talosconfig: Path, endpoint: str) -> dict[str, str]:
+    """hostname -> address only, for callers that do not care about versions."""
+    return {host: m.address for host, m in members(talosconfig, endpoint).items()}
 
 
 def dashboard(talosconfig: Path, endpoint: str, nodes: list[str]) -> None:
@@ -248,9 +277,8 @@ def health(talosconfig: Path, endpoint: str, node: str, timeout: str = "10m",
     _run(_talos(talosconfig, endpoint, node, *args))
 
 
-def server_version(talosconfig: Path, endpoint: str, node: str) -> str:
-    """Parse the Server Tag from `talosctl version` (structured, not awk)."""
-    out = _run(_talos(talosconfig, endpoint, node, "version"), capture=True)
+def _server_tag(out: str) -> str:
+    """The Server block's Tag from `talosctl version` output ("" if absent)."""
     server = False
     for line in out.splitlines():
         s = line.strip()
@@ -259,6 +287,11 @@ def server_version(talosconfig: Path, endpoint: str, node: str) -> str:
         elif server and s.startswith("Tag:"):
             return s.split(None, 1)[1].strip()
     return ""
+
+
+def server_version(talosconfig: Path, endpoint: str, node: str) -> str:
+    """Parse the Server Tag from `talosctl version` (structured, not awk)."""
+    return _server_tag(_run(_talos(talosconfig, endpoint, node, "version"), capture=True))
 
 
 def node_image(talosconfig: Path, endpoint: str, node: str) -> str:

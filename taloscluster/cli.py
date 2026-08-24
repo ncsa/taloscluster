@@ -1,10 +1,11 @@
-"""clusterctl command-line entrypoint.
+"""taloscluster command-line entrypoint.
 
-    clusterctl init [NAME]                    # scaffold cluster.yaml / secrets.yaml / .gitignore
-    clusterctl converge [--dry-run] [--yes]   # default; make the cluster match cluster.yaml
-    clusterctl plan                           # dry-run converge: print what would change
-    clusterctl status                         # show managed resources + nodes
-    clusterctl destroy [--yes]                # tear down all managed resources
+    taloscluster init [NAME]                    # scaffold cluster.yaml / secrets.yaml / .gitignore
+    taloscluster converge [--dry-run] [--yes]   # default; make the cluster match cluster.yaml
+    taloscluster plan                           # dry-run converge: print what would change
+    taloscluster status [-o yaml]               # show managed resources, endpoints + nodes
+    taloscluster check [-o yaml]                # are talos/kubernetes up to date?
+    taloscluster destroy [--yes]                # tear down all managed resources
 
 `plan` is just `converge --dry-run`; both print every state-changing action they
 would take. Any deletion in converge requires --yes (or an interactive confirm),
@@ -48,7 +49,11 @@ def _cmd_plan(args, root):
 
 
 def _cmd_status(args, root):
-    _converge.status(root)
+    _converge.status(root, output=args.output)
+
+
+def _cmd_check(args, root):
+    return _converge.check(root, output=args.output)
 
 
 def _cmd_dashboard(args, root):
@@ -74,20 +79,22 @@ def _cmd_destroy(args, root):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="clusterctl",
+        prog="taloscluster",
         description="Converge a Talos Kubernetes cluster on OpenStack to cluster.yaml.",
         epilog=(
             "examples:\n"
-            "  clusterctl init mycluster      scaffold cluster.yaml/secrets.yaml/.gitignore\n"
-            "  clusterctl plan                dry-run: print every create/update/delete\n"
-            "  clusterctl converge            make the cluster match cluster.yaml\n"
-            "  clusterctl converge --yes      converge, approving deletions without a prompt\n"
-            "  clusterctl status              list managed resources and nodes\n"
-            "  clusterctl destroy             delete all managed resources (image is kept)\n"
+            "  taloscluster init mycluster      scaffold cluster.yaml/secrets.yaml/.gitignore\n"
+            "  taloscluster plan                dry-run: print every create/update/delete\n"
+            "  taloscluster converge            make the cluster match cluster.yaml\n"
+            "  taloscluster converge --yes      converge, approving deletions without a prompt\n"
+            "  taloscluster status              list managed resources, endpoints and nodes\n"
+            "  taloscluster check               compare pinned versions against the newest\n"
+            "                                   releases\n"
+            "  taloscluster destroy             delete all managed resources (image is kept)\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--version", action="version", version=f"clusterctl {__version__}")
+    parser.add_argument("--version", action="version", version=f"taloscluster {__version__}")
     sub = parser.add_subparsers()
 
     p_init = sub.add_parser(
@@ -98,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
                     "talossecrets.yaml, talosconfig, kubeconfig). Never overwrites "
                     "an existing cluster.yaml or secrets.yaml; an existing "
                     ".gitignore only gets the entries it is missing. Edit both "
-                    "files, then run `clusterctl plan`.",
+                    "files, then run `taloscluster plan`.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common(p_init)
@@ -147,13 +154,42 @@ def main(argv: list[str] | None = None) -> int:
     p_status = sub.add_parser(
         "status",
         help="show managed resources and nodes",
-        description="List the OpenStack resources tagged as belonging to this "
-                    "cluster (networks, subnets, routers, security group, ports, "
-                    "floating ips, servers) and, if reachable, `kubectl get nodes`.",
+        description="Print the OpenStack endpoint/region/project this cluster "
+                    "lives in (never the credential), the resources tagged as "
+                    "belonging to it (networks, subnets, routers, security group, "
+                    "ports, floating ips, servers), the kube-api and ingress floating "
+                    "ips (with their private VIPs) and, if reachable, "
+                    "`kubectl get nodes`. `-o yaml` prints the same information "
+                    "as a yaml document instead.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common(p_status)
+    p_status.add_argument(
+        "-o", "--output", choices=["text", "yaml"], default="text",
+        help="output format (default: text)",
+    )
     p_status.set_defaults(func=_cmd_status)
+
+    p_check = sub.add_parser(
+        "check",
+        help="check whether talos/kubernetes are up to date",
+        description="Compare the versions pinned in cluster.yaml against the "
+                    "newest upstream releases (factory.talos.dev for talos, "
+                    "dl.k8s.io for kubernetes) and against what the cluster "
+                    "actually runs. Reports the newest patch of the pinned "
+                    "minor (a safe in-place bump) separately from the newest "
+                    "release overall, plus any node not yet on the pinned "
+                    "versions. Read-only: it needs no OpenStack credentials and "
+                    "changes nothing. Exits 1 when an update or a drift was "
+                    "found, 0 when everything is current, so it can gate CI.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_common(p_check)
+    p_check.add_argument(
+        "-o", "--output", choices=["text", "yaml"], default="text",
+        help="output format (default: text)",
+    )
+    p_check.set_defaults(func=_cmd_check)
 
     p_dash = sub.add_parser(
         "dashboard",
@@ -179,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         help="print OS_* auth exports for the openstack CLI",
         description="Print `export OS_...` lines (from cluster.yaml + secrets.yaml) "
                     "so the openstack CLI uses the same application credential. "
-                    "Usage: eval \"$(clusterctl env)\". Prints the credential "
+                    "Usage: eval \"$(taloscluster env)\". Prints the credential "
                     "secret to stdout — intended for eval, not logging.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -208,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     p_destroy = sub.add_parser(
         "destroy",
         help="delete all managed resources",
-        description="Delete every clusterctl-managed OpenStack resource for this "
+        description="Delete every taloscluster-managed OpenStack resource for this "
                     "cluster (servers, ports, floating ips, router, subnet, network, "
                     "security group). The shared boot image is NOT deleted. Prompts "
                     "for confirmation unless --yes.",
@@ -232,7 +268,9 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.dir).resolve()
 
     try:
-        args.func(args, root)
+        # commands return an exit code only when they have a verdict to report
+        # (`check` exits 1 on an available update); the rest return None -> 0.
+        rc = args.func(args, root)
     except Die as e:
         print(e, file=sys.stderr)
         return 1
@@ -246,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
         return 130
-    return 0
+    return int(rc or 0)
 
 
 if __name__ == "__main__":

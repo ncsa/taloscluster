@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "clusterctl"
+name = "taloscluster"
 version = "0.1.0"
 description = "Converge a Talos Kubernetes cluster on OpenStack from cluster.yaml (Python alternative to the terraform/ + bin/cluster.sh workflow)"
 requires-python = ">=3.10"
@@ -14,19 +14,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# the `openstack` CLI is NOT needed by clusterctl, but handy for poking at the
+# the `openstack` CLI is NOT needed by taloscluster, but handy for poking at the
 # cloud by hand. install with: uv sync --extra openstack   (or uv run --extra openstack openstack ...)
 openstack = ["python-openstackclient"]
 dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.10", "types-PyYAML", "types-requests"]
 
 [project.scripts]
-clusterctl = "clusterctl.cli:main"
+taloscluster = "taloscluster.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["clusterctl*"]
+include = ["taloscluster*"]
 
 # talosctl and kubectl are required at runtime but are external binaries, not
-# python packages -- clusterctl shells out to them (see clusterctl/errors.py
+# python packages -- taloscluster shells out to them (see taloscluster/errors.py
 # preflight). openstack CLI / yq / jq / curl / xz are intentionally NOT needed.
 
 [tool.pytest.ini_options]

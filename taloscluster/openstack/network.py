@@ -59,11 +59,11 @@ def reconcile(
 
     # reserved VIP ports + floating ips (needed BEFORE machine configs, since the
     # fip is a certSAN and the vip is announced by the controlplanes)
-    kube_port = _ensure_port(conn, naming.kubeapi_name(cluster), network, inv, tags)
+    kube_port = _ensure_port(conn, naming.kubeapi_name(cluster), network, inv, tags, sg)
     refs.kubeapi_vip = _fixed_ip(kube_port)
     refs.kubeapi_fip = _ensure_fip(conn, naming.kubeapi_name(cluster), ext, kube_port, inv, tags)
 
-    ing_port = _ensure_port(conn, naming.ingress_name(cluster), network, inv, tags)
+    ing_port = _ensure_port(conn, naming.ingress_name(cluster), network, inv, tags, sg)
     refs.ingress_vip = _fixed_ip(ing_port)
     refs.ingress_fip = _ensure_fip(conn, naming.ingress_name(cluster), ext, ing_port, inv, tags)
 
@@ -155,18 +155,49 @@ def _ensure_router_interface(conn, router, subnet):
     action(f"attach router {router.name} to subnet")
 
 
-def _ensure_port(conn, name, network, inv, tags):
-    """A reserved port (kubeapi/ingress VIP holder)."""
+def _ensure_port(conn, name, network, inv, tags, sg):
+    """A reserved port (kubeapi/ingress VIP holder).
+
+    It carries the cluster security group like every other port. Left to
+    Neutron a new port lands in the project's `default` group instead, which
+    allows nothing inbound -- and this is the port each floating ip is
+    associated with, so on a cloud that filters at the floating ip's own port
+    (rather than only at the instance tap the traffic finally lands on) the
+    cluster rules (80/443, 6443, 50000) have to be present here too.
+    """
     port = inv.get("ports", name)
     if port:
         info(f"port {name} exists")
+        _reconcile_port_sg(conn, port, sg)
         return port
     action(f"create port {name}")
     if dry_run() or network is None:
         return None
-    port = conn.network.create_port(name=name, network_id=network.id)
+    kwargs = dict(name=name, network_id=network.id)
+    if sg is not None:
+        kwargs["security_group_ids"] = [sg.id]
+    port = conn.network.create_port(**kwargs)
     conn.network.set_tags(port, tags)
     return inv.put("ports", port)
+
+
+def _reconcile_port_sg(conn, port, sg) -> None:
+    """Move a port onto the cluster security group if it isn't on it.
+
+    Ports created before this was enforced sit in the project's `default`
+    group; converge corrects them in place rather than recreating the port
+    (recreating would drop the fixed ip, and with it the VIP the floating ip
+    points at).
+    """
+    if sg is None:
+        return
+    current = list(getattr(port, "security_group_ids", None) or [])
+    if sg.id in current:
+        return
+    action(f"set security group on port {port.name} ({current or 'default'} -> {sg.name})")
+    if dry_run():
+        return
+    conn.network.update_port(port, security_groups=[sg.id])
 
 
 def _ensure_machine_port(conn, cluster, m: Machine, network, sg, pair_ip, inv):
@@ -176,6 +207,7 @@ def _ensure_machine_port(conn, cluster, m: Machine, network, sg, pair_ip, inv):
     port = inv.get("ports", name)
     if port:
         _reconcile_allowed_pairs(conn, port, desired_pairs)
+        _reconcile_port_sg(conn, port, sg)
         return port
     action(f"create port {name} (allowed_address_pairs={pair_ip or '-'})")
     if dry_run() or network is None:

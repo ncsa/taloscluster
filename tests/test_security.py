@@ -1,4 +1,4 @@
-"""Tests for clusterctl.openstack.security: desired-rule construction and the
+"""Tests for taloscluster.openstack.security: desired-rule construction and the
 ``_rule_key`` normalizer that maps Neutron rule objects to comparable tuples.
 
 No OpenStack connection is needed -- ``_desired_rules`` and ``_rule_key`` are
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import types
 
-from clusterctl.openstack.security import SELF, _desired_rules, _rule_key
+from taloscluster.openstack.security import SELF, _desired_rules, _rule_key
 
 SG_ID = "sg-123"
 

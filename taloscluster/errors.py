@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import shutil
 
-# External binaries clusterctl shells out to. Unlike the shell script we do NOT
+# External binaries taloscluster shells out to. Unlike the shell script we do NOT
 # need terraform, yq, jq, curl, xz, or the openstack CLI.
 REQUIRED_TOOLS = ("talosctl", "kubectl")
 

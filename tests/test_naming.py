@@ -1,8 +1,8 @@
-"""Tests for clusterctl.naming: tag builders and deterministic resource names."""
+"""Tests for taloscluster.naming: tag builders and deterministic resource names."""
 
 from __future__ import annotations
 
-from clusterctl import naming
+from taloscluster import naming
 
 CLUSTER = "mycluster"
 
@@ -11,7 +11,11 @@ CLUSTER = "mycluster"
 # ---------------------------------------------------------------------------
 
 def test_tag_managed():
-    assert naming.tag_managed() == "managed-by=clusterctl"
+    assert naming.tag_managed() == "managed-by=taloscluster"
+
+
+def test_managed_tags_includes_the_pre_rename_value():
+    assert naming.managed_tags() == ["managed-by=taloscluster", "managed-by=clusterctl"]
 
 
 def test_tag_cluster():
@@ -30,13 +34,13 @@ def test_tag_pool():
 
 def test_base_tags():
     tags = naming.base_tags(CLUSTER)
-    assert tags == ["managed-by=clusterctl", "cluster=mycluster"]
+    assert tags == ["managed-by=taloscluster", "cluster=mycluster"]
 
 
 def test_node_tags_is_base_plus_role_plus_pool():
     tags = naming.node_tags(CLUSTER, "worker", "gpu")
     assert tags == [
-        "managed-by=clusterctl",
+        "managed-by=taloscluster",
         "cluster=mycluster",
         "role=worker",
         "pool=gpu",

@@ -10,7 +10,10 @@ Neutron/Nova/Cinder tags are plain strings, so we use a `key=value` convention.
 
 from __future__ import annotations
 
-MANAGED_BY = "clusterctl"
+MANAGED_BY = "taloscluster"
+# the tool was called clusterctl before; resources it created are still tagged
+# managed-by=clusterctl. Discovery accepts either, new resources get MANAGED_BY.
+LEGACY_MANAGED_BY = "clusterctl"
 
 # Extensions baked into every node's base image. tailscale gives reachability
 # without public IPs (idles if no auth key); qemu-guest-agent lets OpenStack do
@@ -22,6 +25,11 @@ BASE_EXTENSIONS = ("siderolabs/tailscale", "siderolabs/qemu-guest-agent")
 
 def tag_managed() -> str:
     return f"managed-by={MANAGED_BY}"
+
+
+def managed_tags() -> list[str]:
+    """Every managed-by value that marks a resource as ours."""
+    return [tag_managed(), f"managed-by={LEGACY_MANAGED_BY}"]
 
 
 def tag_cluster(cluster: str) -> str:
@@ -37,7 +45,7 @@ def tag_pool(pool: str) -> str:
 
 
 def base_tags(cluster: str) -> list[str]:
-    """Tags applied to every resource; also the discovery filter for this cluster."""
+    """Tags applied to every resource this tool creates."""
     return [tag_managed(), tag_cluster(cluster)]
 
 

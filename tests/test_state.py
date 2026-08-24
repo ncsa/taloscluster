@@ -1,4 +1,4 @@
-"""Tests for clusterctl.state: talos secrets persistence + reset, using tmp_path.
+"""Tests for taloscluster.state: talos secrets persistence + reset, using tmp_path.
 
 No real secrets are written -- just marker text -- since we only test the
 State helper's filesystem behaviour, permissions, and error contract.
@@ -11,8 +11,8 @@ import stat
 
 import pytest
 
-from clusterctl.errors import StateError
-from clusterctl.state import DERIVED_FILES, SECRETS_FILE, State
+from taloscluster.errors import StateError
+from taloscluster.state import DERIVED_FILES, SECRETS_FILE, State
 
 
 def test_secrets_exist_false_when_missing(tmp_path):

@@ -1,4 +1,4 @@
-"""Tests for clusterctl.scaffold: `clusterctl init` file creation, permissions,
+"""Tests for taloscluster.scaffold: `taloscluster init` file creation, permissions,
 never-overwrite behaviour, and .gitignore append logic, using tmp_path.
 """
 
@@ -9,7 +9,7 @@ import stat
 
 import yaml
 
-from clusterctl.scaffold import GITIGNORE_ENTRIES, init
+from taloscluster.scaffold import GITIGNORE_ENTRIES, init
 
 
 def test_init_creates_all_three_files(tmp_path):
