@@ -67,8 +67,23 @@ def test_cluster_apps_carries_the_ingress_ips(kubeconfig, cfg):
 
 
 def test_cluster_apps_carries_the_openstack_project(kubeconfig, cfg):
-    out = manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"]
-    assert "my project" in out
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"])
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["openstack"]["project"] == "my project"
+
+
+def test_cluster_apps_uses_nfs_csi(kubeconfig, cfg):
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"])
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["nfs"]["type"] == "csi"
+
+
+def test_cluster_apps_uses_cluster_name_for_taiga_path(kubeconfig, cfg):
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"])
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["nfs"]["servers"]["taiga"]["path"] == (
+        "/taiga/ncsa/radiant/testcluster"
+    )
 
 
 def test_cluster_secret_is_annotated_with_the_rancher_id(kubeconfig, cfg):

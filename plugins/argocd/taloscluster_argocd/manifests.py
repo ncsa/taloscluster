@@ -245,6 +245,7 @@ def _cluster_apps(
     name = cfg.name
     rancher_id = _rancher_id(ctx)
     openstack_url = cfg.openstack.url if cfg.openstack else ""
+    openstack_project = ctx.openstack.get("project", "")
     ost_id, ost_secret = (ost or ("", ""))
     metallb_enabled = enabled(cfg.metallb)
     metallb_addr = ctx.ingress.get("vip", "")
@@ -260,14 +261,13 @@ def _cluster_apps(
     cinder_enabled = enabled(cfg.cinder)
     nfs_enabled = enabled(cfg.nfs)
     nfs_taiga = bool(cfg.nfs.get("taiga")) and nfs_enabled
-    nfs_project = ctx.openstack.get("project", "")
     nfs_servers = "          servers: {}\n"
     if nfs_taiga:
         nfs_servers = (
             "          servers:\n"
             "            taiga:\n"
             "              server: taiga-nfs.ncsa.illinois.edu\n"
-            f'              path: "/taiga/ncsa/radiant/{nfs_project}"\n'
+            f'              path: "/taiga/ncsa/radiant/{name}"\n'
             "              defaultClass: true\n"
         )
     sync_enabled = cfg.sync
@@ -302,7 +302,7 @@ spec:
             id: "{rancher_id}"
 
         openstack:
-          project: {name}
+          project: {openstack_project}
           auth_url: {openstack_url}
           region: RegionOne
           credential_id: "{ost_id}"
@@ -349,7 +349,7 @@ spec:
 
         nfs:
           enabled: {"true" if nfs_enabled else "false"}
-          type: subdir
+          type: csi
           mountPermissions: "0777"
 {nfs_servers}
         longhorn:

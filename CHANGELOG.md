@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ArgoCD NFS storage uses the CSI provisioner.
 - Read package versions from distribution metadata.
 - Renamed from `clusterctl` to `taloscluster`.
   - Resources tagged `managed-by=clusterctl` are still discovered.
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ArgoCD Taiga NFS shares use the cluster name instead of the OpenStack project.
 - ArgoCD cluster values include the Rancher cluster ID when available.
 - ArgoCD check detects modified resources as well as missing resources.
 - Neutron resources are tagged atomically and conflicting names fail safely.
