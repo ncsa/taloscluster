@@ -87,6 +87,17 @@ def test_cluster_secret_has_no_annotation_without_rancher(kubeconfig, cfg):
     assert json.loads(doc["stringData"]["config"])["tlsClientConfig"]["insecure"] is False
 
 
+@pytest.mark.parametrize("results, expected", [
+    ({"rancher": {"cluster_id": "c-abc12"}}, "c-abc12"),
+    ({}, ""),
+])
+def test_cluster_apps_carries_the_rancher_id(kubeconfig, cfg, results, expected):
+    ctx = ctx_for(kubeconfig, results=results)
+    doc = yaml.safe_load(manifests.render(cfg, ctx)["cluster-apps"])
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["cluster"]["rancher"]["id"] == expected
+
+
 def test_render_without_git_url_emits_only_secret_and_project(kubeconfig, cfg):
     cfg.git_url = None
     assert sorted(manifests.render(cfg, ctx_for(kubeconfig))) == ["project", "secret"]

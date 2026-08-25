@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ArgoCD cluster values include the Rancher cluster ID when available.
 - ArgoCD check detects modified resources as well as missing resources.
 - Neutron resources are tagged atomically and conflicting names fail safely.
 - OpenStack project lookup handles sessions without an authentication plugin.

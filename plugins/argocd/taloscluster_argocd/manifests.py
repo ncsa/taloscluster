@@ -91,10 +91,14 @@ def _rancher_annotation(ctx: Context) -> str:
     Rancher cluster. Absent when rancher is not installed or not configured for
     this cluster -- that is normal, not an error.
     """
-    cluster_id = (ctx.results.get("rancher") or {}).get("cluster_id")
+    cluster_id = _rancher_id(ctx)
     if not cluster_id:
         return ""
     return f"  annotations:\n    rancher.cattle.io/cluster-id: {cluster_id}\n"
+
+
+def _rancher_id(ctx: Context) -> str:
+    return str((ctx.results.get("rancher") or {}).get("cluster_id") or "")
 
 
 def _groups_block(emails: tuple[str, ...]) -> str:
@@ -239,6 +243,7 @@ def _cluster_apps(
         raise ConfigError("argocd.git.url not set in cluster.yaml; cannot render cluster-apps")
     server, _ca, _cert, _key = _cluster_connection(ctx.root)
     name = cfg.name
+    rancher_id = _rancher_id(ctx)
     openstack_url = cfg.openstack.url if cfg.openstack else ""
     ost_id, ost_secret = (ost or ("", ""))
     metallb_enabled = enabled(cfg.metallb)
@@ -294,7 +299,7 @@ spec:
           name: {name}
           url: {server}
           rancher:
-            id: ""
+            id: "{rancher_id}"
 
         openstack:
           project: {name}
