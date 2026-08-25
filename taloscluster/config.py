@@ -9,6 +9,8 @@ so yq/jq disappear.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -21,6 +23,9 @@ from .naming import BASE_EXTENSIONS
 
 CLUSTER_FILE = "cluster.yaml"
 SECRETS_FILE = "secrets.yaml"
+
+_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+_VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
 # ---------------------------------------------------------------------------
@@ -167,29 +172,56 @@ def require(d: dict[str, Any], *keys: str, where: str) -> Any:
     return cur
 
 
+def _mapping(value: Any, field: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError(f"{field} must be a YAML mapping")
+    return value
+
+
+def _string_list(value: Any, field: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(v, str) or not v for v in value):
+        raise ConfigError(f"{field} must be a list of non-empty strings")
+    return value
+
+
 def load_config(root: Path) -> Config:
     d = read_yaml(root / CLUSTER_FILE)
     where = CLUSTER_FILE
 
-    talos = d.get("talos", {}) or {}
+    talos = _mapping(d.get("talos"), f"{where}: talos")
+    controlplane = _mapping(require(d, "controlplane", where=where),
+                            f"{where}: controlplane")
+    workers = _mapping(d.get("workers"), f"{where}: workers")
+    tags = _mapping(d.get("tags"), f"{where}: tags")
+    security = _mapping(d.get("security"), f"{where}: security")
+    tailscale = _mapping(d.get("tailscale"), f"{where}: tailscale")
     cfg = Config(
         name=require(d, "name", where=where),
         talos_version=require(d, "talos", "version", where=where),
         kubernetes_version=require(d, "kubernetes", "version", where=where),
-        talos_extensions=list(talos.get("extensions", []) or []),
-        talos_config_patches=list(talos.get("config_patches", []) or []),
-        tags=dict(d.get("tags", {}) or {}),
-        controlplane=require(d, "controlplane", where=where),
-        workers=d.get("workers", {}) or {},
+        talos_extensions=_string_list(talos.get("extensions"),
+                                      f"{where}: talos.extensions"),
+        talos_config_patches=_string_list(talos.get("config_patches"),
+                                          f"{where}: talos.config_patches"),
+        tags=tags,
+        controlplane=controlplane,
+        workers=workers,
         openstack_url=require(d, "openstack", "url", where=where),
         availability_zone=require(d, "openstack", "availability_zone", where=where),
         external_net=require(d, "openstack", "external_net", where=where),
         cidr=require(d, "network", "cidr", where=where),
-        dns=list(require(d, "network", "dns", where=where)),
-        ntp=list(require(d, "network", "ntp", where=where)),
-        security_kubernetes=dict((d.get("security", {}) or {}).get("kubernetes", {}) or {}),
-        security_talos=dict((d.get("security", {}) or {}).get("talos", {}) or {}),
-        login_server=(d.get("tailscale", {}) or {}).get("login_server"),
+        dns=_string_list(require(d, "network", "dns", where=where),
+                         f"{where}: network.dns"),
+        ntp=_string_list(require(d, "network", "ntp", where=where),
+                         f"{where}: network.ntp"),
+        security_kubernetes=_mapping(security.get("kubernetes"),
+                                     f"{where}: security.kubernetes"),
+        security_talos=_mapping(security.get("talos"), f"{where}: security.talos"),
+        login_server=tailscale.get("login_server"),
         raw=d,
     )
     _validate(cfg)
@@ -208,18 +240,101 @@ def load_secrets(root: Path) -> Secrets:
 
 
 def _int(value: Any, field: str, where: str) -> int:
-    try:
+    if isinstance(value, bool):
+        raise ConfigError(f"{where}: '{field}' must be an integer, got {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()):
         return int(value)
-    except (TypeError, ValueError):
-        raise ConfigError(f"{where}: '{field}' must be an integer, got {value!r}") from None
+    raise ConfigError(f"{where}: '{field}' must be an integer, got {value!r}")
 
 
 def _validate(cfg: Config) -> None:
-    """Hard errors only; soft issues are reported by validate_warnings."""
-    for pool_name, p in {"controlplane": cfg.controlplane, **cfg.workers}.items():
+    """Reject invalid or ambiguous desired state before touching the cluster."""
+    if not isinstance(cfg.name, str) or not _NAME_RE.fullmatch(cfg.name):
+        raise ConfigError(
+            "cluster.yaml: name must contain lowercase letters, numbers and internal hyphens"
+        )
+    for field_name, version in (
+        ("talos.version", cfg.talos_version),
+        ("kubernetes.version", cfg.kubernetes_version),
+    ):
+        if not isinstance(version, str) or not _VERSION_RE.fullmatch(version):
+            raise ConfigError(
+                f"cluster.yaml: {field_name} must be a release version such as v1.2.3"
+            )
+
+    if "controlplane" in cfg.workers:
+        raise ConfigError("worker pool name 'controlplane' is reserved")
+
+    pools = {"controlplane": cfg.controlplane, **cfg.workers}
+    for pool_name, p in pools.items():
+        if not isinstance(pool_name, str) or not _NAME_RE.fullmatch(pool_name):
+            raise ConfigError(f"worker pool name {pool_name!r} is not a valid hostname component")
+        if not isinstance(p, dict):
+            raise ConfigError(f"pool '{pool_name}' must be a YAML mapping")
         for key in ("count", "flavor", "disk"):
             if key not in p:
                 raise ConfigError(f"pool '{pool_name}' missing '{key}'")
+        count = _int(p["count"], "count", f"pool '{pool_name}'")
+        if pool_name == "controlplane" and count < 1:
+            raise ConfigError("pool 'controlplane': 'count' must be at least 1")
+        if pool_name != "controlplane" and count < 0:
+            raise ConfigError(f"pool '{pool_name}': 'count' must be zero or greater")
+        if not isinstance(p["flavor"], str) or not p["flavor"].strip():
+            raise ConfigError(f"pool '{pool_name}': 'flavor' must be a non-empty string")
+        if _int(p["disk"], "disk", f"pool '{pool_name}'") <= 0:
+            raise ConfigError(f"pool '{pool_name}': 'disk' must be greater than zero")
+        _string_list(p.get("extensions"), f"pool '{pool_name}': extensions")
+        _string_list(p.get("config_patches"), f"pool '{pool_name}': config_patches")
+        _mapping(p.get("tags"), f"pool '{pool_name}': tags")
+        if len(f"{cfg.name}-{pool_name}-01") > 63:
+            raise ConfigError("cluster and pool names make a hostname longer than 63 characters")
+
+    for field_name, value in (
+        ("openstack.url", cfg.openstack_url),
+        ("openstack.availability_zone", cfg.availability_zone),
+        ("openstack.external_net", cfg.external_net),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"cluster.yaml: {field_name} must be a non-empty string")
+    if cfg.login_server is not None and not isinstance(cfg.login_server, str):
+        raise ConfigError("cluster.yaml: tailscale.login_server must be a string")
+
+    if not isinstance(cfg.cidr, str):
+        raise ConfigError("cluster.yaml: network.cidr must be a CIDR string")
+    try:
+        network = ipaddress.ip_network(cfg.cidr, strict=True)
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"cluster.yaml: network.cidr is not a valid network: {cfg.cidr!r}"
+        ) from None
+    if network.version != 4:
+        raise ConfigError("cluster.yaml: network.cidr must be IPv4")
+    for dns in cfg.dns:
+        try:
+            ipaddress.ip_address(dns)
+        except ValueError:
+            raise ConfigError(
+                f"cluster.yaml: network.dns contains an invalid address: {dns!r}"
+            ) from None
+    for field_name, allowlist in (
+        ("security.kubernetes", cfg.security_kubernetes),
+        ("security.talos", cfg.security_talos),
+    ):
+        for label, cidr in allowlist.items():
+            if not isinstance(label, str) or not label or not isinstance(cidr, str):
+                raise ConfigError(
+                    f"cluster.yaml: {field_name} must map names to CIDR strings"
+                )
+            try:
+                allowed = ipaddress.ip_network(cidr, strict=True)
+            except ValueError:
+                raise ConfigError(
+                    f"cluster.yaml: {field_name}.{label} has invalid CIDR {cidr!r}"
+                ) from None
+            if allowed.version != 4:
+                raise ConfigError(f"cluster.yaml: {field_name}.{label} must be IPv4")
 
 
 def validate_warnings(cfg: Config) -> list[str]:

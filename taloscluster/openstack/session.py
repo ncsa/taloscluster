@@ -20,6 +20,7 @@ from openstack.connection import Connection
 
 from .. import naming
 from ..config import Config, Secrets
+from ..errors import ReconcileError
 
 REGION = "RegionOne"
 
@@ -47,7 +48,10 @@ def project_name(conn: Connection) -> str:
     permission needed) -- and it is the PROJECT name (e.g. "bbdb"), not the
     user name that owns the credential.
     """
-    return conn.session.auth.get_access(conn.session).project_name or ""
+    get_access = getattr(conn.session.auth, "get_access", None)
+    if not callable(get_access):
+        return ""
+    return get_access(conn.session).project_name or ""
 
 
 def _has_all_tags(obj: Any, required: Iterable[str], any_of: Iterable[str] = ()) -> bool:
@@ -69,6 +73,11 @@ class Inventory:
         self._managed = naming.managed_tags()
         # kind -> {name -> object}
         self._by_name: dict[str, dict[str, Any]] = {}
+        # kind -> names already used by resources this cluster does not own.
+        # Checking these at get() prevents a crash-created untagged resource (or
+        # a genuinely foreign collision) from being silently duplicated/adopted.
+        self._foreign_names: dict[str, set[str]] = {}
+        self._duplicate_names: dict[str, set[str]] = {}
 
     # -- population --------------------------------------------------------
 
@@ -82,31 +91,47 @@ class Inventory:
             "security_groups": net.security_groups,
         }
         for kind, lister in listers.items():
-            self._by_name[kind] = {
-                o.name: o
-                for o in lister()
-                if _has_all_tags(o, self._filter, self._managed) and o.name
-            }
+            self._index(kind, lister(), key="name")
         # floating ips have no name field; network.tf keyed them by `description`,
         # so index them that way (and tag them for the ownership filter).
-        self._by_name["ips"] = {
-            o.description: o
-            for o in net.ips()
-            if _has_all_tags(o, self._filter, self._managed) and o.description
-        }
+        self._index("ips", net.ips(), key="description")
         # Nova servers (boot volume is managed by Nova via block-device-mapping
         # with delete_on_termination, so we don't track Cinder volumes -- they
         # also lack Neutron-style tags).
-        self._by_name["servers"] = {
-            s.name: s
-            for s in self.conn.compute.servers(details=True)
-            if _has_all_tags(s, self._filter, self._managed) and s.name
-        }
+        self._index("servers", self.conn.compute.servers(details=True), key="name")
         return self
+
+    def _index(self, kind: str, objects: Iterable[Any], key: str) -> None:
+        owned: dict[str, Any] = {}
+        foreign: set[str] = set()
+        duplicates: set[str] = set()
+        for obj in objects:
+            name = getattr(obj, key, None)
+            if not name:
+                continue
+            if _has_all_tags(obj, self._filter, self._managed):
+                if name in owned:
+                    duplicates.add(name)
+                owned[name] = obj
+            else:
+                foreign.add(name)
+        self._by_name[kind] = owned
+        self._foreign_names[kind] = foreign
+        self._duplicate_names[kind] = duplicates
 
     # -- access ------------------------------------------------------------
 
     def get(self, kind: str, name: str) -> Any | None:
+        if name in self._duplicate_names.get(kind, set()):
+            raise ReconcileError(
+                f"multiple managed {kind} resources are named {name!r}; "
+                "refusing an ambiguous reconciliation"
+            )
+        if name in self._foreign_names.get(kind, set()):
+            raise ReconcileError(
+                f"{kind} resource {name!r} exists without this cluster's ownership tags; "
+                "refusing to adopt it or create a duplicate"
+            )
         return self._by_name.get(kind, {}).get(name)
 
     def all(self, kind: str) -> dict[str, Any]:

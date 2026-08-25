@@ -133,7 +133,10 @@ def converge(root: Path, assume_yes: bool = False) -> int:
 
     # ---- 5. SCALE-DOWN ---------------------------------------------------
     if up:
-        _scale_down(conn, cfg, machines, inv, refs, talosconfig_path, kubeconfig_path)
+        _scale_down(
+            conn, cfg, machines, inv, refs, talosconfig_path, kubeconfig_path,
+            assume_yes=assume_yes,
+        )
 
     # ---- 6. MACHINE CONFIG (existing nodes) ------------------------------
     # Before the upgrade phase on purpose: cluster.extraManifests lives in the
@@ -179,7 +182,7 @@ def converge(root: Path, assume_yes: bool = False) -> int:
     # ---- 10. HEALTH + STATUS ---------------------------------------------
     if not dry_run() and refs.kubeapi_vip:
         log("health")
-        _health_or_kube_fallback(talosconfig_path, cp1, refs.kubeapi_vip, kubeconfig_path)
+        _require_final_health(talosconfig_path, cp1, refs.kubeapi_vip, kubeconfig_path)
         log("status")
         print(kubectl.get_nodes_wide(kubeconfig_path))
         print(f"kube api:   https://{refs.kubeapi_fip}:6443")
@@ -374,6 +377,13 @@ def _health_or_kube_fallback(talosconfig: Path, endpoint: str, vip: str,
     return False
 
 
+def _require_final_health(talosconfig: Path, endpoint: str, vip: str,
+                          kubeconfig: Path) -> None:
+    """Fail converge when neither Talos health nor Kubernetes readiness passes."""
+    if not _health_or_kube_fallback(talosconfig, endpoint, vip, kubeconfig):
+        raise ReconcileError("cluster is unhealthy after converge")
+
+
 def _private_ip(inv: Inventory, refs: NetworkRefs | None, host: str) -> str:
     if refs is not None and host in refs.machine_private_ips:
         return refs.machine_private_ips[host]
@@ -382,25 +392,36 @@ def _private_ip(inv: Inventory, refs: NetworkRefs | None, host: str) -> str:
 
 def _scale_down(conn: Connection, cfg: Config, machines: dict[str, Machine],
                 inv: Inventory, refs: NetworkRefs, talosconfig: Path,
-                kubeconfig: Path) -> None:
+                kubeconfig: Path, assume_yes: bool = False) -> None:
     log("scale down")
     # talosctl endpoint = cp-01's tailscale name (reliably reachable from this
     # tailnet host); the node is always a numeric private ip apid can route to.
     endpoint = f"{cfg.name}-controlplane-01"
     desired = set(machines)
     live = kubectl.node_names(kubeconfig)
+    removals = [node for node in live if node not in desired]
+    if not removals:
+        info("nothing to remove")
+        return
+
+    # Validate every removal before prompting so confirmation means the whole
+    # displayed operation is safe to start.
+    desired_cp = int(cfg.controlplane["count"])
+    for node in removals:
+        if "-controlplane-" in node and (desired_cp % 2 == 0 or desired_cp < 1):
+            raise ReconcileError(
+                f"refusing to remove controlplane {node}: desired controlplane "
+                f"count {desired_cp} would break etcd quorum"
+            )
+
+    warn(f"scale down will remove {len(removals)} node(s): {', '.join(removals)}")
+    if not assume_yes and not dry_run():
+        resp = input("type the cluster name to confirm: ").strip()
+        if resp != cfg.name:
+            raise SystemExit("aborted")
+
     removed = 0
-    for node in live:
-        if node in desired:
-            continue
-        is_cp = "-controlplane-" in node
-        if is_cp:
-            desired_cp = int(cfg.controlplane["count"])
-            if desired_cp % 2 == 0 or desired_cp < 1:
-                raise ReconcileError(
-                    f"refusing to remove controlplane {node}: desired controlplane "
-                    f"count {desired_cp} would break etcd quorum"
-                )
+    for node in removals:
         ip = _private_ip(inv, refs, node)
         if not ip:
             warn(f"no private ip for {node}, skipping removal")
@@ -876,12 +897,6 @@ def destroy(root: Path, assume_yes: bool = False) -> int:
     conn = connect(cfg, secrets)
     inv = Inventory(conn, cfg.name).load()
 
-    # plugins first, while the cluster is still reachable: deregistering from
-    # Rancher/ArgoCD needs a working kubeconfig, which the teardown below and
-    # State.reset() are about to take away.
-    ctx = Context(root=root, cfg=cfg)
-    failed = _run_plugins(ctx, "destroy", reverse=True, assume_yes=assume_yes)
-
     servers = inv.all("servers")
     ports = inv.all("ports")
     fips = inv.all("ips")
@@ -895,6 +910,11 @@ def destroy(root: Path, assume_yes: bool = False) -> int:
         resp = input("type the cluster name to confirm: ").strip()
         if resp != cfg.name:
             raise SystemExit("aborted")
+
+    # Plugins still run before OpenStack teardown, while the cluster is
+    # reachable, but only after the user has confirmed the entire destroy.
+    ctx = Context(root=root, cfg=cfg)
+    failed = _run_plugins(ctx, "destroy", reverse=True, assume_yes=assume_yes)
 
     for host in list(servers):
         compute.delete_node(conn, host, inv)

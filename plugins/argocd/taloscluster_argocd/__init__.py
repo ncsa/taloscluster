@@ -13,12 +13,17 @@ plugin protocol.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
+
 from taloscluster.context import Context
 
 from .config import argocd_configured
 from .reconcile import check, converge, destroy, status
 
-__version__ = "0.1.0"
+try:
+    __version__ = version("taloscluster-argocd")
+except PackageNotFoundError:  # source tree imported without installing the package
+    __version__ = "0+unknown"
 
 # rancher first when it is installed: its converge publishes the Rancher cluster
 # id, which the cluster Secret gets annotated with. Ignored when rancher is not

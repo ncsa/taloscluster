@@ -13,12 +13,17 @@ plugin protocol.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
+
 from taloscluster.context import Context
 
 from .config import rancher_configured
 from .reconcile import check, converge, destroy, status
 
-__version__ = "0.1.0"
+try:
+    __version__ = version("taloscluster-rancher")
+except PackageNotFoundError:  # source tree imported without installing the package
+    __version__ = "0+unknown"
 
 # nothing to wait for: rancher runs first and hands its cluster id to whoever
 # declares AFTER = ("rancher",)

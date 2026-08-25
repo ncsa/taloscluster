@@ -117,6 +117,14 @@ def _present(ctx: Context) -> dict[str, bool]:
     return {name: kube.exists(target, ctx.root, doc) for name, doc in m.items()}
 
 
+def _matching(ctx: Context) -> dict[str, bool]:
+    """Which rendered resources exactly match their live ArgoCD objects."""
+    cfg, target = _load(ctx.root)
+    _validate(target)
+    m = render(cfg, ctx, git=_git(target), ost=_ost(target))
+    return {name: kube.matches(target, ctx.root, doc) for name, doc in m.items()}
+
+
 def status(ctx: Context) -> dict:
     """Which pieces of this cluster's ArgoCD registration are in place."""
     cfg, target = _load(ctx.root)
@@ -129,7 +137,7 @@ def status(ctx: Context) -> dict:
 
 
 def check(ctx: Context) -> dict:
-    """Would a converge apply anything? Not ok while a manifest is missing."""
-    present = _present(ctx)
-    missing = sorted(name for name, ok in present.items() if not ok)
-    return {"ok": not missing, "missing": missing, "resources": present}
+    """Would converge apply anything? Not ok while a resource is missing or drifted."""
+    matching = _matching(ctx)
+    drifted = sorted(name for name, ok in matching.items() if not ok)
+    return {"ok": not drifted, "drifted": drifted, "resources": matching}

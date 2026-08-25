@@ -36,6 +36,21 @@ def exists(target: ApplyTarget, root: Path, manifest: str) -> bool:
     return proc.returncode == 0
 
 
+def matches(target: ApplyTarget, root: Path, manifest: str) -> bool:
+    """Whether the live resource content matches this desired manifest.
+
+    `kubectl diff` performs the same server-side normalization used by apply:
+    exit 0 means equal, 1 means drift, and larger values are actual errors.
+    """
+    args = _base_args(target, root) + ["diff", "-f", "-"]
+    proc = subprocess.run(args, input=manifest, text=True, capture_output=True)
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    raise ApplyError(f"kubectl diff failed: {proc.stderr.strip()}")
+
+
 def apply(target: ApplyTarget, root: Path, manifest: str) -> None:
     """Apply a manifest to the ArgoCD cluster (kubectl apply -f -)."""
     args = _base_args(target, root) + ["apply", "-f", "-"]

@@ -5,4 +5,9 @@ the same folder. Both provision the same thing; only one is used per cluster.
 See README-python.md.
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("taloscluster")
+except PackageNotFoundError:  # source tree imported without installing the package
+    __version__ = "0+unknown"

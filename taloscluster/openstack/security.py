@@ -74,9 +74,10 @@ def reconcile(conn: Connection, cfg: Config, inv: Inventory) -> Any:
         if dry_run():
             return None
         sg = conn.network.create_security_group(
-            name=name, description=f"{cluster} kubernetes cluster security group"
+            name=name,
+            description=f"{cluster} kubernetes cluster security group",
+            tags=tags,
         )
-        conn.network.set_tags(sg, tags)
         inv.put("security_groups", sg)
     else:
         info(f"security group {name} exists")

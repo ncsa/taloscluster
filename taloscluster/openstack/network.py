@@ -96,8 +96,7 @@ def _ensure_network(conn, cluster, inv, tags):
     action(f"create network {name}")
     if dry_run():
         return None
-    net = conn.network.create_network(name=name, admin_state_up=True)
-    conn.network.set_tags(net, tags)
+    net = conn.network.create_network(name=name, admin_state_up=True, tags=tags)
     return inv.put("networks", net)
 
 
@@ -116,8 +115,8 @@ def _ensure_subnet(conn, cfg, network, inv, tags):
         ip_version=4,
         cidr=cfg.cidr,
         dns_nameservers=list(cfg.dns),
+        tags=tags,
     )
-    conn.network.set_tags(sub, tags)
     return inv.put("subnets", sub)
 
 
@@ -134,8 +133,8 @@ def _ensure_router(conn, cluster, ext, inv, tags):
         name=name,
         admin_state_up=True,
         external_gateway_info={"network_id": ext.id},
+        tags=tags,
     )
-    conn.network.set_tags(rtr, tags)
     return inv.put("routers", rtr)
 
 
@@ -173,11 +172,10 @@ def _ensure_port(conn, name, network, inv, tags, sg):
     action(f"create port {name}")
     if dry_run() or network is None:
         return None
-    kwargs = dict(name=name, network_id=network.id)
+    kwargs = dict(name=name, network_id=network.id, tags=tags)
     if sg is not None:
         kwargs["security_group_ids"] = [sg.id]
     port = conn.network.create_port(**kwargs)
-    conn.network.set_tags(port, tags)
     return inv.put("ports", port)
 
 
@@ -212,13 +210,12 @@ def _ensure_machine_port(conn, cluster, m: Machine, network, sg, pair_ip, inv):
     action(f"create port {name} (allowed_address_pairs={pair_ip or '-'})")
     if dry_run() or network is None:
         return None
-    kwargs = dict(name=name, network_id=network.id)
+    kwargs = dict(name=name, network_id=network.id, tags=tags)
     if sg is not None:
         kwargs["security_group_ids"] = [sg.id]
     if desired_pairs:
         kwargs["allowed_address_pairs"] = desired_pairs
     port = conn.network.create_port(**kwargs)
-    conn.network.set_tags(port, tags)
     return inv.put("ports", port)
 
 
@@ -254,10 +251,7 @@ def _ensure_fip(conn, name, ext, port, inv, tags) -> str:
         floating_network_id=ext.id,
         port_id=port.id,
         description=name,
+        tags=tags,
     )
-    try:
-        conn.network.set_tags(fip, tags)
-    except exceptions.SDKException:
-        pass
     inv.put_keyed("ips", name, fip)
     return fip.floating_ip_address

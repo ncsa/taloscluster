@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Read package versions from distribution metadata.
 - Renamed from `clusterctl` to `taloscluster`.
   - Resources tagged `managed-by=clusterctl` are still discovered.
 - `argocd` and `rancher` are plugins of `taloscluster` instead of standalone
@@ -18,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ArgoCD check detects modified resources as well as missing resources.
+- Neutron resources are tagged atomically and conflicting names fail safely.
+- OpenStack project lookup handles sessions without an authentication plugin.
+- Scale-down and destroy confirm before deleting nodes or plugin-managed resources.
+- Converge fails when final Talos and Kubernetes health checks both fail.
+- Invalid cluster names, versions, networks and node pools fail before reconciliation.
 - The argocd plugin rendered an empty metallb address pool and empty ingress IPs:
   it read them from the `clusterctl` binary, gone since the rename, and ignored
   the failure.

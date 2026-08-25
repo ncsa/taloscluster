@@ -72,6 +72,7 @@ def test_new_reserved_port_gets_the_cluster_sg():
     conn, inv = FakeConn(), FakeInv()
     network._ensure_port(conn, "testcluster-ingress", NET, inv, ["tag"], SG)
     assert conn.created[0]["security_group_ids"] == ["sg-cluster"]
+    assert conn.created[0]["tags"] == ["tag"]
 
 
 def test_existing_reserved_port_in_the_default_sg_is_corrected():

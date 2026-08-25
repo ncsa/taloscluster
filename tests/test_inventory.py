@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from taloscluster.errors import ReconcileError
 from taloscluster.openstack.session import Inventory
 
 CLUSTER = "mycluster"
@@ -45,3 +48,41 @@ def test_ignores_other_clusters_and_untagged():
         _obj("bare", []),
     ])
     assert found == {}
+
+
+def test_get_rejects_an_untagged_name_collision():
+    inv = Inventory(_conn([_obj("expected", [])]), CLUSTER).load()
+    with pytest.raises(ReconcileError, match="ownership tags"):
+        inv.get("networks", "expected")
+
+
+def test_get_rejects_a_foreign_cluster_name_collision():
+    inv = Inventory(_conn([
+        _obj("expected", ["managed-by=taloscluster", "cluster=elsewhere"]),
+    ]), CLUSTER).load()
+    with pytest.raises(ReconcileError, match="refusing to adopt"):
+        inv.get("networks", "expected")
+
+
+def test_get_rejects_duplicate_managed_names():
+    tags = ["managed-by=taloscluster", "cluster=mycluster"]
+    inv = Inventory(_conn([_obj("duplicate", tags), _obj("duplicate", tags)]), CLUSTER).load()
+    with pytest.raises(ReconcileError, match="multiple managed"):
+        inv.get("networks", "duplicate")
+
+
+def test_project_name_is_empty_without_an_auth_plugin():
+    from taloscluster.openstack.session import project_name
+
+    conn = SimpleNamespace(session=SimpleNamespace(auth=None))
+    assert project_name(conn) == ""
+
+
+def test_project_name_uses_auth_access_when_available():
+    from taloscluster.openstack.session import project_name
+
+    auth = SimpleNamespace(
+        get_access=lambda session: SimpleNamespace(project_name="project-a")
+    )
+    conn = SimpleNamespace(session=SimpleNamespace(auth=auth))
+    assert project_name(conn) == "project-a"

@@ -146,15 +146,34 @@ def test_pool_missing_flavor_raises_config_error(make_config):
 # ---------------------------------------------------------------------------
 
 def test_non_integer_count_raises_config_error_not_value_error(make_config):
-    cfg = make_config({"controlplane": {"count": "three"}})
     with pytest.raises(ConfigError):
-        _ = cfg.machines
+        make_config({"controlplane": {"count": "three"}})
 
 
 def test_non_integer_count_in_worker_pool_raises_config_error(make_config):
-    cfg = make_config({"workers": {"worker": {"count": "two", "flavor": "f", "disk": 20}}})
     with pytest.raises(ConfigError):
-        _ = cfg.machines
+        make_config({"workers": {"worker": {"count": "two", "flavor": "f", "disk": 20}}})
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"name": "Bad_Name"}, "name"),
+        ({"talos": {"version": "latest"}}, "talos.version"),
+        ({"network": {"cidr": "not-a-cidr"}}, "network.cidr"),
+        ({"controlplane": {"count": 0}}, "controlplane"),
+        ({"workers": {"worker": {"count": -1, "flavor": "f", "disk": 20}}}, "count"),
+        ({"workers": {"controlplane": {"count": 1, "flavor": "f", "disk": 20}}},
+         "reserved"),
+        ({"workers": []}, "workers"),
+        ({"tags": []}, "tags"),
+        ({"talos": {"extensions": {}}}, "talos.extensions"),
+        ({"network": {"dns": "1.1.1.1"}}, "network.dns"),
+    ],
+)
+def test_invalid_configuration_fails_during_load(make_config, overrides, message):
+    with pytest.raises(ConfigError, match=message):
+        make_config(overrides)
 
 
 # ---------------------------------------------------------------------------

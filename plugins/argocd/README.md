@@ -67,8 +67,8 @@ taloscluster plugin argocd [converge|plan|destroy|status|check] [-C DIR]
 - **destroy** — delete the AppProject then the cluster Secret via kubectl. Runs
   before the OpenStack teardown, while the cluster is still reachable.
 - **status** — which of the rendered resources are present on the ArgoCD cluster.
-- **check** — not ok while any of them is missing, i.e. converge would apply
-  something.
+- **check** — not ok while any resource is missing or differs from its rendered
+  manifest, i.e. converge would apply something.
 
 ## Not configured
 
