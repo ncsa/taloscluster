@@ -146,7 +146,7 @@ class Config:
 # loading + validation
 # ---------------------------------------------------------------------------
 
-def _read_yaml(path: Path) -> dict[str, Any]:
+def read_yaml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise ConfigError(f"missing {path}")
     try:
@@ -158,7 +158,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def _require(d: dict[str, Any], *keys: str, where: str) -> Any:
+def require(d: dict[str, Any], *keys: str, where: str) -> Any:
     cur: Any = d
     for k in keys:
         if not isinstance(cur, dict) or k not in cur:
@@ -168,25 +168,25 @@ def _require(d: dict[str, Any], *keys: str, where: str) -> Any:
 
 
 def load_config(root: Path) -> Config:
-    d = _read_yaml(root / CLUSTER_FILE)
+    d = read_yaml(root / CLUSTER_FILE)
     where = CLUSTER_FILE
 
     talos = d.get("talos", {}) or {}
     cfg = Config(
-        name=_require(d, "name", where=where),
-        talos_version=_require(d, "talos", "version", where=where),
-        kubernetes_version=_require(d, "kubernetes", "version", where=where),
+        name=require(d, "name", where=where),
+        talos_version=require(d, "talos", "version", where=where),
+        kubernetes_version=require(d, "kubernetes", "version", where=where),
         talos_extensions=list(talos.get("extensions", []) or []),
         talos_config_patches=list(talos.get("config_patches", []) or []),
         tags=dict(d.get("tags", {}) or {}),
-        controlplane=_require(d, "controlplane", where=where),
+        controlplane=require(d, "controlplane", where=where),
         workers=d.get("workers", {}) or {},
-        openstack_url=_require(d, "openstack", "url", where=where),
-        availability_zone=_require(d, "openstack", "availability_zone", where=where),
-        external_net=_require(d, "openstack", "external_net", where=where),
-        cidr=_require(d, "network", "cidr", where=where),
-        dns=list(_require(d, "network", "dns", where=where)),
-        ntp=list(_require(d, "network", "ntp", where=where)),
+        openstack_url=require(d, "openstack", "url", where=where),
+        availability_zone=require(d, "openstack", "availability_zone", where=where),
+        external_net=require(d, "openstack", "external_net", where=where),
+        cidr=require(d, "network", "cidr", where=where),
+        dns=list(require(d, "network", "dns", where=where)),
+        ntp=list(require(d, "network", "ntp", where=where)),
         security_kubernetes=dict((d.get("security", {}) or {}).get("kubernetes", {}) or {}),
         security_talos=dict((d.get("security", {}) or {}).get("talos", {}) or {}),
         login_server=(d.get("tailscale", {}) or {}).get("login_server"),
@@ -197,12 +197,12 @@ def load_config(root: Path) -> Config:
 
 
 def load_secrets(root: Path) -> Secrets:
-    d = _read_yaml(root / SECRETS_FILE)
+    d = read_yaml(root / SECRETS_FILE)
     where = SECRETS_FILE
     ts = d.get("tailscale", {}) or {}
     return Secrets(
-        openstack_credential_id=_require(d, "openstack", "credential_id", where=where),
-        openstack_credential_secret=_require(d, "openstack", "credential_secret", where=where),
+        openstack_credential_id=require(d, "openstack", "credential_id", where=where),
+        openstack_credential_secret=require(d, "openstack", "credential_secret", where=where),
         tailscale_auth_key=ts.get("auth_key"),
     )
 

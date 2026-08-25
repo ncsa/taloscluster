@@ -5,7 +5,10 @@ existing nodes are upgraded to the target versions BEFORE new ones are added, so
 a new node never joins newer than the rest:
 
   image -> secrets -> network/SG -> discover -> scale-down -> upgrade ->
-  compute -> bootstrap -> kubeconfig -> health
+  compute -> bootstrap -> kubeconfig -> health -> plugins
+
+Plugins run last because they need a reachable cluster and the kubeconfig this
+run just wrote; on destroy they run first, for the same reason inverted.
 
 State is not held in a file (except the talos secrets); every phase re-derives
 what exists by querying OpenStack through the tagged inventory cache, so the
@@ -27,20 +30,26 @@ import yaml
 from openstack import exceptions as os_exceptions
 from openstack.connection import Connection
 
-from . import naming, versions
+from . import naming, plugins, versions
 from .config import Config, Machine, load_config, load_secrets, validate_warnings
+from .context import Context
 from .errors import ReconcileError, preflight_tools
 from .k8s import kubectl
 from .openstack import compute, image, network, security
 from .openstack.network import NetworkRefs, _fixed_ip
 from .openstack.session import REGION, Inventory, connect, project_name
 from .output import action, dry_run, info, log, warn
+from .output import report as print_report
 from .state import State
 from .talos import factory, machineconfig, talosctl
 from .talos.machineconfig import Endpoints
 
 
-def converge(root: Path, assume_yes: bool = False) -> None:
+def converge(root: Path, assume_yes: bool = False) -> int:
+    """Make the cluster match cluster.yaml. Returns a non-zero exit code only
+    when an installed plugin failed -- the cluster itself is already built by
+    then, so a downstream registration failure must not look like a converge
+    that did not happen."""
     cfg = load_config(root)
     secrets = load_secrets(root)
 
@@ -178,6 +187,30 @@ def converge(root: Path, assume_yes: bool = False) -> None:
         print(f"talosctl:   talosctl --talosconfig {talosconfig_path} "
               f"-e {cp1} -n {refs.kubeapi_vip} <cmd>")
         print(f"kubectl:    kubectl --kubeconfig {kubeconfig_path} get nodes")
+
+    # ---- 11. PLUGINS -----------------------------------------------------
+    # built from what this run already computed, so no plugin can trigger a
+    # second round-trip to OpenStack for facts we are holding right here.
+    api_url = f"https://{refs.kubeapi_fip}:6443" if refs.kubeapi_fip else ""
+    ctx = Context.from_converge(
+        root, cfg,
+        kubeapi={"floating_ip": refs.kubeapi_fip or "", "vip": refs.kubeapi_vip or "",
+                 "endpoint": api_url},
+        ingress={"floating_ip": refs.ingress_fip or "", "vip": refs.ingress_vip or ""},
+        openstack={"url": cfg.openstack_url, "region": REGION, "project": project},
+    )
+    return _run_plugins(ctx, "converge", assume_yes=assume_yes)
+
+
+def _run_plugins(ctx: Context, hook: str, reverse: bool = False, **kw) -> int:
+    """Fan a hook out to every plugin configured for this cluster directory."""
+    active = plugins.active(ctx)
+    if not active:
+        return 0
+    if reverse:
+        active = list(reversed(active))
+    log(f"plugins: {', '.join(p.name for p in active)}")
+    return plugins.run(active, hook, ctx, **kw)
 
 
 # ---------------------------------------------------------------------------
@@ -492,40 +525,60 @@ def _endpoint(inv: Inventory, name: str) -> dict[str, str]:
     }
 
 
-def status(root: Path, output: str = "text") -> None:
+def status_report(root: Path) -> dict[str, Any]:
+    """Everything `status` knows, as a plain dict.
+
+    Split out of `status()` because it is also what a plugin is handed through
+    `Context` -- the ingress VIP/floating ip and the OpenStack project live in
+    OpenStack, not in cluster.yaml, and a plugin must not have to shell out to
+    re-derive them.
+    """
     cfg = load_config(root)
     secrets = load_secrets(root)
     conn = connect(cfg, secrets)
     inv = Inventory(conn, cfg.name).load()
     kubeconfig_path = root / "kubeconfig"
 
-    openstack_info = {
-        "url": cfg.openstack_url,
-        "region": REGION,
-        "project": project_name(conn),
-    }
     kubeapi = _endpoint(inv, naming.kubeapi_name(cfg.name))
     ingress = _endpoint(inv, naming.ingress_name(cfg.name))
     api_url = f"https://{kubeapi['floating_ip']}:6443" if kubeapi["floating_ip"] else ""
     up = kubectl.cluster_up(kubeconfig_path)
 
+    return {
+        "cluster": cfg.name,
+        "openstack": {
+            "url": cfg.openstack_url,
+            "region": REGION,
+            "project": project_name(conn),
+        },
+        "kubernetes": {**kubeapi, "endpoint": api_url},
+        "ingress": ingress,
+        "resources": {k: sorted(inv.all(k)) for k in _STATUS_KINDS},
+        "nodes": kubectl.node_summary(kubeconfig_path) if up else [],
+    }
+
+
+def status(root: Path, output: str = "text") -> None:
+    report = status_report(root)
+    ctx = Context(root=root, cfg=load_config(root), status=report)
+    plugin_reports = plugins.collect(plugins.active(ctx), "status", ctx)
+
+    openstack_info = report["openstack"]
+    kubeapi = report["kubernetes"]
+    ingress = report["ingress"]
+    api_url = kubeapi["endpoint"]
+
     if output == "yaml":
-        print(yaml.safe_dump({
-            "cluster": cfg.name,
-            "openstack": openstack_info,
-            "kubernetes": {**kubeapi, "endpoint": api_url},
-            "ingress": ingress,
-            "resources": {k: sorted(inv.all(k)) for k in _STATUS_KINDS},
-            "nodes": kubectl.node_summary(kubeconfig_path) if up else [],
-        }, sort_keys=False).rstrip())
+        print(yaml.safe_dump({**report, "plugins": plugin_reports},
+                             sort_keys=False).rstrip())
         return
 
-    log(f"status: {cfg.name}")
+    log(f"status: {report['cluster']}")
     info(f"openstack: {openstack_info['url']} "
          f"(region {openstack_info['region']}, "
          f"project {openstack_info['project'] or '?'})")
     for kind in _STATUS_KINDS:
-        names = sorted(inv.all(kind))
+        names = report["resources"][kind]
         info(f"{kind}: {len(names)}")
         for n in names:
             info(f"    {n}")
@@ -534,8 +587,11 @@ def status(root: Path, output: str = "text") -> None:
          f"(vip {kubeapi['vip'] or '(pending)'})")
     info(f"ingress:  {ingress['floating_ip'] or '(pending)'} "
          f"(vip {ingress['vip'] or '(pending)'})")
-    if up:
-        print(kubectl.get_nodes_wide(kubeconfig_path))
+    if report["nodes"]:
+        print(kubectl.get_nodes_wide(root / "kubeconfig"))
+    for name, data in plugin_reports.items():
+        log(f"plugin: {name}")
+        print_report(data)
 
 
 def _running_versions(root: Path, cfg: Config) -> list[dict[str, Any]]:
@@ -604,6 +660,8 @@ def check(root: Path, output: str = "text") -> int:
     """
     cfg = load_config(root)
     report: dict[str, Any] = {"cluster": cfg.name, "components": [], "nodes": []}
+    ctx = Context(root=root, cfg=cfg)
+    plugin_reports = plugins.collect(plugins.active(ctx), "check", ctx)
 
     try:
         talos_all = versions.talos_versions()
@@ -635,7 +693,11 @@ def check(root: Path, output: str = "text") -> int:
     cordoned = [n["name"] for n in report["nodes"] if n.get("cordoned")]
     report["cordoned"] = cordoned
     outdated = [c for c in report["components"] if c["patch_available"] or c["minor_available"]]
-    report["up_to_date"] = not outdated and not drift and not cordoned
+    # a plugin that reports not-ok is a reason to exit 1, exactly like a drifted
+    # node: converge would change something.
+    report["plugins"] = plugin_reports
+    plugins_ok = all(bool(r.get("ok")) for r in plugin_reports.values())
+    report["up_to_date"] = not outdated and not drift and not cordoned and plugins_ok
 
     if output == "yaml":
         print(yaml.safe_dump(report, sort_keys=False).rstrip())
@@ -671,6 +733,9 @@ def check(root: Path, output: str = "text") -> int:
         info(f"{len(cordoned)} node(s) cordoned ({', '.join(cordoned)}): nothing schedules "
              "there and `talosctl health` fails on them; `taloscluster converge` uncordons, "
              f"or `kubectl uncordon {cordoned[0]}`")
+    for name, data in plugin_reports.items():
+        log(f"plugin: {name}")
+        print_report(data)
     if report["up_to_date"]:
         info("cluster.yaml pins the newest releases and every node is on them")
     return 0 if report["up_to_date"] else 1
@@ -805,11 +870,17 @@ def image_remove(root: Path, assume_yes: bool = False) -> None:
             ) from e
 
 
-def destroy(root: Path, assume_yes: bool = False) -> None:
+def destroy(root: Path, assume_yes: bool = False) -> int:
     cfg = load_config(root)
     secrets = load_secrets(root)
     conn = connect(cfg, secrets)
     inv = Inventory(conn, cfg.name).load()
+
+    # plugins first, while the cluster is still reachable: deregistering from
+    # Rancher/ArgoCD needs a working kubeconfig, which the teardown below and
+    # State.reset() are about to take away.
+    ctx = Context(root=root, cfg=cfg)
+    failed = _run_plugins(ctx, "destroy", reverse=True, assume_yes=assume_yes)
 
     servers = inv.all("servers")
     ports = inv.all("ports")
@@ -869,3 +940,4 @@ def destroy(root: Path, assume_yes: bool = False) -> None:
     # starts a fresh cluster with a new identity. reset() honours --dry-run itself
     # so a plan still lists the files it would remove.
     State(root).reset()
+    return failed

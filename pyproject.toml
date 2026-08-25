@@ -17,7 +17,25 @@ dependencies = [
 # the `openstack` CLI is NOT needed by taloscluster, but handy for poking at the
 # cloud by hand. install with: uv sync --extra openstack   (or uv run --extra openstack openstack ...)
 openstack = ["python-openstackclient"]
-dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.10", "types-PyYAML", "types-requests"]
+# optional plugins (plugins/*), hooked into converge/plan/destroy/status/check
+# through the `taloscluster.plugins` entry point:
+#   uv tool install "taloscluster[argocd,rancher] @ git+https://github.com/ncsa/taloscluster"
+argocd = ["taloscluster-argocd"]
+rancher = ["taloscluster-rancher"]
+all = ["taloscluster-argocd", "taloscluster-rancher"]
+dev = [
+    "pytest>=8", "ruff>=0.4", "mypy>=1.10", "types-PyYAML", "types-requests",
+    "taloscluster-argocd", "taloscluster-rancher",
+]
+
+# plugins live in this repo; a new one is a new folder under plugins/ and is
+# picked up by the glob, no edit here.
+[tool.uv.workspace]
+members = ["plugins/*"]
+
+[tool.uv.sources]
+taloscluster-argocd = { workspace = true }
+taloscluster-rancher = { workspace = true }
 
 [project.scripts]
 taloscluster = "taloscluster.cli:main"
@@ -30,7 +48,7 @@ include = ["taloscluster*"]
 # preflight). openstack CLI / yq / jq / curl / xz are intentionally NOT needed.
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "plugins"]
 
 [tool.ruff]
 line-length = 100

@@ -40,6 +40,30 @@ def action(msg: str) -> None:
     print(f"    {prefix}{msg}", flush=True)
 
 
+def report(data, indent: str = "") -> None:
+    """Render a nested dict/list as indented `key: value` lines.
+
+    Plugins return data, never text, so every plugin's status/check report is
+    printed the same way and a plugin never has to know about text-vs-yaml
+    output.
+    """
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, (dict, list)) and value:
+                info(f"{indent}{key}:")
+                report(value, indent + "    ")
+            else:
+                info(f"{indent}{key}: {value}")
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, (dict, list)):
+                report(item, indent)
+            else:
+                info(f"{indent}- {item}")
+    else:
+        info(f"{indent}{data}")
+
+
 class Die(SystemExit):
     """Fatal error that cleanly aborts the CLI with a message + exit code 1."""
 

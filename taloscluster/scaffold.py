@@ -70,6 +70,18 @@ security:
 
 tailscale:
   login_server: https://headscale.example.edu
+
+# optional plugins (installed separately, e.g. `taloscluster[rancher]`); a plugin
+# does nothing unless its section is present here AND in secrets.yaml.
+# see `taloscluster plugin list`.
+# rancher:
+#   admins: [alice]          # netids -> cluster-owner
+#   users:  [carol]          # netids -> cluster-member
+# argocd:
+#   admins: [alice@example.com]   # full emails -> project 'admin' role
+#   users:  [carol@example.com]   # full emails -> project 'user' role
+#   git:
+#     url: https://git.example.com/kubernetes/cluster.git
 """
 
 SECRETS_TEMPLATE = """\
@@ -82,6 +94,17 @@ tailscale:
   # reusable (ideally ephemeral) pre-auth key so all nodes can register;
   # omit to leave the baked-in tailscale extension idle
   auth_key: "CHANGE-ME"
+
+# credentials for the optional plugins; uncomment alongside the matching
+# cluster.yaml section.
+# rancher:
+#   url:   https://rancher.example.com
+#   token: token-xxxxx:yyyyyyyyyyyy
+# argocd:
+#   # how to reach the ArgoCD cluster: a kubeconfig path (resolved against this
+#   # directory) or a kubectl context in the default kubeconfig
+#   kubeconfig: ../argocd-kubeconfig
+#   # context: argocd
 """
 
 # everything a cluster directory produces that must never reach git

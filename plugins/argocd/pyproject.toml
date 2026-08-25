@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taloscluster-argocd"
+version = "0.1.0"
+description = "taloscluster plugin: register a cluster with ArgoCD (cluster secret, app project, applications)"
+requires-python = ">=3.10"
+# PyYAML comes in via taloscluster; everything else goes through kubectl
+dependencies = [
+    "taloscluster",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.10", "types-PyYAML"]
+
+# how taloscluster finds this plugin; the value is the module that re-exports the
+# plugin protocol (configured/converge/destroy/status/check + AFTER)
+[project.entry-points."taloscluster.plugins"]
+argocd = "taloscluster_argocd"
+
+# taloscluster is the workspace root; resolve it from the checkout, not PyPI
+[tool.uv.sources]
+taloscluster = { workspace = true }
+
+[tool.setuptools.packages.find]
+include = ["taloscluster_argocd*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

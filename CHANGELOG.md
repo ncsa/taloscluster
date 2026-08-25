@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Renamed from `clusterctl` to `taloscluster`.
   - Resources tagged `managed-by=clusterctl` are still discovered.
+- `argocd` and `rancher` are plugins of `taloscluster` instead of standalone
+  tools; converge, plan, destroy, status and check run them automatically.
+- The standalone `argocd` and `rancher` commands are gone; use
+  `taloscluster plugin <name>` to run one on its own.
+
+### Fixed
+
+- The argocd plugin rendered an empty metallb address pool and empty ingress IPs:
+  it read them from the `clusterctl` binary, gone since the rename, and ignored
+  the failure.
 
 ### Added
 
@@ -32,3 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ingress floating ips.
 - `-o yaml` on `status` and `check` for machine-readable output.
 - The kube-api and ingress ports join the cluster security group.
+- Optional plugins, installed as `taloscluster[argocd]`, `taloscluster[rancher]`
+  or `taloscluster[all]`, and inert until configured in cluster.yaml/secrets.yaml.
+- `taloscluster plugin list` and `taloscluster plugin NAME [ACTION]`.
+- `rancher` plugin: import the cluster, install the agent, reconcile members.
+- `argocd` plugin: apply the cluster secret, app project and applications.
+- A plugin that fails is reported without stopping the others; the command exits 1.

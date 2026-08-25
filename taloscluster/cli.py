@@ -6,6 +6,8 @@
     taloscluster status [-o yaml]               # show managed resources, endpoints + nodes
     taloscluster check [-o yaml]                # are talos/kubernetes up to date?
     taloscluster destroy [--yes]                # tear down all managed resources
+    taloscluster plugin list                    # which optional plugins are installed
+    taloscluster plugin NAME [ACTION]           # run one plugin on its own
 
 `plan` is just `converge --dry-run`; both print every state-changing action they
 would take. Any deletion in converge requires --yes (or an interactive confirm),
@@ -19,11 +21,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 from . import __version__
 from . import converge as _converge
+from . import plugins as _plugins
 from . import scaffold as _scaffold
+from .config import CLUSTER_FILE
+from .context import Context
 from .errors import ConfigError, PreflightError, ReconcileError, StateError
-from .output import Die, set_dry_run
+from .output import Die, info, log, set_dry_run
+from .output import report as _report
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
@@ -40,12 +48,12 @@ def _cmd_init(args, root):
 
 def _cmd_converge(args, root):
     set_dry_run(bool(args.dry_run))
-    _converge.converge(root, assume_yes=args.yes)
+    return _converge.converge(root, assume_yes=args.yes)
 
 
 def _cmd_plan(args, root):
     set_dry_run(True)
-    _converge.converge(root, assume_yes=False)
+    return _converge.converge(root, assume_yes=False)
 
 
 def _cmd_status(args, root):
@@ -74,7 +82,66 @@ def _cmd_image(args, root):
 
 def _cmd_destroy(args, root):
     set_dry_run(bool(args.dry_run))
-    _converge.destroy(root, assume_yes=args.yes)
+    return _converge.destroy(root, assume_yes=args.yes)
+
+
+def _cmd_plugin(args, root):
+    if args.name == "list":
+        return _plugin_list(root)
+
+    set_dry_run(bool(args.dry_run) or args.action == "plan")
+    found = {p.name: p for p in _plugins.discover()}
+    plugin = found.get(args.name)
+    if plugin is None:
+        raise Die(f"no plugin named {args.name!r} is installed "
+                  f"(installed: {', '.join(sorted(found)) or 'none'})")
+
+    ctx = Context.load(root)
+    if not plugin.configured(ctx):
+        info(f"{args.name} is not configured for this cluster; nothing to do")
+        return 0
+
+    hook = "converge" if args.action == "plan" else args.action
+    if not plugin.has(hook):
+        raise Die(f"plugin {args.name!r} does not implement {hook}")
+
+    if hook in ("status", "check"):
+        report = _plugins.collect([plugin], hook, ctx)[args.name]
+        if args.output == "yaml":
+            print(yaml.safe_dump({args.name: report}, sort_keys=False).rstrip())
+        else:
+            log(f"plugin: {args.name}")
+            _report(report)
+        # check reports a verdict; status is informational
+        return 0 if hook == "status" or report.get("ok") else 1
+
+    return _plugins.run([plugin], hook, ctx, assume_yes=args.yes)
+
+
+def _plugin_list(root):
+    """Every installed plugin, in the order converge would run them.
+
+    Deliberately usable outside a cluster directory -- "what is installed" is not
+    a question about a cluster. Without a cluster.yaml the configured/not
+    configured column is simply omitted.
+    """
+    found = _plugins.discover()
+    if not found:
+        info("no plugins installed (try: uv tool install 'taloscluster[all]')")
+        return 0
+    try:
+        ctx = Context.load(root)
+    except ConfigError:
+        ctx = None
+    log("plugins")
+    for plugin in found:
+        after = f" (after {', '.join(plugin.after)})" if plugin.after else ""
+        state = "" if ctx is None else (
+            "configured" if plugin.configured(ctx) else "not configured")
+        info(f"{plugin.name:<12} {state}{after}".rstrip())
+    if ctx is None:
+        info(f"(no {CLUSTER_FILE} in {root}, so not showing which are configured)")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -91,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             "  taloscluster check               compare pinned versions against the newest\n"
             "                                   releases\n"
             "  taloscluster destroy             delete all managed resources (image is kept)\n"
+            "  taloscluster plugin list         which optional plugins are installed\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -260,6 +328,42 @@ def main(argv: list[str] | None = None) -> int:
         help="skip the 'type the cluster name to confirm' prompt",
     )
     p_destroy.set_defaults(func=_cmd_destroy)
+
+    p_plugin = sub.add_parser(
+        "plugin",
+        help="list the installed plugins, or run one on its own",
+        description="Plugins are separately installed packages "
+                    "(`uv tool install 'taloscluster[argocd]'`) that hook into "
+                    "converge, plan, destroy, status and check -- so normally you "
+                    "never invoke them directly. This runs exactly one of them "
+                    "against this cluster directory, which is useful to re-run a "
+                    "registration without converging the cluster itself. "
+                    "`taloscluster plugin list` shows what is installed, in the "
+                    "order converge runs them, and whether each is configured "
+                    "here (a plugin is configured when cluster.yaml/secrets.yaml "
+                    "carry its section). NOTE: `list` is therefore a reserved "
+                    "name -- a plugin may not be called that.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_common(p_plugin)
+    p_plugin.add_argument(
+        "name", metavar="NAME",
+        help="plugin to run, or 'list' to show the installed ones",
+    )
+    p_plugin.add_argument(
+        "action", nargs="?", default="converge",
+        choices=["converge", "plan", "destroy", "status", "check"],
+        help="what to run (default: converge; plan = converge --dry-run)",
+    )
+    p_plugin.add_argument("--dry-run", action="store_true",
+                          help="print every state-changing action without doing it")
+    p_plugin.add_argument("--yes", action="store_true",
+                          help="approve deletions without the interactive confirm prompt")
+    p_plugin.add_argument(
+        "-o", "--output", choices=["text", "yaml"], default="text",
+        help="output format for status/check (default: text)",
+    )
+    p_plugin.set_defaults(func=_cmd_plugin)
 
     args = parser.parse_args(argv)
     if getattr(args, "func", None) is None:

@@ -7,6 +7,13 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 
+[manifest]
+members = [
+    "taloscluster",
+    "taloscluster-argocd",
+    "taloscluster-rancher",
+]
+
 [[package]]
 name = "ast-serialize"
 version = "0.8.0"
@@ -1680,16 +1687,28 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "taloscluster-argocd" },
+    { name = "taloscluster-rancher" },
+]
+argocd = [
+    { name = "taloscluster-argocd" },
+]
 dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "taloscluster-argocd" },
+    { name = "taloscluster-rancher" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
 openstack = [
     { name = "python-openstackclient", version = "10.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "python-openstackclient", version = "10.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+rancher = [
+    { name = "taloscluster-rancher" },
 ]
 
 [package.metadata]
@@ -1701,10 +1720,72 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.31" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+    { name = "taloscluster-argocd", marker = "extra == 'all'", editable = "plugins/argocd" },
+    { name = "taloscluster-argocd", marker = "extra == 'argocd'", editable = "plugins/argocd" },
+    { name = "taloscluster-argocd", marker = "extra == 'dev'", editable = "plugins/argocd" },
+    { name = "taloscluster-rancher", marker = "extra == 'all'", editable = "plugins/rancher" },
+    { name = "taloscluster-rancher", marker = "extra == 'dev'", editable = "plugins/rancher" },
+    { name = "taloscluster-rancher", marker = "extra == 'rancher'", editable = "plugins/rancher" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "types-requests", marker = "extra == 'dev'" },
 ]
-provides-extras = ["openstack", "dev"]
+provides-extras = ["openstack", "argocd", "rancher", "all", "dev"]
+
+[[package]]
+name = "taloscluster-argocd"
+version = "0.1.0"
+source = { editable = "plugins/argocd" }
+dependencies = [
+    { name = "taloscluster" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "types-pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+    { name = "taloscluster", editable = "." },
+    { name = "types-pyyaml", marker = "extra == 'dev'" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "taloscluster-rancher"
+version = "0.1.0"
+source = { editable = "plugins/rancher" }
+dependencies = [
+    { name = "requests" },
+    { name = "taloscluster" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "types-pyyaml" },
+    { name = "types-requests" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "requests", specifier = ">=2.31" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+    { name = "taloscluster", editable = "." },
+    { name = "types-pyyaml", marker = "extra == 'dev'" },
+    { name = "types-requests", marker = "extra == 'dev'" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "tomli"

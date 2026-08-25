@@ -20,6 +20,13 @@ uv tool install git+https://github.com/ncsa/taloscluster   # install
 uv tool upgrade taloscluster                                # update
 ```
 
+Add the optional [plugins](#plugins) with an extra — `[argocd]`, `[rancher]` or
+`[all]`:
+
+```bash
+uv tool install "taloscluster[all] @ git+https://github.com/ncsa/taloscluster"
+```
+
 Or run it without installing:
 
 ```bash
@@ -34,11 +41,19 @@ working tree (edits take effect immediately, no reinstall):
 
 ```bash
 git clone https://github.com/ncsa/taloscluster && cd taloscluster
-uv tool install --editable .          # editable install on PATH
+uv tool install --editable ".[all]"   # editable install on PATH, plugins included
 uv sync --extra dev && uv run pytest  # dev deps + tests
 ```
 
-`uv tool uninstall taloscluster` removes it again.
+The `[all]` extra matters: without it you get the core tool only and
+`taloscluster plugin list` comes back empty. The plugins in `plugins/*` are
+workspace members, so they are linked editable too — an edit under
+`plugins/argocd/` is live in the installed command with no reinstall. Re-run the
+install after adding a *new* plugin folder, or after changing an entry point.
+
+Add `--force` to replace an existing install, and `uv tool uninstall
+taloscluster` to remove it again (that drops the plugins with it — they live in
+the same tool environment).
 
 ## Quick start
 
@@ -66,6 +81,7 @@ reaches the first controlplane node by its tailscale name.
 | `env` | print `export OS_*` lines for the openstack CLI: `eval "$(taloscluster env)"` |
 | `image download\|remove` | build/upload the Glance boot image, or delete it (converge never deletes it) |
 | `destroy` | delete every managed resource + local state; the shared boot image is kept |
+| `plugin list` / `plugin NAME [ACTION]` | show the installed plugins, or run one on its own (see [Plugins](#plugins)) |
 
 Options: every command takes `-C DIR` to operate on another cluster directory.
 `converge`, `image` and `destroy` take `--dry-run` (print, don't do) and
@@ -76,6 +92,88 @@ Typical `cluster.yaml` edits and what converge does with them: bump a pool
 or `kubernetes.version` for a rolling upgrade (existing nodes are upgraded
 *before* new ones are added — `taloscluster check` tells you which bumps are
 available); edit a `security` allowlist to reconcile the security-group rules.
+
+## Plugins
+
+Everything past the cluster itself — registering it with Rancher, handing it to
+ArgoCD — lives in optional plugins. They are separate packages, installed only
+if you want them:
+
+```bash
+uv tool install "taloscluster[argocd,rancher] @ git+https://github.com/ncsa/taloscluster"
+uv tool install "taloscluster[all]            @ git+https://github.com/ncsa/taloscluster"
+```
+
+From a checkout, `uv tool install --editable ".[all]"` links them to your working
+tree (see [Install](#install)).
+
+Once installed, a plugin hooks into the normal commands — there is nothing extra
+to remember:
+
+| command | what plugins do |
+| --- | --- |
+| `converge` | run last, after the cluster is healthy and the kubeconfig is written |
+| `plan` | the same, dry-run: every plugin action is printed, nothing is applied |
+| `destroy` | run **first**, in reverse order, while the cluster is still reachable |
+| `status` | each plugin adds a section (also under `plugins:` in `-o yaml`) |
+| `check` | each plugin reports whether converge would change anything; a plugin that says no flips the exit code to 1 |
+
+A plugin is inert until you configure it: it needs its own section in
+`cluster.yaml` **and** `secrets.yaml`. `taloscluster init` scaffolds both,
+commented out.
+
+```bash
+taloscluster plugin list                    # installed, in run order, configured or not
+taloscluster plugin argocd plan             # dry-run just this one
+taloscluster plugin rancher converge        # re-run one registration, no cluster converge
+taloscluster plugin argocd check -o yaml
+```
+
+| plugin | what it does |
+| --- | --- |
+| `rancher` | imports the cluster into Rancher, installs the cluster agent, and reconciles members from `rancher.admins` / `rancher.users` (netids → cluster-owner / cluster-member) |
+| `argocd` | applies the cluster Secret, AppProject, repo Secret and app-of-apps Applications to an ArgoCD cluster, from `argocd.admins` / `argocd.users` (emails) |
+
+### Writing a plugin
+
+Add a folder under `plugins/` with its own `pyproject.toml` declaring an entry
+point — that is the whole registration, no core change:
+
+```toml
+[project.entry-points."taloscluster.plugins"]
+myplugin = "taloscluster_myplugin"
+```
+
+The named module implements as much of the protocol as it has. Only `configured`
+and `converge` are required:
+
+```python
+AFTER: tuple[str, ...] = ("rancher",)     # run after these, if they are installed
+
+def configured(ctx) -> bool: ...          # is this plugin set up for this cluster?
+def converge(ctx, assume_yes=False) -> dict | None
+def destroy(ctx, assume_yes=False) -> None
+def status(ctx) -> dict                   # rendered by core, text or yaml
+def check(ctx) -> dict                    # must carry "ok": bool
+```
+
+`ctx` is a `Context` carrying what taloscluster already knows, so a plugin never
+re-derives it: `ctx.root`, `ctx.cfg` (the parsed `cluster.yaml`), `ctx.kubeconfig`
+/ `ctx.talosconfig`, and `ctx.openstack` / `ctx.kubernetes` / `ctx.ingress`
+(url, region, project; floating ips and VIPs). During a converge these are
+already in hand, so reading them costs nothing.
+
+Whatever `converge` returns is stored in `ctx.results[<name>]` before the next
+plugin runs — that is how `argocd` picks up the Rancher cluster id. `AFTER` is a
+wish, not a dependency: a name that is not installed is ignored, and a plugin
+must treat an earlier plugin's output as optional.
+
+Print through `taloscluster.output` (`log` / `info` / `action`) and honour
+`dry_run()`, and `plan` works for free. Report data, never text — core renders
+`status` / `check` dicts for both text and yaml.
+
+A plugin that raises is contained: it is reported and the others still run, but
+the command exits non-zero.
 
 ## The three files
 
