@@ -147,6 +147,9 @@ def _ensure_router(conn, cluster, ext, inv, tags):
 def _ensure_router_interface(conn, router, subnet):
     if router is None or subnet is None:
         return
+    if dry_run():
+        info(f"router {router.name} interface to {subnet.name} assumed during plan")
+        return
     try:
         conn.network.add_interface_to_router(router, subnet=subnet.id)
     except exceptions.ConflictException:

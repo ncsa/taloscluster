@@ -1,12 +1,12 @@
 """What a plugin is handed: the cluster facts taloscluster already knows.
 
-A plugin should never have to re-derive the ingress VIP or the OpenStack project
--- converge computed both a moment ago. `Context` carries them, plus the loaded
+A plugin should never have to re-derive endpoint or infrastructure facts --
+converge computed them a moment ago. `Context` carries them, plus the loaded
 cluster.yaml and the paths to the derived client configs.
 
 The expensive part (the status payload, which needs an OpenStack connection) is
 either pre-filled by converge from the refs it already holds, or fetched lazily
-on first access and cached. A plugin that never looks at `openstack`/`ingress`
+on first access and cached. A plugin that never looks at infrastructure/ingress
 (rancher does not) therefore costs nothing.
 
 `results` is the channel between plugins: whatever a plugin's converge returns is
@@ -39,7 +39,8 @@ class Context:
 
     @classmethod
     def from_converge(cls, root: Path, cfg: Config, kubeapi: dict[str, str],
-                      ingress: dict[str, str], openstack: dict[str, str]) -> Context:
+                      ingress: dict[str, str], openstack: dict[str, str],
+                      infrastructure: dict[str, str] | None = None) -> Context:
         """In-converge constructor: the status payload is already known, so no
         plugin can trigger a second round-trip to OpenStack."""
         return cls(
@@ -47,6 +48,10 @@ class Context:
             cfg=cfg,
             status={
                 "cluster": cfg.name,
+                "infrastructure": infrastructure or {
+                    "provider": "openstack",
+                    **openstack,
+                },
                 "openstack": openstack,
                 "kubernetes": kubeapi,
                 "ingress": ingress,
@@ -72,6 +77,11 @@ class Context:
 
             self.status = converge.status_report(self.root)
         return self.status
+
+    @property
+    def infrastructure(self) -> dict[str, str]:
+        """Provider-neutral infrastructure identity and provider details."""
+        return dict(self._report().get("infrastructure") or {})
 
     @property
     def openstack(self) -> dict[str, str]:

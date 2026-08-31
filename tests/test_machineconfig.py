@@ -13,8 +13,9 @@ from pathlib import Path
 import pytest
 
 from taloscluster.config import Secrets
+from taloscluster.infrastructure import Endpoint
 from taloscluster.talos import machineconfig
-from taloscluster.talos.machineconfig import INSTALL_DISK, Endpoints
+from taloscluster.talos.machineconfig import INSTALL_DISK
 
 FIP = "203.0.113.10"
 VIP = "192.168.0.10"
@@ -31,8 +32,8 @@ def cfg(make_config):
 
 
 @pytest.fixture
-def ep() -> Endpoints:
-    return Endpoints(kubeapi_fip=FIP, kubeapi_vip=VIP)
+def ep() -> Endpoint:
+    return Endpoint(vip=VIP, advertised_address=FIP)
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +185,7 @@ def test_build_configs_one_entry_per_machine(cfg, monkeypatch, tmp_path):
     secrets_path.write_text("dummy")
 
     configs = machineconfig.build_configs(
-        cfg, secrets, cfg.machines, ep=Endpoints(kubeapi_fip=FIP, kubeapi_vip=VIP),
+        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),
     )
 
@@ -212,7 +213,7 @@ def test_build_configs_output_type_matches_role(cfg, monkeypatch, tmp_path):
     secrets_path.write_text("dummy")
 
     machineconfig.build_configs(
-        cfg, secrets, cfg.machines, ep=Endpoints(kubeapi_fip=FIP, kubeapi_vip=VIP),
+        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),
     )
 
@@ -239,7 +240,7 @@ def test_build_configs_tailscale_patch_present_when_key_set(cfg, monkeypatch, tm
     secrets_path.write_text("dummy")
 
     machineconfig.build_configs(
-        cfg, secrets, cfg.machines, ep=Endpoints(kubeapi_fip=FIP, kubeapi_vip=VIP),
+        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),
     )
 
@@ -266,7 +267,7 @@ def test_build_configs_no_tailscale_patch_when_key_absent(cfg, monkeypatch, tmp_
     secrets_path.write_text("dummy")
 
     machineconfig.build_configs(
-        cfg, secrets, cfg.machines, ep=Endpoints(kubeapi_fip=FIP, kubeapi_vip=VIP),
+        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),
     )
 
@@ -293,7 +294,7 @@ def test_build_configs_cluster_patch_only_for_controlplane(cfg, monkeypatch, tmp
     secrets_path.write_text("dummy")
 
     machineconfig.build_configs(
-        cfg, secrets, cfg.machines, ep=Endpoints(kubeapi_fip=FIP, kubeapi_vip=VIP),
+        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),
     )
 

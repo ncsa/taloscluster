@@ -1,0 +1,129 @@
+"""Provider-neutral infrastructure boundary used by shared cluster orchestration."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+from .config import Config, Machine, OpenStackConfig, Secrets
+from .errors import ReconcileError
+
+
+@dataclass(frozen=True)
+class Endpoint:
+    """An address Talos owns and the address clients use for that endpoint."""
+
+    vip: str = ""
+    advertised_address: str = ""
+
+
+@dataclass(frozen=True)
+class NetworkAttachment:
+    name: str
+    address: str = ""
+    provider_id: str = ""
+
+
+@dataclass(frozen=True)
+class InfrastructureMachine:
+    name: str
+    provider_id: str = ""
+    attachments: tuple[NetworkAttachment, ...] = ()
+
+    @property
+    def address(self) -> str:
+        return next(
+            (attachment.address for attachment in self.attachments if attachment.address), ""
+        )
+
+
+@dataclass
+class InfrastructureInventory:
+    machines: dict[str, InfrastructureMachine] = field(default_factory=dict)
+    resources: dict[str, list[str]] = field(default_factory=dict)
+    provider_data: Any = field(default=None, repr=False)
+
+    def machine_address(self, name: str) -> str:
+        machine = self.machines.get(name)
+        return machine.address if machine else ""
+
+
+@dataclass(frozen=True)
+class NetworkResult:
+    kubernetes: Endpoint = Endpoint()
+    ingress: Endpoint = Endpoint()
+    machine_attachments: dict[str, tuple[NetworkAttachment, ...]] = field(default_factory=dict)
+
+    def machine_address(self, name: str) -> str:
+        return next(
+            (
+                attachment.address
+                for attachment in self.machine_attachments.get(name, ())
+                if attachment.address
+            ),
+            "",
+        )
+
+
+class InfrastructureBackend(Protocol):
+    name: str
+
+    def load_inventory(self) -> InfrastructureInventory: ...
+
+    def ensure_boot_artifact(self) -> str: ...
+
+    def reconcile_network(
+        self,
+        machines: dict[str, Machine],
+        inventory: InfrastructureInventory,
+    ) -> NetworkResult: ...
+
+    def current_network(self, inventory: InfrastructureInventory) -> NetworkResult: ...
+
+    def reconcile_machines(
+        self,
+        machines: dict[str, Machine],
+        inventory: InfrastructureInventory,
+        boot_artifact: str,
+        configs: dict[str, str],
+    ) -> None: ...
+
+    def delete_machine(self, name: str, inventory: InfrastructureInventory) -> None: ...
+
+    def default_node_tags(self) -> dict[str, str]: ...
+
+    def provider_status(self) -> dict[str, str]: ...
+
+    def print_environment(self) -> None: ...
+
+    def download_image(self) -> str: ...
+
+    def remove_image(self, assume_yes: bool = False) -> None: ...
+
+    def destroy_summary(self, inventory: InfrastructureInventory) -> str: ...
+
+    def destroy_resources(self, inventory: InfrastructureInventory) -> None: ...
+
+
+def backend_for(cfg: Config, secrets: Secrets) -> InfrastructureBackend:
+    if isinstance(cfg.provider, OpenStackConfig):
+        from .openstack.backend import OpenStackBackend
+
+        return OpenStackBackend(cfg, secrets)
+    raise ReconcileError(
+        "provider 'proxmox' is configured, but Proxmox compute is not implemented until Stage 2"
+    )
+
+
+def resolve_node_address(
+    name: str,
+    discovered: dict[str, str],
+    inventory: InfrastructureInventory,
+    network: NetworkResult | None = None,
+) -> str:
+    """Prefer Talos discovery, then provider network results and inventory."""
+    return (
+        discovered.get(name, "")
+        or (network.machine_address(name) if network is not None else "")
+        or inventory.machine_address(name)
+    )

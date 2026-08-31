@@ -10,15 +10,14 @@ a new node never joins newer than the rest:
 Plugins run last because they need a reachable cluster and the kubeconfig this
 run just wrote; on destroy they run first, for the same reason inverted.
 
-State is not held in a file (except the talos secrets); every phase re-derives
-what exists by querying OpenStack through the tagged inventory cache, so the
-whole thing is safe to re-run.
+State is not held in a file (except the Talos secrets); every phase re-derives
+what exists through the selected infrastructure backend, so the whole thing is
+safe to re-run.
 """
 
 from __future__ import annotations
 
 import os
-import shlex
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -27,22 +26,23 @@ from typing import Any
 
 import requests
 import yaml
-from openstack import exceptions as os_exceptions
-from openstack.connection import Connection
 
-from . import naming, plugins, versions
+from . import plugins, versions
 from .config import Config, Machine, load_config, load_secrets, validate_warnings
 from .context import Context
 from .errors import ReconcileError, preflight_tools
+from .infrastructure import (
+    InfrastructureBackend,
+    InfrastructureInventory,
+    NetworkResult,
+    backend_for,
+    resolve_node_address,
+)
 from .k8s import kubectl
-from .openstack import compute, image, network, security
-from .openstack.network import NetworkRefs, _fixed_ip
-from .openstack.session import REGION, Inventory, connect, project_name
 from .output import action, dry_run, info, log, warn
 from .output import report as print_report
 from .state import State
 from .talos import factory, machineconfig, talosctl
-from .talos.machineconfig import Endpoints
 
 
 def converge(root: Path, assume_yes: bool = False) -> int:
@@ -71,11 +71,11 @@ def converge(root: Path, assume_yes: bool = False) -> int:
         for s in cfg.extension_sets()
     }
 
-    conn = connect(cfg, secrets)
+    backend = backend_for(cfg, secrets)
 
     # ---- 1. IMAGE --------------------------------------------------------
     log("image")
-    boot_image = image.ensure_image(conn, cfg)
+    boot_image = backend.ensure_boot_artifact()
 
     # ---- 2. STATE (talos machine secrets) --------------------------------
     log("secrets")
@@ -89,35 +89,33 @@ def converge(root: Path, assume_yes: bool = False) -> int:
 
     # ---- 3. NETWORK + SECURITY -------------------------------------------
     log("network + security group")
-    inv = Inventory(conn, cfg.name).load()
-    sg = security.reconcile(conn, cfg, inv)
-    refs = network.reconcile(conn, cfg, machines, inv, sg)
-    info(f"kubeapi fip {refs.kubeapi_fip or '(pending)'} vip {refs.kubeapi_vip or '(pending)'}")
+    inv = backend.load_inventory()
+    refs = backend.reconcile_network(machines, inv)
+    info(
+        "kubeapi advertised "
+        f"{refs.kubernetes.advertised_address or '(pending)'} "
+        f"vip {refs.kubernetes.vip or '(pending)'}"
+    )
 
     # write the client talosconfig now that the endpoint (fip) is known. cp-01's
     # tailscale name goes in as the context endpoint so a hand-typed `talosctl`
     # needs no -e; -n stays mandatory. taloscluster itself still passes both.
-    if state.secrets_exist() and refs.kubeapi_fip and not dry_run():
+    if state.secrets_exist() and refs.kubernetes.advertised_address and not dry_run():
         talosconfig_path.write_text(
             talosctl.gen_talosconfig(
-                cfg.name, refs.kubeapi_fip, secrets_path,
+                cfg.name, refs.kubernetes.advertised_address, secrets_path,
                 client_endpoint=f"{cfg.name}-controlplane-01",
             )
         )
         os.chmod(talosconfig_path, 0o600)
 
-    ep = Endpoints(kubeapi_fip=refs.kubeapi_fip, kubeapi_vip=refs.kubeapi_vip)
-
     # ---- machine configs (need the fip/vip from the network phase) -------
-    # every node gets the openstack project name as a default node label
-    # (spaces -> _ happens in machineconfig, label values can't hold spaces)
-    project = project_name(conn)
-    default_tags = {"ncsa/project": project} if project else {}
+    default_tags = backend.default_node_tags()
 
     configs: dict[str, str] = {}
-    if state.secrets_exist() and refs.kubeapi_fip:
+    if state.secrets_exist() and refs.kubernetes.advertised_address:
         configs = machineconfig.build_configs(
-            cfg, secrets, machines, ep, secrets_path, installer_images,
+            cfg, secrets, machines, refs.kubernetes, secrets_path, installer_images,
             default_tags=default_tags,
         )
 
@@ -134,7 +132,7 @@ def converge(root: Path, assume_yes: bool = False) -> int:
     # ---- 5. SCALE-DOWN ---------------------------------------------------
     if up:
         _scale_down(
-            conn, cfg, machines, inv, refs, talosconfig_path, kubeconfig_path,
+            backend, cfg, machines, inv, refs, talosconfig_path, kubeconfig_path,
             assume_yes=assume_yes,
         )
 
@@ -152,7 +150,7 @@ def converge(root: Path, assume_yes: bool = False) -> int:
     # ---- 7. COMPUTE (create / scale up) ----------------------------------
     log("compute")
     if configs or dry_run():
-        compute.reconcile(conn, cfg, machines, inv, boot_image, configs)
+        backend.reconcile_machines(machines, inv, boot_image, configs)
     else:
         warn("skipping compute: no machine configs (network fip not ready)")
 
@@ -173,34 +171,37 @@ def converge(root: Path, assume_yes: bool = False) -> int:
         talosctl.bootstrap(talosconfig_path, endpoint=cp1, node=cp1)
 
     # ---- 9. KUBECONFIG ---------------------------------------------------
-    if state.secrets_exist() and refs.kubeapi_vip and not dry_run():
+    if state.secrets_exist() and refs.kubernetes.vip and not dry_run():
         log("kubeconfig")
         # wait for the VIP to be announced (controlplane up post-bootstrap)
-        _wait_reachable(talosconfig_path, cp1, refs.kubeapi_vip)
-        talosctl.kubeconfig(talosconfig_path, cp1, refs.kubeapi_vip, kubeconfig_path)
+        _wait_reachable(talosconfig_path, cp1, refs.kubernetes.vip)
+        talosctl.kubeconfig(talosconfig_path, cp1, refs.kubernetes.vip, kubeconfig_path)
 
     # ---- 10. HEALTH + STATUS ---------------------------------------------
-    if not dry_run() and refs.kubeapi_vip:
+    if not dry_run() and refs.kubernetes.vip:
         log("health")
-        _require_final_health(talosconfig_path, cp1, refs.kubeapi_vip, kubeconfig_path)
+        _require_final_health(talosconfig_path, cp1, refs.kubernetes.vip, kubeconfig_path)
         log("status")
         print(kubectl.get_nodes_wide(kubeconfig_path))
-        print(f"kube api:   https://{refs.kubeapi_fip}:6443")
-        print(f"ingress ip: {refs.ingress_fip} (reserved)")
+        print(f"kube api:   https://{refs.kubernetes.advertised_address}:6443")
+        print(f"ingress ip: {refs.ingress.advertised_address} (reserved)")
         print(f"talosctl:   talosctl --talosconfig {talosconfig_path} "
-              f"-e {cp1} -n {refs.kubeapi_vip} <cmd>")
+              f"-e {cp1} -n {refs.kubernetes.vip} <cmd>")
         print(f"kubectl:    kubectl --kubeconfig {kubeconfig_path} get nodes")
 
     # ---- 11. PLUGINS -----------------------------------------------------
     # built from what this run already computed, so no plugin can trigger a
     # second round-trip to OpenStack for facts we are holding right here.
-    api_url = f"https://{refs.kubeapi_fip}:6443" if refs.kubeapi_fip else ""
+    advertised = refs.kubernetes.advertised_address
+    api_url = f"https://{advertised}:6443" if advertised else ""
+    provider_status = backend.provider_status()
     ctx = Context.from_converge(
         root, cfg,
-        kubeapi={"floating_ip": refs.kubeapi_fip or "", "vip": refs.kubeapi_vip or "",
+        kubeapi={"floating_ip": advertised, "vip": refs.kubernetes.vip,
                  "endpoint": api_url},
-        ingress={"floating_ip": refs.ingress_fip or "", "vip": refs.ingress_vip or ""},
-        openstack={"url": cfg.openstack_url, "region": REGION, "project": project},
+        ingress={"floating_ip": refs.ingress.advertised_address, "vip": refs.ingress.vip},
+        infrastructure={"provider": backend.name, **provider_status},
+        openstack=provider_status if backend.name == "openstack" else {},
     )
     return _run_plugins(ctx, "converge", assume_yes=assume_yes)
 
@@ -384,14 +385,9 @@ def _require_final_health(talosconfig: Path, endpoint: str, vip: str,
         raise ReconcileError("cluster is unhealthy after converge")
 
 
-def _private_ip(inv: Inventory, refs: NetworkRefs | None, host: str) -> str:
-    if refs is not None and host in refs.machine_private_ips:
-        return refs.machine_private_ips[host]
-    return _fixed_ip(inv.get("ports", host))
-
-
-def _scale_down(conn: Connection, cfg: Config, machines: dict[str, Machine],
-                inv: Inventory, refs: NetworkRefs, talosconfig: Path,
+def _scale_down(backend: InfrastructureBackend, cfg: Config,
+                machines: dict[str, Machine], inv: InfrastructureInventory,
+                refs: NetworkResult, talosconfig: Path,
                 kubeconfig: Path, assume_yes: bool = False) -> None:
     log("scale down")
     # talosctl endpoint = cp-01's tailscale name (reliably reachable from this
@@ -421,23 +417,27 @@ def _scale_down(conn: Connection, cfg: Config, machines: dict[str, Machine],
             raise SystemExit("aborted")
 
     removed = 0
+    discovered = (
+        talosctl.member_addresses(talosconfig, endpoint) if talosconfig.is_file() else {}
+    )
     for node in removals:
-        ip = _private_ip(inv, refs, node)
-        if not ip:
-            warn(f"no private ip for {node}, skipping removal")
+        address = resolve_node_address(node, discovered, inv, refs)
+        if not address:
+            warn(f"no provider-neutral address for {node}, skipping removal")
             continue
-        info(f"removing {node} ({ip})")
+        info(f"removing {node} ({address})")
         kubectl.drain(kubeconfig, node)
-        talosctl.reset(talosconfig, endpoint, ip)
+        talosctl.reset(talosconfig, endpoint, address)
         kubectl.delete_node(kubeconfig, node)
-        compute.delete_node(conn, node, inv)
+        backend.delete_machine(node, inv)
         removed += 1
     if removed == 0:
         info("nothing to remove")
 
 
-def _apply_configs(cfg: Config, machines: dict[str, Machine], inv: Inventory,
-                   refs: NetworkRefs, configs: dict[str, str],
+def _apply_configs(cfg: Config, machines: dict[str, Machine],
+                   inv: InfrastructureInventory, refs: NetworkResult,
+                   configs: dict[str, str],
                    talosconfig: Path, kubeconfig: Path) -> None:
     """Push the freshly generated machine config to every existing node.
 
@@ -451,49 +451,51 @@ def _apply_configs(cfg: Config, machines: dict[str, Machine], inv: Inventory,
     """
     log("machine config")
     endpoint = f"{cfg.name}-controlplane-01"
+    discovered = talosctl.member_addresses(talosconfig, endpoint)
     ordered = sorted(machines.items(), key=lambda kv: 0 if kv[1].role == "controlplane" else 1)
     applied = 0
     for host, _m in ordered:
-        if not inv.get("servers", host) or host not in configs:
+        if host not in inv.machines or host not in configs:
             continue
         if not kubectl.node_exists(kubeconfig, host):
             continue
-        ip = refs.machine_private_ips.get(host, "")
-        if not ip:
+        address = resolve_node_address(host, discovered, inv, refs)
+        if not address:
             continue
-        talosctl.apply_config(talosconfig, endpoint, ip, configs[host])
+        talosctl.apply_config(talosconfig, endpoint, address, configs[host])
         applied += 1
     if not applied:
         info("no existing nodes to configure")
 
 
-def _upgrade(cfg: Config, machines: dict[str, Machine], inv: Inventory,
-             refs: NetworkRefs, installer_images: dict[tuple[str, ...], str],
+def _upgrade(cfg: Config, machines: dict[str, Machine], inv: InfrastructureInventory,
+             refs: NetworkResult, installer_images: dict[tuple[str, ...], str],
              talosconfig: Path, kubeconfig: Path) -> None:
     log(f"talos version (want {cfg.talos_version})")
     endpoint = f"{cfg.name}-controlplane-01"
+    discovered = talosctl.member_addresses(talosconfig, endpoint)
     # controlplanes first
     ordered = sorted(machines.items(), key=lambda kv: 0 if kv[1].role == "controlplane" else 1)
     for host, m in ordered:
-        if not inv.get("servers", host):
+        if host not in inv.machines:
             continue
         if not kubectl.node_exists(kubeconfig, host):
             continue
-        ip = refs.machine_private_ips.get(host, "")
-        if not ip:
+        address = resolve_node_address(host, discovered, inv, refs)
+        if not address:
             continue
         want_image = installer_images[m.extensions]
-        cur_ver = talosctl.server_version(talosconfig, endpoint, ip)
-        cur_image = talosctl.node_image(talosconfig, endpoint, ip)
+        cur_ver = talosctl.server_version(talosconfig, endpoint, address)
+        cur_image = talosctl.node_image(talosconfig, endpoint, address)
         # upgrade on a version change OR a schematic change (extension list edit)
         if cur_ver == cfg.talos_version and (not cur_image or cur_image == want_image):
             info(f"{host}: {cur_ver or '?'}, ok")
             continue
         info(f"{host}: {cur_ver or '?'} -> {cfg.talos_version} ({want_image})")
-        talosctl.upgrade(talosconfig, endpoint, ip, want_image)
-        _wait_version(talosconfig, endpoint, ip, cfg.talos_version)
+        talosctl.upgrade(talosconfig, endpoint, address, want_image)
+        _wait_version(talosconfig, endpoint, address, cfg.talos_version)
         _uncordon_stale(kubeconfig, host)
-        if not _health_or_kube_fallback(talosconfig, endpoint, refs.kubeapi_vip,
+        if not _health_or_kube_fallback(talosconfig, endpoint, refs.kubernetes.vip,
                                         kubeconfig, timeout="10m"):
             raise ReconcileError(f"cluster unhealthy after upgrading {host}; aborting rollout")
 
@@ -508,15 +510,19 @@ def _upgrade(cfg: Config, machines: dict[str, Machine], inv: Inventory,
     if cur == cfg.kubernetes_version:
         info(f"{cur}, ok")
         return
-    cp1_ip = next(
-        (refs.machine_private_ips[h] for h, m in machines.items()
-         if m.role == "controlplane" and h in refs.machine_private_ips),
+    cp1_address = next(
+        (
+            address
+            for h, m in machines.items()
+            if m.role == "controlplane"
+            and (address := resolve_node_address(h, discovered, inv, refs))
+        ),
         "",
     )
-    if cp1_ip:
+    if cp1_address:
         for step in _k8s_upgrade_path(cur, cfg.kubernetes_version):
             info(f"{cur or '?'} -> {step}")
-            talosctl.upgrade_k8s(talosconfig, endpoint, cp1_ip, step)
+            talosctl.upgrade_k8s(talosconfig, endpoint, cp1_address, step)
             cur = step
         # upgrade-k8s cordons each node in turn as it swaps the kubelet; a run
         # that was interrupted leaves that cordon behind on whichever node it
@@ -530,22 +536,6 @@ def _upgrade(cfg: Config, machines: dict[str, Machine], inv: Inventory,
 # status + destroy
 # ---------------------------------------------------------------------------
 
-_STATUS_KINDS = (
-    "networks", "subnets", "routers", "security_groups", "ports", "ips", "servers",
-)
-
-
-def _endpoint(inv: Inventory, name: str) -> dict[str, str]:
-    """The public floating ip + private VIP of a reserved endpoint (kubeapi /
-    ingress). Both live on the port named `name`; the fip is keyed by its
-    description (floating ips have no name field)."""
-    fip = inv.get("ips", name)
-    return {
-        "floating_ip": getattr(fip, "floating_ip_address", "") or "",
-        "vip": _fixed_ip(inv.get("ports", name)),
-    }
-
-
 def status_report(root: Path) -> dict[str, Any]:
     """Everything `status` knows, as a plain dict.
 
@@ -556,25 +546,31 @@ def status_report(root: Path) -> dict[str, Any]:
     """
     cfg = load_config(root)
     secrets = load_secrets(root)
-    conn = connect(cfg, secrets)
-    inv = Inventory(conn, cfg.name).load()
+    backend = backend_for(cfg, secrets)
+    inv = backend.load_inventory()
+    refs = backend.current_network(inv)
     kubeconfig_path = root / "kubeconfig"
 
-    kubeapi = _endpoint(inv, naming.kubeapi_name(cfg.name))
-    ingress = _endpoint(inv, naming.ingress_name(cfg.name))
-    api_url = f"https://{kubeapi['floating_ip']}:6443" if kubeapi["floating_ip"] else ""
+    advertised = refs.kubernetes.advertised_address
+    kubeapi = {
+        "floating_ip": advertised,
+        "vip": refs.kubernetes.vip,
+        "endpoint": f"https://{advertised}:6443" if advertised else "",
+    }
+    ingress = {
+        "floating_ip": refs.ingress.advertised_address,
+        "vip": refs.ingress.vip,
+    }
     up = kubectl.cluster_up(kubeconfig_path)
+    provider_status = backend.provider_status()
 
     return {
         "cluster": cfg.name,
-        "openstack": {
-            "url": cfg.openstack_url,
-            "region": REGION,
-            "project": project_name(conn),
-        },
-        "kubernetes": {**kubeapi, "endpoint": api_url},
+        "infrastructure": {"provider": backend.name, **provider_status},
+        "openstack": provider_status if backend.name == "openstack" else {},
+        "kubernetes": kubeapi,
         "ingress": ingress,
-        "resources": {k: sorted(inv.all(k)) for k in _STATUS_KINDS},
+        "resources": inv.resources,
         "nodes": kubectl.node_summary(kubeconfig_path) if up else [],
     }
 
@@ -598,8 +594,7 @@ def status(root: Path, output: str = "text") -> None:
     info(f"openstack: {openstack_info['url']} "
          f"(region {openstack_info['region']}, "
          f"project {openstack_info['project'] or '?'})")
-    for kind in _STATUS_KINDS:
-        names = report["resources"][kind]
+    for kind, names in report["resources"].items():
         info(f"{kind}: {len(names)}")
         for n in names:
             info(f"    {n}")
@@ -786,13 +781,13 @@ def dashboard(root: Path, nodes: list[str] | None = None) -> None:
     if nodes:
         targets = {n: n for n in nodes}
     else:
-        conn = connect(cfg, load_secrets(root))
-        inv = Inventory(conn, cfg.name).load()
+        backend = backend_for(cfg, load_secrets(root))
+        inv = backend.load_inventory()
         members = talosctl.member_addresses(talosconfig_path, endpoint)
-        hosts = sorted(set(inv.all("servers")) | set(members))
+        hosts = sorted(set(inv.machines) | set(members))
         if not hosts:
             raise ReconcileError(f"no nodes found for cluster {cfg.name}")
-        targets = {h: members.get(h) or _private_ip(inv, None, h) for h in hosts}
+        targets = {h: resolve_node_address(h, members, inv) for h in hosts}
 
     log(f"dashboard: {cfg.name}")
     unknown = [h for h, addr in targets.items() if not addr]
@@ -834,12 +829,7 @@ def print_env(root: Path) -> None:
     """
     cfg = load_config(root)
     secrets = load_secrets(root)
-    print(f"export OS_AUTH_URL={shlex.quote(cfg.openstack_url)}")
-    print("export OS_AUTH_TYPE=v3applicationcredential")
-    print(f"export OS_REGION_NAME={shlex.quote(REGION)}")
-    print(f"export OS_APPLICATION_CREDENTIAL_ID={shlex.quote(secrets.openstack_credential_id)}")
-    secret = shlex.quote(secrets.openstack_credential_secret)
-    print(f"export OS_APPLICATION_CREDENTIAL_SECRET={secret}")
+    backend_for(cfg, secrets).print_environment()
 
 
 def image_download(root: Path) -> None:
@@ -848,9 +838,9 @@ def image_download(root: Path) -> None:
     handy for pre-seeding the image without touching the cluster."""
     cfg = load_config(root)
     secrets = load_secrets(root)
-    conn = connect(cfg, secrets)
+    backend = backend_for(cfg, secrets)
     log("image download")
-    name = image.ensure_image(conn, cfg)
+    name = backend.download_image()
     info(f"boot image: {name}")
 
 
@@ -863,46 +853,18 @@ def image_remove(root: Path, assume_yes: bool = False) -> None:
     """
     cfg = load_config(root)
     secrets = load_secrets(root)
-    conn = connect(cfg, secrets)
-    name = naming.image_name(cfg.talos_version)
-    img = conn.image.find_image(name)
-    if img is None:
-        info(f"image {name} not found, nothing to remove")
-        return
-    log(f"remove image {name}")
-    warn("other clusters on the same talos version may share this image")
-    if not assume_yes and not dry_run():
-        resp = input(f"type '{name}' to confirm: ").strip()
-        if resp != name:
-            raise SystemExit("aborted")
-    action(f"delete image {name}")
-    if not dry_run():
-        try:
-            conn.image.delete_image(img.id)
-        except os_exceptions.SDKException as e:
-            raise RuntimeError(
-                f"could not delete image {name}: {e}\n"
-                "On Ceph-backed clouds (like Radiant) each boot volume is a "
-                "copy-on-write clone of the image, so the image cannot be deleted "
-                "while any cluster's nodes still exist. Note: you usually do NOT "
-                "need to delete the image -- `taloscluster image download` updates "
-                "its properties in place. To rebuild it, `destroy` the dependent "
-                "cluster(s) first, then `image remove`."
-            ) from e
+    backend_for(cfg, secrets).remove_image(assume_yes=assume_yes)
 
 
 def destroy(root: Path, assume_yes: bool = False) -> int:
     cfg = load_config(root)
     secrets = load_secrets(root)
-    conn = connect(cfg, secrets)
-    inv = Inventory(conn, cfg.name).load()
+    backend = backend_for(cfg, secrets)
+    inv = backend.load_inventory()
 
-    servers = inv.all("servers")
-    ports = inv.all("ports")
-    fips = inv.all("ips")
-    log(f"destroy {cfg.name}: {len(servers)} servers, {len(ports)} ports, "
-        f"{len(fips)} floating ips, network + router + security group")
-    warn("this deletes all taloscluster-managed OpenStack resources for this cluster "
+    log(f"destroy {cfg.name}: {backend.destroy_summary(inv)}")
+    provider_label = "OpenStack" if backend.name == "openstack" else backend.name
+    warn(f"this deletes all taloscluster-managed {provider_label} resources for this cluster "
          "(the shared boot image is NOT deleted), and removes talossecrets.yaml "
          "-- the cluster identity -- along with the talosconfig/kubeconfig derived "
          "from it. The next converge will be a brand-new cluster.")
@@ -916,44 +878,7 @@ def destroy(root: Path, assume_yes: bool = False) -> int:
     ctx = Context(root=root, cfg=cfg)
     failed = _run_plugins(ctx, "destroy", reverse=True, assume_yes=assume_yes)
 
-    for host in list(servers):
-        compute.delete_node(conn, host, inv)
-    for name, fip in list(fips.items()):
-        action(f"delete floating ip {name}")
-        if not dry_run():
-            conn.network.delete_ip(fip.id)
-    # delete every remaining managed port (the reserved kubeapi/ingress ports
-    # hold IP allocations in the subnet, so they must go before it)
-    for name, port in list(inv.all("ports").items()):
-        action(f"delete port {name}")
-        if not dry_run():
-            try:
-                conn.network.delete_port(port.id)
-            except os_exceptions.SDKException as e:
-                warn(f"could not delete port {name}: {e}")
-        inv.drop("ports", name)
-    managed_subnets = list(inv.all("subnets").values())
-    for name, rtr in list(inv.all("routers").items()):
-        action(f"delete router {name}")
-        if not dry_run():
-            for sub in managed_subnets:
-                try:
-                    conn.network.remove_interface_from_router(rtr, subnet=sub.id)
-                except os_exceptions.SDKException as e:
-                    warn(f"could not detach subnet from router {name}: {e}")
-            conn.network.delete_router(rtr.id)
-    for name, sub in list(inv.all("subnets").items()):
-        action(f"delete subnet {name}")
-        if not dry_run():
-            conn.network.delete_subnet(sub.id)
-    for name, net in list(inv.all("networks").items()):
-        action(f"delete network {name}")
-        if not dry_run():
-            conn.network.delete_network(net.id)
-    for name, sg in list(inv.all("security_groups").items()):
-        action(f"delete security group {name}")
-        if not dry_run():
-            conn.network.delete_security_group(sg.id)
+    backend.destroy_resources(inv)
 
     # wipe local state (talossecrets.yaml plus the talosconfig/kubeconfig derived
     # from it; legacy bootstrapped marker is also cleaned up) so a later converge

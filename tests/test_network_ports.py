@@ -112,3 +112,19 @@ def test_dry_run_reports_but_does_not_update():
     set_dry_run(True)
     network._reconcile_port_sg(conn, _port("p", [OTHER_SG]), SG)
     assert conn.updated == []
+
+
+def test_dry_run_does_not_attach_router_interface():
+    calls = []
+    conn = types.SimpleNamespace(
+        network=types.SimpleNamespace(
+            add_interface_to_router=lambda *_args, **_kwargs: calls.append("attach")
+        )
+    )
+    router = types.SimpleNamespace(name="testcluster-router")
+    subnet = types.SimpleNamespace(name="testcluster-subnet")
+
+    set_dry_run(True)
+    network._ensure_router_interface(conn, router, subnet)
+
+    assert calls == []

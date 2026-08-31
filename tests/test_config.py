@@ -3,9 +3,20 @@ validation errors, warnings, and cached_property semantics."""
 
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
-from taloscluster.config import ConfigError, validate_warnings
+import pytest
+import yaml
+
+from taloscluster.config import (
+    ConfigError,
+    OpenStackConfig,
+    OpenStackSecrets,
+    ProxmoxConfig,
+    ProxmoxSecrets,
+    load_secrets,
+    validate_warnings,
+)
 from taloscluster.naming import BASE_EXTENSIONS
 
 # ---------------------------------------------------------------------------
@@ -243,3 +254,102 @@ def test_tags_pool_overrides_cluster(make_config):
 def test_tags_values_coerced_to_str(make_config):
     cfg = make_config({"tags": {"cost-center": 1234}})
     assert cfg.machines["testcluster-controlplane-01"].tags == {"cost-center": "1234"}
+
+
+# ---------------------------------------------------------------------------
+# provider selection and compatibility
+# ---------------------------------------------------------------------------
+
+def test_existing_openstack_yaml_loads_typed_provider(make_config):
+    cfg = make_config()
+
+    assert isinstance(cfg.provider, OpenStackConfig)
+    assert cfg.provider_name == "openstack"
+    assert cfg.openstack_url == "https://example.com:5000/v3/"
+    assert cfg.availability_zone == "nova"
+    assert cfg.external_net == "ext-net"
+
+
+def test_exactly_one_provider_is_required(make_config):
+    with pytest.raises(ConfigError, match="exactly one.*openstack.*proxmox"):
+        make_config(remove=("openstack",))
+
+    with pytest.raises(ConfigError, match="exactly one.*openstack.*proxmox"):
+        make_config({"proxmox": {"url": "https://pve.example/api2/json"}})
+
+
+def test_proxmox_provider_section_is_typed(make_config):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 3, "cores": 4, "memory": 8192, "disk": 40},
+            "workers": {
+                "worker": {"count": 1, "cores": 8, "memory": 16384, "disk": 100}
+            },
+            "proxmox": {
+                "url": "https://pve.example:8006/api2/json",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "placement_strategy": "spread",
+                "network": {"cluster": {"bridge": "vmbr0"}},
+            },
+        },
+        remove=("openstack",),
+    )
+
+    assert isinstance(cfg.provider, ProxmoxConfig)
+    assert cfg.provider_name == "proxmox"
+    assert cfg.provider.storage == "vms"
+    assert cfg.provider.network["cluster"]["bridge"] == "vmbr0"
+    assert cfg.machines["testcluster-controlplane-01"].cores == 4
+    assert cfg.machines["testcluster-worker-01"].memory == 16384
+    assert cfg.machines["testcluster-worker-01"].flavor == ""
+
+
+def _write_provider_files(root: Path, cluster: dict, secrets: dict) -> None:
+    (root / "cluster.yaml").write_text(yaml.safe_dump(cluster))
+    (root / "secrets.yaml").write_text(yaml.safe_dump(secrets))
+
+
+def test_openstack_secrets_are_typed_and_existing_fields_remain(tmp_path):
+    cluster = {
+        "openstack": {
+            "url": "https://example.com/v3",
+            "availability_zone": "nova",
+            "external_net": "public",
+        }
+    }
+    _write_provider_files(
+        tmp_path,
+        cluster,
+        {"openstack": {"credential_id": "id", "credential_secret": "secret"}},
+    )
+
+    secrets = load_secrets(tmp_path)
+
+    assert isinstance(secrets.provider, OpenStackSecrets)
+    assert secrets.openstack_credential_id == "id"
+    assert secrets.openstack_credential_secret == "secret"
+
+
+def test_proxmox_secrets_are_typed(tmp_path):
+    _write_provider_files(
+        tmp_path,
+        {"proxmox": {"url": "https://pve.example/api2/json"}},
+        {"proxmox": {"token_id": "user@pve!provider", "token_secret": "secret"}},
+    )
+
+    secrets = load_secrets(tmp_path)
+
+    assert isinstance(secrets.provider, ProxmoxSecrets)
+    assert secrets.provider.token_id == "user@pve!provider"
+
+
+def test_secrets_provider_must_match_cluster_provider(tmp_path):
+    _write_provider_files(
+        tmp_path,
+        {"proxmox": {"url": "https://pve.example/api2/json"}},
+        {"openstack": {"credential_id": "id", "credential_secret": "secret"}},
+    )
+
+    with pytest.raises(ConfigError, match="proxmox.*credentials"):
+        load_secrets(tmp_path)

@@ -9,15 +9,31 @@ import pytest
 
 from taloscluster import converge
 from taloscluster.errors import ReconcileError
-from taloscluster.openstack.network import NetworkRefs
+from taloscluster.infrastructure import (
+    InfrastructureInventory,
+    InfrastructureMachine,
+    NetworkAttachment,
+    NetworkResult,
+)
 
 
-class EmptyInventory:
-    def load(self):
-        return self
+class FakeBackend:
+    name = "openstack"
 
-    def all(self, _kind):
-        return {}
+    def __init__(self, mutations=None):
+        self.mutations = mutations if mutations is not None else []
+
+    def load_inventory(self):
+        return InfrastructureInventory()
+
+    def delete_machine(self, *_args):
+        self.mutations.append("compute")
+
+    def destroy_summary(self, _inventory):
+        return "0 servers, 0 ports, 0 floating ips, network + router + security group"
+
+    def destroy_resources(self, _inventory):
+        self.mutations.append("destroy")
 
 
 def test_scale_down_decline_happens_before_mutation(monkeypatch):
@@ -27,12 +43,12 @@ def test_scale_down_decline_happens_before_mutation(monkeypatch):
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
-    monkeypatch.setattr(converge.compute, "delete_node", lambda *_a: mutations.append("compute"))
     monkeypatch.setattr("builtins.input", lambda _prompt: "no")
 
     with pytest.raises(SystemExit, match="aborted"):
         converge._scale_down(
-            object(), cfg, {}, object(), NetworkRefs(), Path("talosconfig"),
+            FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
+            Path("talosconfig"),
             Path("kubeconfig"), assume_yes=False,
         )
 
@@ -43,17 +59,23 @@ def test_scale_down_yes_skips_prompt_and_deletes(monkeypatch):
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
     mutations: list[str] = []
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
-    monkeypatch.setattr(converge, "_private_ip", lambda *_a: "192.0.2.10")
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
-    monkeypatch.setattr(converge.compute, "delete_node", lambda *_a: mutations.append("compute"))
     monkeypatch.setattr(
         "builtins.input", lambda _prompt: pytest.fail("--yes must not prompt")
     )
 
+    inventory = InfrastructureInventory(
+        machines={
+            "old-worker": InfrastructureMachine(
+                "old-worker",
+                attachments=(NetworkAttachment("private", "192.0.2.10"),),
+            )
+        }
+    )
     converge._scale_down(
-        object(), cfg, {}, object(), NetworkRefs(), Path("talosconfig"),
+        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), Path("talosconfig"),
         Path("kubeconfig"), assume_yes=True,
     )
 
@@ -65,8 +87,8 @@ def test_destroy_decline_happens_before_plugin_teardown(monkeypatch, tmp_path):
     plugin_calls: list[str] = []
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
     monkeypatch.setattr(converge, "load_secrets", lambda _root: object())
-    monkeypatch.setattr(converge, "connect", lambda *_a: object())
-    monkeypatch.setattr(converge, "Inventory", lambda *_a: EmptyInventory())
+    backend = FakeBackend()
+    monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
     monkeypatch.setattr(
         converge, "_run_plugins", lambda *_a, **_kw: plugin_calls.append("destroy") or 0
     )
@@ -83,8 +105,8 @@ def test_destroy_yes_skips_prompt_and_runs_plugin_teardown(monkeypatch, tmp_path
     plugin_calls: list[str] = []
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
     monkeypatch.setattr(converge, "load_secrets", lambda _root: object())
-    monkeypatch.setattr(converge, "connect", lambda *_a: object())
-    monkeypatch.setattr(converge, "Inventory", lambda *_a: EmptyInventory())
+    backend = FakeBackend()
+    monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
     monkeypatch.setattr(
         converge, "_run_plugins", lambda *_a, **_kw: plugin_calls.append("destroy") or 0
     )
@@ -94,6 +116,7 @@ def test_destroy_yes_skips_prompt_and_runs_plugin_teardown(monkeypatch, tmp_path
 
     assert converge.destroy(tmp_path, assume_yes=True) == 0
     assert plugin_calls == ["destroy"]
+    assert backend.mutations == ["destroy"]
 
 
 def test_final_health_failure_is_fatal(monkeypatch):

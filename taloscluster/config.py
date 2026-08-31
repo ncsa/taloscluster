@@ -39,18 +39,84 @@ class Machine:
     name: str
     role: str          # controlplane | worker
     pool: str          # controlplane | <worker pool name>
-    flavor: str
     disk: int          # GB, boot volume
     extensions: tuple[str, ...]        # resolved: base + cluster + pool, sorted
     config_patches: tuple[str, ...]    # freeform YAML docs, cluster + pool
+    flavor: str = ""                  # OpenStack flavor
+    cores: int = 0                    # Proxmox virtual CPU count
+    memory: int = 0                   # Proxmox memory in MiB
     tags: dict[str, str] = field(default_factory=dict)  # node labels, cluster + pool
 
 
 @dataclass(frozen=True)
+class OpenStackConfig:
+    url: str
+    availability_zone: str
+    external_net: str
+
+
+@dataclass(frozen=True)
+class ProxmoxConfig:
+    url: str
+    storage: str = ""
+    iso_storage: str = ""
+    placement_strategy: str = "spread"
+    network: dict[str, Any] = field(default_factory=dict)
+
+
+ProviderConfig = OpenStackConfig | ProxmoxConfig
+
+
+@dataclass(frozen=True)
+class OpenStackSecrets:
+    credential_id: str
+    credential_secret: str
+
+
+@dataclass(frozen=True)
+class ProxmoxSecrets:
+    token_id: str
+    token_secret: str
+
+
+ProviderSecrets = OpenStackSecrets | ProxmoxSecrets
+
+
+@dataclass(frozen=True, init=False)
 class Secrets:
-    openstack_credential_id: str
-    openstack_credential_secret: str
+    provider: ProviderSecrets
     tailscale_auth_key: str | None     # None => tailscale extension idles
+
+    def __init__(
+        self,
+        provider: ProviderSecrets | None = None,
+        tailscale_auth_key: str | None = None,
+        *,
+        openstack_credential_id: str | None = None,
+        openstack_credential_secret: str | None = None,
+    ) -> None:
+        """Keep the pre-provider constructor available to in-tree plugins/tests."""
+        if provider is None:
+            if openstack_credential_id is None or openstack_credential_secret is None:
+                raise ConfigError("provider credentials are required")
+            provider = OpenStackSecrets(
+                credential_id=openstack_credential_id,
+                credential_secret=openstack_credential_secret,
+            )
+        object.__setattr__(self, "provider", provider)
+        object.__setattr__(self, "tailscale_auth_key", tailscale_auth_key)
+
+    @property
+    def openstack_credential_id(self) -> str:
+        if not isinstance(self.provider, OpenStackSecrets):
+            raise ConfigError("OpenStack credentials requested for a Proxmox cluster")
+        return self.provider.credential_id
+
+    @property
+    def openstack_credential_secret(self) -> str:
+        if not isinstance(self.provider, OpenStackSecrets):
+            raise ConfigError("OpenStack credentials requested for a Proxmox cluster")
+        return self.provider.credential_secret
 
 
 @dataclass
@@ -64,12 +130,10 @@ class Config:
     # extra tags exposed by talos as kubernetes node labels (machine.nodeLabels)
     tags: dict[str, str]
 
-    controlplane: dict[str, Any]       # count / flavor / disk
-    workers: dict[str, dict[str, Any]] # pool -> {count, flavor, disk, extensions?, config_patches?}
+    controlplane: dict[str, Any]       # count / provider sizing / disk
+    workers: dict[str, dict[str, Any]] # pool -> count / provider sizing / disk / overrides
 
-    openstack_url: str
-    availability_zone: str
-    external_net: str
+    provider: ProviderConfig
 
     cidr: str
     dns: list[str]
@@ -84,6 +148,28 @@ class Config:
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     # -- derived ------------------------------------------------------------
+
+    @property
+    def provider_name(self) -> str:
+        return "openstack" if isinstance(self.provider, OpenStackConfig) else "proxmox"
+
+    @property
+    def openstack_url(self) -> str:
+        return self._openstack.url
+
+    @property
+    def availability_zone(self) -> str:
+        return self._openstack.availability_zone
+
+    @property
+    def external_net(self) -> str:
+        return self._openstack.external_net
+
+    @property
+    def _openstack(self) -> OpenStackConfig:
+        if not isinstance(self.provider, OpenStackConfig):
+            raise ConfigError("OpenStack configuration requested for a Proxmox cluster")
+        return self.provider
 
     @cached_property
     def machines(self) -> dict[str, Machine]:
@@ -101,10 +187,12 @@ class Config:
                 name=host,
                 role="controlplane",
                 pool="controlplane",
-                flavor=cp["flavor"],
                 disk=_int(cp["disk"], "disk", "pool 'controlplane'"),
                 extensions=self._resolve_extensions(cp),
                 config_patches=self._resolve_patches(cp),
+                flavor=str(cp.get("flavor") or ""),
+                cores=_int(cp.get("cores", 0), "cores", "pool 'controlplane'"),
+                memory=_int(cp.get("memory", 0), "memory", "pool 'controlplane'"),
                 tags=self._resolve_tags(cp),
             )
 
@@ -115,10 +203,12 @@ class Config:
                     name=host,
                     role="worker",
                     pool=pool,
-                    flavor=p["flavor"],
                     disk=_int(p["disk"], "disk", f"pool '{pool}'"),
                     extensions=self._resolve_extensions(p),
                     config_patches=self._resolve_patches(p),
+                    flavor=str(p.get("flavor") or ""),
+                    cores=_int(p.get("cores", 0), "cores", f"pool '{pool}'"),
+                    memory=_int(p.get("memory", 0), "memory", f"pool '{pool}'"),
                     tags=self._resolve_tags(p),
                 )
         return out
@@ -188,6 +278,32 @@ def _string_list(value: Any, field: str) -> list[str]:
     return value
 
 
+def _provider_config(d: dict[str, Any], where: str) -> ProviderConfig:
+    selected = [name for name in ("openstack", "proxmox") if name in d]
+    if len(selected) != 1:
+        raise ConfigError(
+            f"{where}: exactly one provider section is required: openstack or proxmox"
+        )
+
+    name = selected[0]
+    provider = _mapping(d[name], f"{where}: {name}")
+    if name == "openstack":
+        return OpenStackConfig(
+            url=require(provider, "url", where=f"{where}: openstack"),
+            availability_zone=require(
+                provider, "availability_zone", where=f"{where}: openstack"
+            ),
+            external_net=require(provider, "external_net", where=f"{where}: openstack"),
+        )
+    return ProxmoxConfig(
+        url=require(provider, "url", where=f"{where}: proxmox"),
+        storage=str(provider.get("storage") or ""),
+        iso_storage=str(provider.get("iso_storage") or ""),
+        placement_strategy=str(provider.get("placement_strategy") or "spread"),
+        network=_mapping(provider.get("network"), f"{where}: proxmox.network"),
+    )
+
+
 def load_config(root: Path) -> Config:
     d = read_yaml(root / CLUSTER_FILE)
     where = CLUSTER_FILE
@@ -210,9 +326,7 @@ def load_config(root: Path) -> Config:
         tags=tags,
         controlplane=controlplane,
         workers=workers,
-        openstack_url=require(d, "openstack", "url", where=where),
-        availability_zone=require(d, "openstack", "availability_zone", where=where),
-        external_net=require(d, "openstack", "external_net", where=where),
+        provider=_provider_config(d, where),
         cidr=require(d, "network", "cidr", where=where),
         dns=_string_list(require(d, "network", "dns", where=where),
                          f"{where}: network.dns"),
@@ -231,10 +345,34 @@ def load_config(root: Path) -> Config:
 def load_secrets(root: Path) -> Secrets:
     d = read_yaml(root / SECRETS_FILE)
     where = SECRETS_FILE
-    ts = d.get("tailscale", {}) or {}
+    cluster = read_yaml(root / CLUSTER_FILE)
+    selected = [name for name in ("openstack", "proxmox") if name in cluster]
+    if len(selected) != 1:
+        raise ConfigError(
+            f"{CLUSTER_FILE}: exactly one provider section is required: openstack or proxmox"
+        )
+    provider_name = selected[0]
+    other = "proxmox" if provider_name == "openstack" else "openstack"
+    if provider_name not in d or other in d:
+        raise ConfigError(
+            f"{where}: {provider_name} credentials must match the {CLUSTER_FILE} provider"
+        )
+    provider_data = _mapping(d[provider_name], f"{where}: {provider_name}")
+    if provider_name == "openstack":
+        provider: ProviderSecrets = OpenStackSecrets(
+            credential_id=require(provider_data, "credential_id", where=f"{where}: openstack"),
+            credential_secret=require(
+                provider_data, "credential_secret", where=f"{where}: openstack"
+            ),
+        )
+    else:
+        provider = ProxmoxSecrets(
+            token_id=require(provider_data, "token_id", where=f"{where}: proxmox"),
+            token_secret=require(provider_data, "token_secret", where=f"{where}: proxmox"),
+        )
+    ts = _mapping(d.get("tailscale"), f"{where}: tailscale")
     return Secrets(
-        openstack_credential_id=require(d, "openstack", "credential_id", where=where),
-        openstack_credential_secret=require(d, "openstack", "credential_secret", where=where),
+        provider=provider,
         tailscale_auth_key=ts.get("auth_key"),
     )
 
@@ -273,7 +411,12 @@ def _validate(cfg: Config) -> None:
             raise ConfigError(f"worker pool name {pool_name!r} is not a valid hostname component")
         if not isinstance(p, dict):
             raise ConfigError(f"pool '{pool_name}' must be a YAML mapping")
-        for key in ("count", "flavor", "disk"):
+        required = (
+            ("count", "flavor", "disk")
+            if isinstance(cfg.provider, OpenStackConfig)
+            else ("count", "cores", "memory", "disk")
+        )
+        for key in required:
             if key not in p:
                 raise ConfigError(f"pool '{pool_name}' missing '{key}'")
         count = _int(p["count"], "count", f"pool '{pool_name}'")
@@ -281,8 +424,14 @@ def _validate(cfg: Config) -> None:
             raise ConfigError("pool 'controlplane': 'count' must be at least 1")
         if pool_name != "controlplane" and count < 0:
             raise ConfigError(f"pool '{pool_name}': 'count' must be zero or greater")
-        if not isinstance(p["flavor"], str) or not p["flavor"].strip():
-            raise ConfigError(f"pool '{pool_name}': 'flavor' must be a non-empty string")
+        if isinstance(cfg.provider, OpenStackConfig):
+            if not isinstance(p["flavor"], str) or not p["flavor"].strip():
+                raise ConfigError(f"pool '{pool_name}': 'flavor' must be a non-empty string")
+        else:
+            if _int(p["cores"], "cores", f"pool '{pool_name}'") <= 0:
+                raise ConfigError(f"pool '{pool_name}': 'cores' must be greater than zero")
+            if _int(p["memory"], "memory", f"pool '{pool_name}'") <= 0:
+                raise ConfigError(f"pool '{pool_name}': 'memory' must be greater than zero")
         if _int(p["disk"], "disk", f"pool '{pool_name}'") <= 0:
             raise ConfigError(f"pool '{pool_name}': 'disk' must be greater than zero")
         _string_list(p.get("extensions"), f"pool '{pool_name}': extensions")
@@ -291,11 +440,14 @@ def _validate(cfg: Config) -> None:
         if len(f"{cfg.name}-{pool_name}-01") > 63:
             raise ConfigError("cluster and pool names make a hostname longer than 63 characters")
 
-    for field_name, value in (
-        ("openstack.url", cfg.openstack_url),
-        ("openstack.availability_zone", cfg.availability_zone),
-        ("openstack.external_net", cfg.external_net),
-    ):
+    provider_fields = (
+        (("openstack.url", cfg.provider.url),
+         ("openstack.availability_zone", cfg.provider.availability_zone),
+         ("openstack.external_net", cfg.provider.external_net))
+        if isinstance(cfg.provider, OpenStackConfig)
+        else (("proxmox.url", cfg.provider.url),)
+    )
+    for field_name, value in provider_fields:
         if not isinstance(value, str) or not value.strip():
             raise ConfigError(f"cluster.yaml: {field_name} must be a non-empty string")
     if cfg.login_server is not None and not isinstance(cfg.login_server, str):

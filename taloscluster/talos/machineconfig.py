@@ -14,12 +14,12 @@ one stream.
 from __future__ import annotations
 
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from ..config import Config, Machine, Secrets
+from ..infrastructure import Endpoint
 from . import talosctl
 
 INSTALL_DISK = "/dev/vda"
@@ -37,12 +37,6 @@ EXTRA_MANIFESTS = [
 ]
 
 
-@dataclass
-class Endpoints:
-    kubeapi_fip: str   # public floating ip -> certSANs + cluster endpoint
-    kubeapi_vip: str   # private fixed ip announced by controlplanes
-
-
 def _label_value(value: str) -> str:
     """Make a value safe as a kubernetes label value: spaces become `_`
     (an OpenStack project name may contain spaces, a label value may not)."""
@@ -58,17 +52,17 @@ def _node_labels(m: Machine, default_tags: dict[str, str] | None) -> dict[str, s
     return {k: _label_value(v) for k, v in labels.items()}
 
 
-def _machine_patch(m: Machine, cfg: Config, ep: Endpoints, installer_image: str,
+def _machine_patch(m: Machine, cfg: Config, endpoint: Endpoint, installer_image: str,
                    default_tags: dict[str, str] | None = None) -> dict:
     interfaces = (
-        [{"interface": "eth0", "dhcp": True, "vip": {"ip": ep.kubeapi_vip}}]
+        [{"interface": "eth0", "dhcp": True, "vip": {"ip": endpoint.vip}}]
         if m.role == "controlplane"
         else []
     )
     return {
         "machine": {
             "network": {"interfaces": interfaces},
-            "certSANs": [ep.kubeapi_fip],
+            "certSANs": [endpoint.advertised_address],
             "nodeLabels": _node_labels(m, default_tags),
             "kubelet": {
                 "extraArgs": {"rotate-server-certificates": True},
@@ -92,12 +86,12 @@ def _hostname_patch(m: Machine) -> dict:
     }
 
 
-def _cluster_patch(cfg: Config, ep: Endpoints) -> dict:
+def _cluster_patch(cfg: Config, endpoint: Endpoint) -> dict:
     return {
         "cluster": {
             "allowSchedulingOnControlPlanes": False,
             "extraManifests": EXTRA_MANIFESTS,
-            "apiServer": {"certSANs": [ep.kubeapi_fip]},
+            "apiServer": {"certSANs": [endpoint.advertised_address]},
             # keep etcd peering on the private network, off tailscale
             "etcd": {"advertisedSubnets": [cfg.cidr]},
         }
@@ -131,13 +125,13 @@ def build_configs(
     cfg: Config,
     secrets: Secrets,
     machines: dict[str, Machine],
-    ep: Endpoints,
+    endpoint: Endpoint,
     secrets_path: Path,
     installer_images: dict[tuple[str, ...], str],
     default_tags: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Return {hostname -> machine-config YAML string} for every machine."""
-    endpoint = f"https://{ep.kubeapi_fip}:6443"
+    cluster_endpoint = f"https://{endpoint.advertised_address}:6443"
     configs: dict[str, str] = {}
 
     with tempfile.TemporaryDirectory(prefix="taloscluster-mc-") as tmp:
@@ -146,11 +140,13 @@ def build_configs(
             installer_image = installer_images[m.extensions]
             patches: list[Path] = [
                 _write(workdir, f"{host}-machine",
-                       _machine_patch(m, cfg, ep, installer_image, default_tags)),
+                       _machine_patch(m, cfg, endpoint, installer_image, default_tags)),
                 _write(workdir, f"{host}-hostname", _hostname_patch(m)),
             ]
             if m.role == "controlplane":
-                patches.append(_write(workdir, f"{host}-cluster", _cluster_patch(cfg, ep)))
+                patches.append(
+                    _write(workdir, f"{host}-cluster", _cluster_patch(cfg, endpoint))
+                )
             if secrets.tailscale_auth_key:
                 patches.append(
                     _write(workdir, f"{host}-tailscale",
@@ -162,7 +158,7 @@ def build_configs(
 
             configs[host] = talosctl.gen_config(
                 cluster=cfg.name,
-                endpoint=endpoint,
+                endpoint=cluster_endpoint,
                 secrets_path=secrets_path,
                 output_type="controlplane" if m.role == "controlplane" else "worker",
                 install_image=installer_image,

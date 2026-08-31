@@ -21,6 +21,7 @@ def spy(monkeypatch):
     def fake(root):
         calls.append(root)
         return {
+            "infrastructure": {"provider": "openstack", "url": "https://cloud"},
             "openstack": {"url": "https://cloud", "region": "RegionOne", "project": "proj"},
             "kubernetes": {"floating_ip": "1.2.3.4", "vip": "10.0.0.1",
                            "endpoint": "https://1.2.3.4:6443"},
@@ -38,9 +39,11 @@ def test_from_converge_never_calls_status_report(spy, tmp_path, make_config):
         tmp_path, cfg,
         kubeapi={"floating_ip": "1.2.3.4", "vip": "10.0.0.1", "endpoint": "https://1.2.3.4:6443"},
         ingress={"floating_ip": "1.2.3.5", "vip": "10.0.0.2"},
+        infrastructure={"provider": "openstack", "url": "https://cloud"},
         openstack={"url": "https://cloud", "region": "RegionOne", "project": "proj"},
     )
     assert ctx.ingress["vip"] == "10.0.0.2"
+    assert ctx.infrastructure["provider"] == "openstack"
     assert ctx.openstack["project"] == "proj"
     assert ctx.kubernetes["endpoint"] == "https://1.2.3.4:6443"
     assert spy == []
