@@ -14,8 +14,11 @@ plugin protocol.
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
+from taloscluster.config import CLUSTER_FILE, SECRETS_FILE
 from taloscluster.context import Context
+from taloscluster.scaffold import add_yaml_section
 
 from .config import argocd_configured
 from .reconcile import check, converge, destroy, status
@@ -30,7 +33,29 @@ except PackageNotFoundError:  # source tree imported without installing the pack
 # installed -- this is an ordering wish, not a dependency.
 AFTER: tuple[str, ...] = ("rancher",)
 
-__all__ = ["AFTER", "check", "configured", "converge", "destroy", "status"]
+CLUSTER_SCAFFOLD = """\
+# ArgoCD project access uses full email addresses.
+argocd:
+  admins: []
+  users: []
+  git:
+    url: https://git.example.com/kubernetes/cluster.git
+"""
+
+SECRETS_SCAFFOLD = """\
+# Choose a kubeconfig path or kubectl context for the ArgoCD cluster.
+argocd:
+  # kubeconfig: ../argocd-kubeconfig
+  # context: argocd
+"""
+
+__all__ = ["AFTER", "check", "configured", "converge", "destroy", "init", "status"]
+
+
+def init(root: Path) -> None:
+    """Add inactive starter ArgoCD sections without replacing existing config."""
+    add_yaml_section(root / CLUSTER_FILE, "argocd", CLUSTER_SCAFFOLD)
+    add_yaml_section(root / SECRETS_FILE, "argocd", SECRETS_SCAFFOLD)
 
 
 def configured(ctx: Context) -> bool:

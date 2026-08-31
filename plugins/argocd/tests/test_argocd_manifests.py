@@ -86,6 +86,23 @@ def test_cluster_apps_uses_cluster_name_for_taiga_path(kubeconfig, cfg):
     )
 
 
+@pytest.mark.parametrize(
+    ("monitoring", "expected"), [({}, False), ({"enabled": True}, True)]
+)
+def test_cluster_apps_configures_monitoring(kubeconfig, cfg, monitoring, expected):
+    cfg.monitoring = monitoring
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"])
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["monitoring"]["enabled"] is expected
+
+
+def test_config_loads_monitoring(tmp_path):
+    (tmp_path / "cluster.yaml").write_text(
+        "name: testcluster\nargocd:\n  monitoring:\n    enabled: true\n"
+    )
+    assert Config.load(tmp_path).monitoring == {"enabled": True}
+
+
 def test_cluster_secret_is_annotated_with_the_rancher_id(kubeconfig, cfg):
     """What AFTER = ("rancher",) buys: the ArgoCD entry points back at Rancher."""
     ctx = ctx_for(kubeconfig, results={"rancher": {"cluster_id": "c-abc12"}})

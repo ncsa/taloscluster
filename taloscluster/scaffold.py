@@ -3,8 +3,9 @@
 Writes the two files a cluster needs before the first converge — cluster.yaml
 (desired state, committable) and secrets.yaml (credentials, gitignored, 0600) —
 plus a .gitignore that keeps the secret/derived files out of git. Existing
-cluster.yaml / secrets.yaml are never touched; an existing .gitignore is
-appended to only with entries it is missing.
+cluster.yaml / secrets.yaml keep their content and receive only missing sections
+from installed plugins; an existing .gitignore is appended to only with entries
+it is missing.
 """
 
 from __future__ import annotations
@@ -12,7 +13,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .config import CLUSTER_FILE, SECRETS_FILE
+from . import plugins as _plugins
+from .config import CLUSTER_FILE, SECRETS_FILE, read_yaml
 from .output import info, log
 from .state import DERIVED_FILES
 from .state import SECRETS_FILE as TALOS_SECRETS_FILE
@@ -70,18 +72,6 @@ security:
 
 tailscale:
   login_server: https://headscale.example.edu
-
-# optional plugins (installed separately, e.g. `taloscluster[rancher]`); a plugin
-# does nothing unless its section is present here AND in secrets.yaml.
-# see `taloscluster plugin list`.
-# rancher:
-#   admins: [alice]          # netids -> cluster-owner
-#   users:  [carol]          # netids -> cluster-member
-# argocd:
-#   admins: [alice@example.com]   # full emails -> project 'admin' role
-#   users:  [carol@example.com]   # full emails -> project 'user' role
-#   git:
-#     url: https://git.example.com/kubernetes/cluster.git
 """
 
 SECRETS_TEMPLATE = """\
@@ -94,17 +84,6 @@ tailscale:
   # reusable (ideally ephemeral) pre-auth key so all nodes can register;
   # omit to leave the baked-in tailscale extension idle
   auth_key: "CHANGE-ME"
-
-# credentials for the optional plugins; uncomment alongside the matching
-# cluster.yaml section.
-# rancher:
-#   url:   https://rancher.example.com
-#   token: token-xxxxx:yyyyyyyyyyyy
-# argocd:
-#   # how to reach the ArgoCD cluster: a kubeconfig path (resolved against this
-#   # directory) or a kubectl context in the default kubeconfig
-#   kubeconfig: ../argocd-kubeconfig
-#   # context: argocd
 """
 
 # everything a cluster directory produces that must never reach git
@@ -123,19 +102,20 @@ def init(root: Path, name: str) -> None:
 
     cluster = root / CLUSTER_FILE
     if cluster.exists():
-        info(f"{CLUSTER_FILE} exists, leaving it alone")
+        info(f"{CLUSTER_FILE} exists, keeping existing content")
     else:
         cluster.write_text(CLUSTER_TEMPLATE.format(name=name))
         info(f"wrote {CLUSTER_FILE}")
 
     secrets = root / SECRETS_FILE
     if secrets.exists():
-        info(f"{SECRETS_FILE} exists, leaving it alone")
+        info(f"{SECRETS_FILE} exists, keeping existing content")
     else:
         secrets.write_text(SECRETS_TEMPLATE)
         os.chmod(secrets, 0o600)
         info(f"wrote {SECRETS_FILE} (mode 0600)")
 
+    _plugins.initialize(root)
     _ensure_gitignore(root)
 
     log("next steps")
@@ -143,6 +123,25 @@ def init(root: Path, name: str) -> None:
     info(f"2. edit {CLUSTER_FILE}: name, versions, pools, openstack endpoint, allowlists")
     info("3. taloscluster plan      # dry-run, changes nothing")
     info("4. taloscluster converge  # create the cluster")
+
+
+def add_yaml_section(path: Path, key: str, section: str) -> None:
+    """Append a plugin section when its top-level key is not already present."""
+    if key in read_yaml(path):
+        info(f"{path.name}: {key} section already exists")
+        return
+
+    current = path.read_text()
+    if current and not current.endswith("\n"):
+        separator = "\n\n"
+    elif current and not current.endswith("\n\n"):
+        separator = "\n"
+    else:
+        separator = ""
+    with path.open("a") as f:
+        f.write(separator)
+        f.write(section.rstrip() + "\n")
+    info(f"{path.name}: added {key} section")
 
 
 def _ensure_gitignore(root: Path) -> None:

@@ -99,6 +99,7 @@ class Config:
     certmanager: dict[str, Any] = field(default_factory=dict)
     cinder: dict[str, Any] = field(default_factory=dict)
     nfs: dict[str, Any] = field(default_factory=dict)
+    monitoring: dict[str, Any] = field(default_factory=dict)
     sync: bool = False
 
     @classmethod
@@ -129,6 +130,9 @@ class Config:
         nfs = clan.get("nfs") or {}
         if not isinstance(nfs, dict):
             nfs = {}
+        monitoring = clan.get("monitoring") or {}
+        if not isinstance(monitoring, dict):
+            monitoring = {}
 
         # project roles = rancher members (if present) merged with argocd members
         admins = _uniq(*clan.get("admins") or [], *rancher.get("admins") or [])
@@ -144,6 +148,7 @@ class Config:
             certmanager=certmanager,
             cinder=cinder,
             nfs=nfs,
+            monitoring=monitoring,
             sync=bool(clan.get("sync")),
         )
 

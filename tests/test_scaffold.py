@@ -7,9 +7,16 @@ from __future__ import annotations
 import os
 import stat
 
+import pytest
 import yaml
 
+from taloscluster import plugins
 from taloscluster.scaffold import GITIGNORE_ENTRIES, init
+
+
+@pytest.fixture(autouse=True)
+def no_installed_plugins(monkeypatch):
+    monkeypatch.setattr(plugins, "discover", lambda: [])
 
 
 def test_init_creates_all_three_files(tmp_path):
@@ -23,6 +30,19 @@ def test_init_creates_missing_directory(tmp_path):
     root = tmp_path / "new" / "cluster"
     init(root, name="demo")
     assert (root / "cluster.yaml").is_file()
+
+
+def test_init_calls_installed_plugin_initializers(monkeypatch, tmp_path):
+    seen = []
+
+    def initialize(root):
+        assert (root / "cluster.yaml").is_file()
+        assert (root / "secrets.yaml").is_file()
+        seen.append(root)
+
+    monkeypatch.setattr(plugins, "initialize", initialize)
+    init(tmp_path, name="demo")
+    assert seen == [tmp_path]
 
 
 def test_cluster_yaml_is_valid_and_uses_name(tmp_path):

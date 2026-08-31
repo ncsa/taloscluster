@@ -68,13 +68,20 @@ taloscluster converge         # build the cluster
 The machine running taloscluster must be on the tailnet — the initial bootstrap
 reaches the first controlplane node by its tailscale name.
 
+### Headscale hygiene
+
+Before recreating a destroyed cluster with the same name, remove its stale nodes
+from Headscale so tailnet DNS cannot resolve the reused hostnames to old machines.
+Also replace the `tailscale.auth_key` in `secrets.yaml` when it is ephemeral,
+single-use, or expired.
+
 ## Commands
 
 | command | what it does |
 | --- | --- |
-| `init [NAME]` | scaffold `cluster.yaml` / `secrets.yaml` / `.gitignore`; never overwrites existing files |
+| `init [NAME]` | scaffold `cluster.yaml` / `secrets.yaml` / `.gitignore`; installed plugins append only missing sections |
 | `plan` | dry-run converge: print every create/update/delete |
-| `converge` | make the cluster match cluster.yaml (phases: image → secrets → network/SG → discover → scale-down → upgrade → compute → bootstrap → kubeconfig → health) |
+| `converge` (`sync`, `apply`) | make the cluster match cluster.yaml (phases: image → secrets → network/SG → discover → scale-down → upgrade → compute → bootstrap → kubeconfig → health) |
 | `status` | show the OpenStack url/region/project, managed resources, kube-api/ingress floating ips + `kubectl get nodes` (`-o yaml` for machine-readable output) |
 | `check` | compare `talos.version` / `kubernetes.version` against the newest upstream releases and against what the nodes run; exits 1 if an update, a drifted node or a leftover cordon was found (`-o yaml` for machine-readable output) |
 | `dashboard [NODE...]` | `talosctl dashboard` on all (reachable) nodes, or just the ones given |

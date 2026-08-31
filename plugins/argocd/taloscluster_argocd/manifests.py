@@ -260,6 +260,7 @@ def _cluster_apps(
     sealedsecrets_enabled = enabled(cfg.sealedsecrets)
     cinder_enabled = enabled(cfg.cinder)
     nfs_enabled = enabled(cfg.nfs)
+    monitoring_enabled = enabled(cfg.monitoring)
     nfs_taiga = bool(cfg.nfs.get("taiga")) and nfs_enabled
     nfs_servers = "          servers: {}\n"
     if nfs_taiga:
@@ -336,7 +337,7 @@ spec:
           enabled: {"true" if sealedsecrets_enabled else "false"}
 {sealedsecrets_version}
         monitoring:
-          enabled: false
+          enabled: {"true" if monitoring_enabled else "false"}
 
         healthmonitor:
           enabled: false

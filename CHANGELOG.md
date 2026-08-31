@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `sync` and `apply` are aliases for `converge`.
+- Init adds missing configuration sections for installed plugins.
+- ArgoCD monitoring follows `argocd.monitoring.enabled`.
 - ArgoCD NFS storage uses the CSI provisioner.
 - Read package versions from distribution metadata.
 - Renamed from `clusterctl` to `taloscluster`.
@@ -20,10 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Neutron resource creation supports deployments that reject tags in POST.
 - ArgoCD Taiga NFS shares use the cluster name instead of the OpenStack project.
 - ArgoCD cluster values include the Rancher cluster ID when available.
 - ArgoCD check detects modified resources as well as missing resources.
-- Neutron resources are tagged atomically and conflicting names fail safely.
+- Neutron resources retain verified ownership tags and conflicting names fail safely.
 - OpenStack project lookup handles sessions without an authentication plugin.
 - Scale-down and destroy confirm before deleting nodes or plugin-managed resources.
 - Converge fails when final Talos and Kubernetes health checks both fail.

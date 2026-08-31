@@ -9,6 +9,7 @@ The plugin protocol is duck-typed against the entry point's module. Only
 ``configured`` and ``converge`` are required; the rest are skipped when absent:
 
     AFTER: tuple[str, ...]                      # run after these, if installed
+    init(root: Path) -> None                    # add missing scaffold sections
     configured(ctx) -> bool
     converge(ctx, assume_yes=False) -> dict | None
     destroy(ctx, assume_yes=False) -> None
@@ -25,13 +26,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib.metadata import entry_points
+from pathlib import Path
 from typing import Any
 
 from .context import Context
 from .output import warn
 
 ENTRY_POINT_GROUP = "taloscluster.plugins"
-HOOKS = ("converge", "destroy", "status", "check")
+HOOKS = ("init", "converge", "destroy", "status", "check")
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,17 @@ def discover() -> list[Plugin]:
         after = tuple(getattr(module, "AFTER", ()) or ())
         found.append(Plugin(name=ep.name, module=module, after=after))
     return _order(found)
+
+
+def initialize(root: Path) -> None:
+    """Let every installed plugin add its missing scaffold sections."""
+    for plugin in discover():
+        if not plugin.has("init"):
+            continue
+        try:
+            plugin.module.init(root)
+        except Exception as e:
+            warn(f"plugin {plugin.name!r} failed during init: {e}")
 
 
 def _order(plugins: list[Plugin]) -> list[Plugin]:

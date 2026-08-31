@@ -14,8 +14,11 @@ plugin protocol.
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
+from taloscluster.config import CLUSTER_FILE, SECRETS_FILE
 from taloscluster.context import Context
+from taloscluster.scaffold import add_yaml_section
 
 from .config import rancher_configured
 from .reconcile import check, converge, destroy, status
@@ -29,7 +32,27 @@ except PackageNotFoundError:  # source tree imported without installing the pack
 # declares AFTER = ("rancher",)
 AFTER: tuple[str, ...] = ()
 
-__all__ = ["AFTER", "check", "configured", "converge", "destroy", "status"]
+CLUSTER_SCAFFOLD = """\
+# Rancher membership uses usernames/netids.
+rancher:
+  admins: []
+  users: []
+"""
+
+SECRETS_SCAFFOLD = """\
+# Add both values to activate Rancher registration.
+rancher:
+  # url: https://rancher.example.com
+  # token: token-xxxxx:yyyyyyyyyyyy
+"""
+
+__all__ = ["AFTER", "check", "configured", "converge", "destroy", "init", "status"]
+
+
+def init(root: Path) -> None:
+    """Add inactive starter Rancher sections without replacing existing config."""
+    add_yaml_section(root / CLUSTER_FILE, "rancher", CLUSTER_SCAFFOLD)
+    add_yaml_section(root / SECRETS_FILE, "rancher", SECRETS_SCAFFOLD)
 
 
 def configured(ctx: Context) -> bool:

@@ -20,6 +20,7 @@ from .. import naming
 from ..config import Config
 from ..output import action, dry_run, info
 from .session import Inventory
+from .tags import create_tagged
 
 # a normalized, hashable rule: (protocol, pmin, pmax, remote_ip, remote_group_ref)
 # remote_group_ref is the sentinel "@self" for intra-SG rules (resolved to the
@@ -73,10 +74,12 @@ def reconcile(conn: Connection, cfg: Config, inv: Inventory) -> Any:
         action(f"create security group {name}")
         if dry_run():
             return None
-        sg = conn.network.create_security_group(
+        sg = create_tagged(
+            conn.network,
+            "security_group",
+            tags,
             name=name,
             description=f"{cluster} kubernetes cluster security group",
-            tags=tags,
         )
         inv.put("security_groups", sg)
     else:

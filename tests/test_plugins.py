@@ -144,6 +144,33 @@ def test_one_failing_plugin_does_not_stop_the_others(monkeypatch, ctx, capsys):
     assert "a_bad" in capsys.readouterr().err
 
 
+def test_initialize_calls_installed_plugin_init_hooks(monkeypatch, tmp_path):
+    seen = []
+    install(
+        monkeypatch,
+        FakeEntryPoint("with_init", make_module("with_init", init=seen.append)),
+        FakeEntryPoint("without_init", make_module("without_init")),
+    )
+    plugins.initialize(tmp_path)
+    assert seen == [tmp_path]
+
+
+def test_initialize_contains_plugin_failures(monkeypatch, tmp_path, capsys):
+    seen = []
+
+    def boom(root):
+        raise RuntimeError("nope")
+
+    install(
+        monkeypatch,
+        FakeEntryPoint("a_bad", make_module("a_bad", init=boom)),
+        FakeEntryPoint("b_good", make_module("b_good", init=seen.append)),
+    )
+    plugins.initialize(tmp_path)
+    assert seen == [tmp_path]
+    assert "a_bad" in capsys.readouterr().err
+
+
 def test_converge_results_reach_the_next_plugin(monkeypatch, ctx):
     """The channel between plugins: rancher publishes, argocd consumes."""
     seen = {}

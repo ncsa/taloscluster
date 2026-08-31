@@ -1,7 +1,8 @@
 """taloscluster command-line entrypoint.
 
     taloscluster init [NAME]                    # scaffold cluster.yaml / secrets.yaml / .gitignore
-    taloscluster converge [--dry-run] [--yes]   # default; make the cluster match cluster.yaml
+    taloscluster converge [--dry-run] [--yes]   # make the cluster match cluster.yaml
+    taloscluster sync / apply                   # aliases for converge
     taloscluster plan                           # dry-run converge: print what would change
     taloscluster status [-o yaml]               # show managed resources, endpoints + nodes
     taloscluster check [-o yaml]                # are talos/kubernetes up to date?
@@ -185,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_con = sub.add_parser(
         "converge",
+        aliases=["sync", "apply"],
         help="converge the cluster to cluster.yaml",
         description=(
             "Make the cluster match cluster.yaml. Runs, in order: build image(s), "

@@ -26,18 +26,26 @@ class FakeConn:
     def __init__(self):
         self.created: list[dict] = []
         self.updated: list[tuple] = []
+        self.deleted: list[str] = []
         self.network = types.SimpleNamespace(
             create_port=self._create_port,
             update_port=self._update_port,
-            set_tags=lambda *a, **k: None,
+            get_tags=lambda resource: list(resource.tags),
+            set_tags=self._set_tags,
+            delete_port=self.deleted.append,
         )
 
     def _create_port(self, **kwargs):
         self.created.append(kwargs)
         return types.SimpleNamespace(
             name=kwargs["name"], id="port-new",
+            tags=list(kwargs.get("tags", [])),
             security_group_ids=kwargs.get("security_group_ids", []),
         )
+
+    def _set_tags(self, resource, tags):
+        resource.tags = list(tags)
+        return resource
 
     def _update_port(self, port, **kwargs):
         self.updated.append((port.name, kwargs))
