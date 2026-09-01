@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Advance the development version to 0.2.0 for Stage 1.
 - Route infrastructure lifecycle through a provider backend while preserving OpenStack YAML.
+- Accept successful Talos upgrade post-checks when the legacy client exits nonzero.
 
 ## [0.1.0] - 2026-08-30
 

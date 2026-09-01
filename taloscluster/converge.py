@@ -489,6 +489,7 @@ def _upgrade(cfg: Config, machines: dict[str, Machine], inv: InfrastructureInven
         cur_image = talosctl.node_image(talosconfig, endpoint, address)
         # upgrade on a version change OR a schematic change (extension list edit)
         if cur_ver == cfg.talos_version and (not cur_image or cur_image == want_image):
+            _uncordon_stale(kubeconfig, host)
             info(f"{host}: {cur_ver or '?'}, ok")
             continue
         info(f"{host}: {cur_ver or '?'} -> {cfg.talos_version} ({want_image})")

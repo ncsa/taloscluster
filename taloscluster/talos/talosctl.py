@@ -334,6 +334,9 @@ def upgrade(talosconfig: Path, endpoint: str, node: str, image: str) -> None:
     if rc == 0:
         return
     msg = err + out
+    if "upgrade completed" in msg and "post check passed" in msg:
+        warn(f"upgrade completed for {node} despite talosctl exiting non-zero")
+        return
     # the upgrade is under way; only the client's view of it died
     watch_died = (
         "too_many_pings", "ENHANCE_YOUR_CALM", "error reading from server: EOF",

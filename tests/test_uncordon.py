@@ -9,10 +9,16 @@ later `talosctl health` on "some nodes are not schedulable".
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from taloscluster import converge
+from taloscluster.infrastructure import (
+    InfrastructureInventory,
+    InfrastructureMachine,
+    NetworkResult,
+)
 from taloscluster.k8s import kubectl
 
 
@@ -52,6 +58,26 @@ def test_a_failed_uncordon_warns_but_does_not_raise(cluster, capsys):
     cluster["fail"] = True
     converge._uncordon_stale(Path("kubeconfig"), "cp-01")
     assert "kubectl uncordon cp-01" in capsys.readouterr().err
+
+
+def test_upgrade_resume_uncordons_a_node_already_at_the_target(monkeypatch):
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8")
+    machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
+    uncordoned: list[str] = []
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a: {"cp-01": "192.0.2.1"})
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "node_image", lambda *_a: "installer:v1.13.9")
+    monkeypatch.setattr(converge, "_uncordon_stale", lambda _kc, host: uncordoned.append(host))
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.35.8")
+
+    converge._upgrade(
+        cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
+        Path("talosconfig"), Path("kubeconfig"),
+    )
+
+    assert uncordoned == ["cp-01"]
 
 
 def test_unschedulable_reads_spec(monkeypatch):

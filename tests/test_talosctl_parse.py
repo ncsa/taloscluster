@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from taloscluster.talos import talosctl
 
 # Realistic `talosctl version` output: a Client block and a Server block, each
@@ -133,3 +135,21 @@ def test_member_version_tolerates_an_odd_os_string():
     assert talosctl._member_version("Talos (v1.13.9)") == "v1.13.9"
     assert talosctl._member_version("Talos") == ""
     assert talosctl._member_version("") == ""
+
+
+def test_upgrade_accepts_successful_post_check_with_nonzero_exit(monkeypatch):
+    out = "upgrade completed\npost check passed\n"
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (1, out, ""))
+
+    talosctl.upgrade(Path("talosconfig"), "endpoint", "node", "installer:v1.13.9")
+
+
+def test_upgrade_still_raises_on_unclassified_nonzero_exit(monkeypatch):
+    monkeypatch.setattr(
+        talosctl,
+        "_run_nocheck",
+        lambda *a, **k: (1, "", "failed to pull installer image"),
+    )
+
+    with pytest.raises(RuntimeError, match="failed to pull installer image"):
+        talosctl.upgrade(Path("talosconfig"), "endpoint", "node", "installer:v1.13.9")
