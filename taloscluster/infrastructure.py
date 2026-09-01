@@ -5,8 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .config import Config, Machine, OpenStackConfig, Secrets
-from .errors import ReconcileError
+from .config import Config, Machine, OpenStackConfig, ProxmoxConfig, Secrets
 
 
 @dataclass(frozen=True)
@@ -88,6 +87,8 @@ class InfrastructureBackend(Protocol):
         configs: dict[str, str],
     ) -> None: ...
 
+    def finalize_machines(self, inventory: InfrastructureInventory) -> None: ...
+
     def delete_machine(self, name: str, inventory: InfrastructureInventory) -> None: ...
 
     def default_node_tags(self) -> dict[str, str]: ...
@@ -110,9 +111,11 @@ def backend_for(cfg: Config, secrets: Secrets) -> InfrastructureBackend:
         from .openstack.backend import OpenStackBackend
 
         return OpenStackBackend(cfg, secrets)
-    raise ReconcileError(
-        "provider 'proxmox' is configured, but Proxmox compute is not implemented until Stage 2"
-    )
+    if isinstance(cfg.provider, ProxmoxConfig):
+        from .proxmox.backend import ProxmoxBackend
+
+        return ProxmoxBackend(cfg, secrets)
+    raise TypeError(f"unsupported infrastructure provider: {type(cfg.provider).__name__}")
 
 
 def resolve_node_address(

@@ -1,7 +1,7 @@
 # taloscluster
 
 `taloscluster` provisions and manages [Talos Linux](https://www.talos.dev/)
-Kubernetes clusters on OpenStack from a single declarative file. You describe
+Kubernetes clusters on OpenStack or Proxmox from a single declarative file. You describe
 the cluster you want in `cluster.yaml`; `taloscluster converge` makes reality
 match it — create, scale up, scale down (drain first), and rolling
 Talos/Kubernetes upgrades are all the same command. Re-running is always safe.
@@ -58,9 +58,9 @@ the same tool environment).
 ## Quick start
 
 ```bash
-taloscluster init mycluster   # scaffold cluster.yaml, secrets.yaml, .gitignore
-vi secrets.yaml             # openstack application credential + tailscale key
-vi cluster.yaml             # versions, pools, openstack endpoint, allowlists
+taloscluster init --openstack mycluster  # or: --proxmox
+vi secrets.yaml             # provider credential + tailscale key
+vi cluster.yaml             # versions, pools, provider, network, allowlists
 taloscluster plan             # dry-run: print every action, change nothing
 taloscluster converge         # build the cluster
 ```
@@ -79,14 +79,14 @@ single-use, or expired.
 
 | command | what it does |
 | --- | --- |
-| `init [NAME]` | scaffold `cluster.yaml` / `secrets.yaml` / `.gitignore`; installed plugins append only missing sections |
+| `init [--openstack\|--proxmox] [NAME]` | scaffold provider-specific `cluster.yaml` / `secrets.yaml` plus `.gitignore`; defaults to OpenStack; installed plugins append only missing sections |
 | `plan` | dry-run converge: print every create/update/delete |
 | `converge` (`sync`, `apply`) | make the cluster match cluster.yaml (phases: image → secrets → network/SG → discover → scale-down → upgrade → compute → bootstrap → kubeconfig → health) |
-| `status` | show the OpenStack url/region/project, managed resources, kube-api/ingress floating ips + `kubectl get nodes` (`-o yaml` for machine-readable output) |
+| `status` | show the provider endpoint, managed resources, cluster endpoints + `kubectl get nodes` (`-o yaml` for machine-readable output) |
 | `check` | compare `talos.version` / `kubernetes.version` against the newest upstream releases and against what the nodes run; exits 1 if an update, a drifted node or a leftover cordon was found (`-o yaml` for machine-readable output) |
 | `dashboard [NODE...]` | `talosctl dashboard` on all (reachable) nodes, or just the ones given |
-| `env` | print `export OS_*` lines for the openstack CLI: `eval "$(taloscluster env)"` |
-| `image download\|remove` | build/upload the Glance boot image, or delete it (converge never deletes it) |
+| `env` | print provider CLI authentication exports: `eval "$(taloscluster env)"` |
+| `image download\|remove` | upload or remove the shared provider boot image (converge never removes it) |
 | `destroy` | delete every managed resource + local state; the shared boot image is kept |
 | `plugin list` / `plugin NAME [ACTION]` | show the installed plugins, or run one on its own (see [Plugins](#plugins)) |
 
@@ -99,6 +99,58 @@ Typical `cluster.yaml` edits and what converge does with them: bump a pool
 or `kubernetes.version` for a rolling upgrade (existing nodes are upgraded
 *before* new ones are added — `taloscluster check` tells you which bumps are
 available); edit a `security` allowlist to reconcile the security-group rules.
+
+### Proxmox on existing networks
+
+Stage 2 uses an existing bridge or VNet and a private Layer 2 Kubernetes API VIP;
+it does not create Proxmox SDN objects or configure a directly routed external
+NIC. A minimal provider section is:
+
+```yaml
+controlplane:
+  count: 3
+  cores: 4
+  memory: 8 # GB
+  disk: 40
+
+proxmox:
+  url: https://pve.example.edu:8006
+  storage: vms
+  iso_storage: isos
+  cidata_storage: local
+  placement_strategy: spread
+  nodes: [pve001, pve002, pve003]
+  network:
+    cluster:
+      bridge: vmbr0
+      kubeapi_vip: 172.29.21.240
+
+network:
+  cidr: 172.29.21.0/24
+  dns: [172.29.21.1]
+  ntp: [pool.ntp.org]
+```
+
+Use `vnet:` instead of `bridge:` for an existing VNet. A pool may set `node:`
+to pin all of its machines; otherwise placement spreads creates across the
+configured online nodes while reserving memory for earlier choices in the same
+run. `cidata_storage` must be node-local because cidata temporarily contains the
+Talos machine configuration and provider/extension secrets.
+
+Set `proxmox.url` to the Proxmox server origin; taloscluster adds `/api2/json`
+internally. Existing configurations that include the API path remain supported.
+
+```yaml
+# secrets.yaml
+proxmox:
+  token_id: taloscluster@pve!provider
+  token_secret: CHANGE-ME
+```
+
+Every command performs a read-only `/access/permissions` preflight before a
+Proxmox upload, VM/pool change, power action, or deletion. Missing privileges are
+reported with their ACL paths. TLS certificate verification is enabled by
+default; `proxmox.tls_verify` may name a CA bundle path.
 
 ## Plugins
 
@@ -187,7 +239,7 @@ the command exits non-zero.
 1. **`cluster.yaml`** — desired state: versions, node pools, network,
    allowlists, extensions. Committable, but note the `security` allowlists
    reveal which source addresses may reach your APIs.
-2. **`secrets.yaml`** — OpenStack application credential + tailscale pre-auth
+2. **`secrets.yaml`** — OpenStack application credential or Proxmox API token + tailscale pre-auth
    key. Gitignored; restorable by reissuing credentials.
 3. **`talossecrets.yaml`** — ⚠️ the cluster's cryptographic identity (cluster
    CA, etcd CA, join tokens). Generated on the first converge, gitignored,

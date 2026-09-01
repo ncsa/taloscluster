@@ -50,6 +50,26 @@ def node_exists(kubeconfig: Path, name: str) -> bool:
     return proc.returncode == 0
 
 
+def node_ready(kubeconfig: Path, name: str) -> bool | None:
+    """True if Ready, False if explicitly NotReady, None if unknown.
+
+    None covers both kubectl API failure and node-not-found: scale-down must
+    treat None as "cannot confirm safe to delete" and abort.
+    """
+    proc = _run(_kc(kubeconfig) + ["get", "node", name, "-o", "json"],
+                capture=True, check=False)
+    if proc.returncode != 0:
+        return None
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    for condition in (data.get("status") or {}).get("conditions", []):
+        if condition.get("type") == "Ready":
+            return condition.get("status") == "True"
+    return None
+
+
 def server_version(kubeconfig: Path) -> str:
     proc = _run(_kc(kubeconfig) + ["version", "-o", "json"], capture=True, check=False)
     if proc.returncode != 0:

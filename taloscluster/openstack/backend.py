@@ -132,6 +132,9 @@ class OpenStackBackend:
     def delete_machine(self, name: str, inventory: InfrastructureInventory) -> None:
         compute.delete_node(self.conn, name, self._raw(inventory))
 
+    def finalize_machines(self, inventory: InfrastructureInventory) -> None:
+        return None
+
     def default_node_tags(self) -> dict[str, str]:
         project = project_name(self.conn)
         return {"ncsa/project": project} if project else {}

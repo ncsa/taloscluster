@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-31
+
+- Add Proxmox VM lifecycle support on existing bridges and VNets.
+- Add `init --openstack` and `init --proxmox` provider-specific configuration templates.
+- Express Proxmox pool memory in GB in `cluster.yaml` and convert it for the API.
+- Accept a Proxmox server URL without the `/api2/json` suffix.
+- Name Proxmox boot ISOs `talos-<version>-tailscale.iso` like OpenStack images.
+- Install Talos to Proxmox SCSI disks at `/dev/sda` while retaining `/dev/vda` on OpenStack.
+- Stop running Proxmox VMs before deletion so destroy does not fail on a running guest.
+- Query live Proxmox VM status before deletion so a VM already shut down by `talosctl reset` is not re-stopped.
+- Tolerate drain failure during scale-down so an interrupted run can be resumed.
+- Drop `--wait` from `talosctl reset` since `--reboot=false` shuts the node down; waiting for a reboot that never happens hung scale-down for 10 minutes.
+- Delete nodes with no resolvable address during scale-down so an already-reset node is not stuck.
+- Boot Proxmox VMs with UEFI (OVMF) on q35 instead of legacy BIOS.
+- Wait for kube-api to stabilize (two consecutive checks) before Kubernetes upgrade after machine-config apply.
+- Skip kubeconfig re-fetch on an already-up cluster and use cp-01 instead of the VIP, which may have moved during a reboot.
+- Wait for all desired nodes to become Ready before detaching cidata ISOs so new machines can finish booting.
+- Abort scale-down on drain failure when the node is still Ready; only continue if the node is confirmed NotReady.
+- Treat kubectl API failure during scale-down as unknown (not NotReady) and abort deletion.
+- Re-read Kubernetes server version after kube-api stabilization to avoid skipping minor-version upgrade steps.
+- Remove stale swap file and ignore `*.swp` files.
+- Spread Proxmox control planes across distinct nodes during placement.
+- Place control planes by node name instead of available memory so the first node is not systematically skipped.
+
 ## [0.2.0] - 2026-08-31
 
 ### Changed

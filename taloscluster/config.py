@@ -44,7 +44,8 @@ class Machine:
     config_patches: tuple[str, ...]    # freeform YAML docs, cluster + pool
     flavor: str = ""                  # OpenStack flavor
     cores: int = 0                    # Proxmox virtual CPU count
-    memory: int = 0                   # Proxmox memory in MiB
+    memory: int = 0                   # Proxmox memory in GB (cluster.yaml unit)
+    node: str = ""                    # optional explicit Proxmox placement
     tags: dict[str, str] = field(default_factory=dict)  # node labels, cluster + pool
 
 
@@ -60,7 +61,10 @@ class ProxmoxConfig:
     url: str
     storage: str = ""
     iso_storage: str = ""
+    cidata_storage: str = "local"
     placement_strategy: str = "spread"
+    nodes: tuple[str, ...] = ()
+    tls_verify: bool | str = True
     network: dict[str, Any] = field(default_factory=dict)
 
 
@@ -193,6 +197,7 @@ class Config:
                 flavor=str(cp.get("flavor") or ""),
                 cores=_int(cp.get("cores", 0), "cores", "pool 'controlplane'"),
                 memory=_int(cp.get("memory", 0), "memory", "pool 'controlplane'"),
+                node=str(cp.get("node") or ""),
                 tags=self._resolve_tags(cp),
             )
 
@@ -209,6 +214,7 @@ class Config:
                     flavor=str(p.get("flavor") or ""),
                     cores=_int(p.get("cores", 0), "cores", f"pool '{pool}'"),
                     memory=_int(p.get("memory", 0), "memory", f"pool '{pool}'"),
+                    node=str(p.get("node") or ""),
                     tags=self._resolve_tags(p),
                 )
         return out
@@ -299,7 +305,10 @@ def _provider_config(d: dict[str, Any], where: str) -> ProviderConfig:
         url=require(provider, "url", where=f"{where}: proxmox"),
         storage=str(provider.get("storage") or ""),
         iso_storage=str(provider.get("iso_storage") or ""),
+        cidata_storage=str(provider.get("cidata_storage") or "local"),
         placement_strategy=str(provider.get("placement_strategy") or "spread"),
+        nodes=tuple(_string_list(provider.get("nodes"), f"{where}: proxmox.nodes")),
+        tls_verify=provider.get("tls_verify", True),
         network=_mapping(provider.get("network"), f"{where}: proxmox.network"),
     )
 
@@ -432,6 +441,13 @@ def _validate(cfg: Config) -> None:
                 raise ConfigError(f"pool '{pool_name}': 'cores' must be greater than zero")
             if _int(p["memory"], "memory", f"pool '{pool_name}'") <= 0:
                 raise ConfigError(f"pool '{pool_name}': 'memory' must be greater than zero")
+            node = p.get("node")
+            if node is not None and (not isinstance(node, str) or not node.strip()):
+                raise ConfigError(f"pool '{pool_name}': 'node' must be a non-empty string")
+            if node and cfg.provider.nodes and node not in cfg.provider.nodes:
+                raise ConfigError(
+                    f"pool '{pool_name}': node {node!r} is not in proxmox.nodes"
+                )
         if _int(p["disk"], "disk", f"pool '{pool_name}'") <= 0:
             raise ConfigError(f"pool '{pool_name}': 'disk' must be greater than zero")
         _string_list(p.get("extensions"), f"pool '{pool_name}': extensions")
@@ -439,19 +455,6 @@ def _validate(cfg: Config) -> None:
         _mapping(p.get("tags"), f"pool '{pool_name}': tags")
         if len(f"{cfg.name}-{pool_name}-01") > 63:
             raise ConfigError("cluster and pool names make a hostname longer than 63 characters")
-
-    provider_fields = (
-        (("openstack.url", cfg.provider.url),
-         ("openstack.availability_zone", cfg.provider.availability_zone),
-         ("openstack.external_net", cfg.provider.external_net))
-        if isinstance(cfg.provider, OpenStackConfig)
-        else (("proxmox.url", cfg.provider.url),)
-    )
-    for field_name, value in provider_fields:
-        if not isinstance(value, str) or not value.strip():
-            raise ConfigError(f"cluster.yaml: {field_name} must be a non-empty string")
-    if cfg.login_server is not None and not isinstance(cfg.login_server, str):
-        raise ConfigError("cluster.yaml: tailscale.login_server must be a string")
 
     if not isinstance(cfg.cidr, str):
         raise ConfigError("cluster.yaml: network.cidr must be a CIDR string")
@@ -463,6 +466,61 @@ def _validate(cfg: Config) -> None:
         ) from None
     if network.version != 4:
         raise ConfigError("cluster.yaml: network.cidr must be IPv4")
+
+    provider_fields = (
+        (("openstack.url", cfg.provider.url),
+         ("openstack.availability_zone", cfg.provider.availability_zone),
+         ("openstack.external_net", cfg.provider.external_net))
+        if isinstance(cfg.provider, OpenStackConfig)
+        else (("proxmox.url", cfg.provider.url),)
+    )
+    for field_name, value in provider_fields:
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"cluster.yaml: {field_name} must be a non-empty string")
+    if isinstance(cfg.provider, ProxmoxConfig):
+        provider = cfg.provider
+        for field_name, value in (
+            ("proxmox.storage", provider.storage),
+            ("proxmox.iso_storage", provider.iso_storage),
+            ("proxmox.cidata_storage", provider.cidata_storage),
+        ):
+            if not value.strip():
+                raise ConfigError(f"cluster.yaml: {field_name} must be a non-empty string")
+        if provider.placement_strategy != "spread":
+            raise ConfigError("cluster.yaml: proxmox.placement_strategy must be 'spread'")
+        if not isinstance(provider.tls_verify, (bool, str)) or provider.tls_verify == "":
+            raise ConfigError(
+                "cluster.yaml: proxmox.tls_verify must be true, false, or a CA bundle path"
+            )
+        cluster_network = _mapping(
+            provider.network.get("cluster"), "cluster.yaml: proxmox.network.cluster"
+        )
+        links = [name for name in ("bridge", "vnet") if cluster_network.get(name)]
+        if len(links) != 1:
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.cluster requires exactly one bridge or vnet"
+            )
+        kubeapi_vip = cluster_network.get("kubeapi_vip")
+        if not isinstance(kubeapi_vip, str) or not kubeapi_vip:
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.cluster.kubeapi_vip must be an IPv4 address"
+            )
+        try:
+            vip = ipaddress.ip_address(kubeapi_vip)
+        except (TypeError, ValueError):
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.cluster.kubeapi_vip must be an IPv4 address"
+            ) from None
+        if vip.version != 4 or vip not in network:
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.cluster.kubeapi_vip must be inside network.cidr"
+            )
+        vlan = cluster_network.get("vlan")
+        if vlan is not None and not 1 <= _int(vlan, "vlan", "proxmox.network.cluster") <= 4094:
+            raise ConfigError("cluster.yaml: proxmox.network.cluster.vlan must be 1-4094")
+    if cfg.login_server is not None and not isinstance(cfg.login_server, str):
+        raise ConfigError("cluster.yaml: tailscale.login_server must be a string")
+
     for dns in cfg.dns:
         try:
             ipaddress.ip_address(dns)

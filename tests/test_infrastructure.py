@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from taloscluster.config import ProxmoxSecrets, Secrets
-from taloscluster.errors import ReconcileError
 from taloscluster.infrastructure import (
     InfrastructureInventory,
     InfrastructureMachine,
@@ -53,11 +50,21 @@ def test_node_address_falls_back_to_network_then_inventory():
     assert resolve_node_address("node-1", {}, inventory) == "192.0.2.10"
 
 
-def test_proxmox_backend_fails_with_stage_boundary(make_config):
+def test_proxmox_backend_is_selected(make_config):
     cfg = make_config(
         {
-            "controlplane": {"count": 1, "cores": 4, "memory": 8192, "disk": 40},
-            "proxmox": {"url": "https://pve.example:8006/api2/json"},
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {
+                        "bridge": "vmbr0",
+                        "kubeapi_vip": "192.168.0.10",
+                    }
+                },
+            },
         },
         remove=("openstack",),
     )
@@ -66,5 +73,4 @@ def test_proxmox_backend_fails_with_stage_boundary(make_config):
         tailscale_auth_key=None,
     )
 
-    with pytest.raises(ReconcileError, match="Stage 2"):
-        backend_for(cfg, secrets)
+    assert backend_for(cfg, secrets).name == "proxmox"

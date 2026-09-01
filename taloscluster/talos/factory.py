@@ -14,6 +14,7 @@ import yaml
 FACTORY = "https://factory.talos.dev"
 # openstack disk image is the installed system; this is the raw disk asset
 IMAGE_ASSET = "openstack-amd64.raw.xz"
+NOCLOUD_ISO_ASSET = "nocloud-amd64.iso"
 
 
 def schematic_id(extensions) -> str:
@@ -40,12 +41,22 @@ def schematic_id(extensions) -> str:
     return sid
 
 
-def installer_image(schematic: str, talos_version: str) -> str:
+def installer_image(
+    schematic: str,
+    talos_version: str,
+    platform: str = "openstack",
+) -> str:
     """The installer image ref for `machine.install.image` (keeps extensions on
     upgrade)."""
-    return f"factory.talos.dev/openstack-installer/{schematic}:{talos_version}"
+    if platform not in ("openstack", "nocloud"):
+        raise ValueError(f"unsupported Talos installer platform: {platform}")
+    return f"factory.talos.dev/{platform}-installer/{schematic}:{talos_version}"
 
 
 def image_url(schematic: str, talos_version: str) -> str:
     """The downloadable openstack raw disk image (xz-compressed)."""
     return f"{FACTORY}/image/{schematic}/{talos_version}/{IMAGE_ASSET}"
+
+
+def nocloud_iso_url(schematic: str, talos_version: str) -> str:
+    return f"{FACTORY}/image/{schematic}/{talos_version}/{NOCLOUD_ISO_ASSET}"

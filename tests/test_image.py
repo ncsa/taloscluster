@@ -13,6 +13,7 @@ import lzma
 import pytest
 
 from taloscluster.openstack import image
+from taloscluster.talos import factory
 
 
 class FakeResponse:
@@ -121,3 +122,12 @@ def test_download_and_decompress_truncated_does_not_produce_full_image(monkeypat
         image._download_and_decompress("http://factory/img.raw.xz", dest)
     # whatever landed on disk is not the complete original
     assert dest.read_bytes() != original
+
+
+def test_nocloud_installer_and_iso_urls_use_the_same_schematic():
+    assert factory.installer_image("abc123", "v1.13.9", platform="nocloud") == (
+        "factory.talos.dev/nocloud-installer/abc123:v1.13.9"
+    )
+    assert factory.nocloud_iso_url("abc123", "v1.13.9").endswith(
+        "/image/abc123/v1.13.9/nocloud-amd64.iso"
+    )

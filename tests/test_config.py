@@ -275,22 +275,29 @@ def test_exactly_one_provider_is_required(make_config):
         make_config(remove=("openstack",))
 
     with pytest.raises(ConfigError, match="exactly one.*openstack.*proxmox"):
-        make_config({"proxmox": {"url": "https://pve.example/api2/json"}})
+        make_config({"proxmox": {"url": "https://pve.example"}})
 
 
 def test_proxmox_provider_section_is_typed(make_config):
     cfg = make_config(
         {
-            "controlplane": {"count": 3, "cores": 4, "memory": 8192, "disk": 40},
+            "controlplane": {"count": 3, "cores": 4, "memory": 8, "disk": 40},
             "workers": {
-                "worker": {"count": 1, "cores": 8, "memory": 16384, "disk": 100}
+                "worker": {"count": 1, "cores": 8, "memory": 16, "disk": 100}
             },
             "proxmox": {
-                "url": "https://pve.example:8006/api2/json",
+                "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
+                "cidata_storage": "local",
                 "placement_strategy": "spread",
-                "network": {"cluster": {"bridge": "vmbr0"}},
+                "nodes": ["pve001", "pve002"],
+                "network": {
+                    "cluster": {
+                        "bridge": "vmbr0",
+                        "kubeapi_vip": "192.168.0.10",
+                    }
+                },
             },
         },
         remove=("openstack",),
@@ -299,10 +306,54 @@ def test_proxmox_provider_section_is_typed(make_config):
     assert isinstance(cfg.provider, ProxmoxConfig)
     assert cfg.provider_name == "proxmox"
     assert cfg.provider.storage == "vms"
+    assert cfg.provider.cidata_storage == "local"
+    assert cfg.provider.nodes == ("pve001", "pve002")
     assert cfg.provider.network["cluster"]["bridge"] == "vmbr0"
     assert cfg.machines["testcluster-controlplane-01"].cores == 4
-    assert cfg.machines["testcluster-worker-01"].memory == 16384
+    assert cfg.machines["testcluster-worker-01"].memory == 16
     assert cfg.machines["testcluster-worker-01"].flavor == ""
+
+
+@pytest.mark.parametrize(
+    ("proxmox", "message"),
+    [
+        (
+            {
+                "url": "https://pve.example",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}},
+            },
+            "proxmox.storage",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0", "vnet": "talos"}},
+            },
+            "exactly one bridge or vnet",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0", "kubeapi_vip": "203.0.113.10"}},
+            },
+            "inside network.cidr",
+        ),
+    ],
+)
+def test_proxmox_compute_configuration_is_validated(make_config, proxmox, message):
+    with pytest.raises(ConfigError, match=message):
+        make_config(
+            {
+                "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+                "proxmox": proxmox,
+            },
+            remove=("openstack",),
+        )
 
 
 def _write_provider_files(root: Path, cluster: dict, secrets: dict) -> None:
@@ -334,7 +385,7 @@ def test_openstack_secrets_are_typed_and_existing_fields_remain(tmp_path):
 def test_proxmox_secrets_are_typed(tmp_path):
     _write_provider_files(
         tmp_path,
-        {"proxmox": {"url": "https://pve.example/api2/json"}},
+        {"proxmox": {"url": "https://pve.example"}},
         {"proxmox": {"token_id": "user@pve!provider", "token_secret": "secret"}},
     )
 
@@ -347,7 +398,7 @@ def test_proxmox_secrets_are_typed(tmp_path):
 def test_secrets_provider_must_match_cluster_provider(tmp_path):
     _write_provider_files(
         tmp_path,
-        {"proxmox": {"url": "https://pve.example/api2/json"}},
+        {"proxmox": {"url": "https://pve.example"}},
         {"openstack": {"credential_id": "id", "credential_secret": "secret"}},
     )
 

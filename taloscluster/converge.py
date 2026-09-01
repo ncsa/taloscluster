@@ -65,13 +65,16 @@ def converge(root: Path, assume_yes: bool = False) -> int:
     kubeconfig_path = root / "kubeconfig"
     machines = cfg.machines
 
+    backend = backend_for(cfg, secrets)
+
     # installer image ref per extension set (schematic drives extension removal)
+    installer_platform = "nocloud" if backend.name == "proxmox" else "openstack"
     installer_images = {
-        s: factory.installer_image(factory.schematic_id(s), cfg.talos_version)
+        s: factory.installer_image(
+            factory.schematic_id(s), cfg.talos_version, platform=installer_platform
+        )
         for s in cfg.extension_sets()
     }
-
-    backend = backend_for(cfg, secrets)
 
     # ---- 1. IMAGE --------------------------------------------------------
     log("image")
@@ -171,16 +174,19 @@ def converge(root: Path, assume_yes: bool = False) -> int:
         talosctl.bootstrap(talosconfig_path, endpoint=cp1, node=cp1)
 
     # ---- 9. KUBECONFIG ---------------------------------------------------
-    if state.secrets_exist() and refs.kubernetes.vip and not dry_run():
+    if not up and state.secrets_exist() and refs.kubernetes.vip and not dry_run():
         log("kubeconfig")
-        # wait for the VIP to be announced (controlplane up post-bootstrap)
-        _wait_reachable(talosconfig_path, cp1, refs.kubernetes.vip)
-        talosctl.kubeconfig(talosconfig_path, cp1, refs.kubernetes.vip, kubeconfig_path)
+        # wait for cp-01 (already confirmed reachable above during bootstrap);
+        # don't use the VIP as the node -- it may have moved to another CP
+        # during a reboot and is not reliably announced yet.
+        _wait_reachable(talosconfig_path, cp1, cp1)
+        talosctl.kubeconfig(talosconfig_path, cp1, cp1, kubeconfig_path)
 
     # ---- 10. HEALTH + STATUS ---------------------------------------------
     if not dry_run() and refs.kubernetes.vip:
         log("health")
         _require_final_health(talosconfig_path, cp1, refs.kubernetes.vip, kubeconfig_path)
+        _wait_nodes_ready(kubeconfig_path, machines)
         log("status")
         print(kubectl.get_nodes_wide(kubeconfig_path))
         print(f"kube api:   https://{refs.kubernetes.advertised_address}:6443")
@@ -188,6 +194,7 @@ def converge(root: Path, assume_yes: bool = False) -> int:
         print(f"talosctl:   talosctl --talosconfig {talosconfig_path} "
               f"-e {cp1} -n {refs.kubernetes.vip} <cmd>")
         print(f"kubectl:    kubectl --kubeconfig {kubeconfig_path} get nodes")
+        backend.finalize_machines(inv)
 
     # ---- 11. PLUGINS -----------------------------------------------------
     # built from what this run already computed, so no plugin can trigger a
@@ -242,6 +249,30 @@ def _wait_reachable(talosconfig: Path, endpoint: str, node: str,
         "Is this machine on the tailnet, and is there a stale headscale entry "
         f"for {endpoint}? (see README: headscale hygiene)"
     )
+
+
+def _wait_nodes_ready(kubeconfig: Path, machines: dict[str, Machine],
+                      timeout_s: int = 900, interval_s: int = 15) -> None:
+    """Wait for every desired machine to appear as a Ready Kubernetes node.
+
+    Existing machines are already Ready and pass immediately; new machines
+    need time to boot, install Talos, and join the cluster. Must complete
+    before ``finalize_machines`` detaches credential-bearing cidata ISOs.
+    """
+    pending = set(machines)
+    deadline = time.monotonic() + timeout_s
+    while pending and time.monotonic() < deadline:
+        ready = {n["name"] for n in kubectl.node_summary(kubeconfig) if n["ready"]}
+        pending -= ready
+        if pending:
+            info(f"waiting for {len(pending)} node(s) to become Ready: "
+                 f"{', '.join(sorted(pending))}")
+            time.sleep(interval_s)
+    if pending:
+        raise ReconcileError(
+            "nodes did not become Ready within "
+            f"{timeout_s // 60}m: {', '.join(sorted(pending))}"
+        )
 
 
 def _wait_version(talosconfig: Path, endpoint: str, node: str, want: str,
@@ -422,12 +453,27 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
     )
     for node in removals:
         address = resolve_node_address(node, discovered, inv, refs)
-        if not address:
-            warn(f"no provider-neutral address for {node}, skipping removal")
-            continue
-        info(f"removing {node} ({address})")
-        kubectl.drain(kubeconfig, node)
-        talosctl.reset(talosconfig, endpoint, address)
+        if address:
+            info(f"removing {node} ({address})")
+            try:
+                kubectl.drain(kubeconfig, node)
+            except subprocess.CalledProcessError:
+                ready = kubectl.node_ready(kubeconfig, node)
+                if ready is not False:
+                    raise ReconcileError(
+                        f"drain of {node} failed and node is {'Ready' if ready else 'unknown'}; "
+                        "aborting to protect a potentially live node"
+                    ) from None
+                warn(f"drain of {node} failed (node already NotReady); continuing")
+            talosctl.reset(talosconfig, endpoint, address)
+        else:
+            ready = kubectl.node_ready(kubeconfig, node)
+            if ready is not False:
+                raise ReconcileError(
+                    f"no address for {node} but node is {'Ready' if ready else 'unknown'} in k8s; "
+                    "aborting -- may be a discovery failure, not a reset node"
+                )
+            warn(f"no address for {node} (node is NotReady, likely already reset); deleting")
         kubectl.delete_node(kubeconfig, node)
         backend.delete_machine(node, inv)
         removed += 1
@@ -521,6 +567,21 @@ def _upgrade(cfg: Config, machines: dict[str, Machine], inv: InfrastructureInven
         "",
     )
     if cp1_address:
+        consecutive = 0
+        for _ in range(12):
+            if kubectl.cluster_up(kubeconfig):
+                consecutive += 1
+                if consecutive >= 2:
+                    break
+            else:
+                consecutive = 0
+            info("kube-api not yet stable after machine-config apply; retrying in 10s")
+            time.sleep(10)
+        else:
+            raise ReconcileError("kube-api did not stabilize before k8s upgrade")
+        cur = kubectl.server_version(kubeconfig)
+        if not cur:
+            raise ReconcileError("kube-api stabilized but server version is still unavailable")
         for step in _k8s_upgrade_path(cur, cfg.kubernetes_version):
             info(f"{cur or '?'} -> {step}")
             talosctl.upgrade_k8s(talosconfig, endpoint, cp1_address, step)
@@ -581,7 +642,7 @@ def status(root: Path, output: str = "text") -> None:
     ctx = Context(root=root, cfg=load_config(root), status=report)
     plugin_reports = plugins.collect(plugins.active(ctx), "status", ctx)
 
-    openstack_info = report["openstack"]
+    infrastructure = report["infrastructure"]
     kubeapi = report["kubernetes"]
     ingress = report["ingress"]
     api_url = kubeapi["endpoint"]
@@ -592,9 +653,13 @@ def status(root: Path, output: str = "text") -> None:
         return
 
     log(f"status: {report['cluster']}")
-    info(f"openstack: {openstack_info['url']} "
-         f"(region {openstack_info['region']}, "
-         f"project {openstack_info['project'] or '?'})")
+    if infrastructure["provider"] == "openstack":
+        info(f"openstack: {infrastructure['url']} "
+             f"(region {infrastructure['region']}, "
+             f"project {infrastructure['project'] or '?'})")
+    else:
+        nodes = ", ".join(infrastructure.get("online_nodes", [])) or "none"
+        info(f"proxmox: {infrastructure['url']} (online nodes: {nodes})")
     for kind, names in report["resources"].items():
         info(f"{kind}: {len(names)}")
         for n in names:

@@ -74,7 +74,7 @@ Following rules are here to help the AI avoid the same mistakes again:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **clusterctl** (1140 symbols, 2555 relationships, 97 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **taloscluster** (1551 symbols, 3516 relationships, 133 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
@@ -98,10 +98,10 @@ This project is indexed by GitNexus as **clusterctl** (1140 symbols, 2555 relati
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/clusterctl/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/clusterctl/clusters` | All functional areas |
-| `gitnexus://repo/clusterctl/processes` | All execution flows |
-| `gitnexus://repo/clusterctl/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/taloscluster/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/taloscluster/clusters` | All functional areas |
+| `gitnexus://repo/taloscluster/processes` | All execution flows |
+| `gitnexus://repo/taloscluster/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 

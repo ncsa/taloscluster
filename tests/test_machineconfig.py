@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from taloscluster.config import Secrets
+from taloscluster.config import ProxmoxSecrets, Secrets
 from taloscluster.infrastructure import Endpoint
 from taloscluster.talos import machineconfig
-from taloscluster.talos.machineconfig import INSTALL_DISK
+from taloscluster.talos.machineconfig import INSTALL_DISKS
 
 FIP = "203.0.113.10"
 VIP = "192.168.0.10"
@@ -65,8 +65,33 @@ def test_machine_patch_install_image_is_installer_ref(cfg, ep):
         m = cfg.machines[host]
         patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER)
         assert patch["machine"]["install"]["image"] == INSTALLER
-        assert patch["machine"]["install"]["disk"] == INSTALL_DISK
+        assert patch["machine"]["install"]["disk"] == INSTALL_DISKS["openstack"]
         assert patch["machine"]["install"]["wipe"] is True
+
+
+def test_machine_patch_proxmox_installs_to_scsi_disk(make_config, ep):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {
+                        "bridge": "vmbr0",
+                        "kubeapi_vip": "192.168.0.10",
+                    }
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+    machine = cfg.machines["testcluster-controlplane-01"]
+
+    patch = machineconfig._machine_patch(machine, cfg, ep, INSTALLER)
+
+    assert patch["machine"]["install"]["disk"] == INSTALL_DISKS["proxmox"]
 
 
 def test_machine_patch_nodelabels_carry_role_and_pool(cfg, ep):
@@ -220,6 +245,54 @@ def test_build_configs_output_type_matches_role(cfg, monkeypatch, tmp_path):
     for call, (_host, m) in zip(calls, cfg.machines.items(), strict=True):
         expected = "controlplane" if m.role == "controlplane" else "worker"
         assert call["output_type"] == expected
+        assert call["install_disk"] == INSTALL_DISKS["openstack"]
+
+
+def test_build_configs_passes_proxmox_scsi_disk_to_talosctl(
+    make_config, monkeypatch, tmp_path, ep,
+):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {
+                        "bridge": "vmbr0",
+                        "kubeapi_vip": "192.168.0.10",
+                    }
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+    calls = []
+
+    def fake_gen_config(**kwargs):
+        calls.append(kwargs)
+        return "CONFIG"
+
+    monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
+    secrets = Secrets(
+        provider=ProxmoxSecrets("user@pve!provider", "secret"),
+        tailscale_auth_key=None,
+    )
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+
+    machineconfig.build_configs(
+        cfg,
+        secrets,
+        cfg.machines,
+        endpoint=ep,
+        secrets_path=secrets_path,
+        installer_images=_installer_images(cfg),
+    )
+
+    assert calls
+    assert all(call["install_disk"] == INSTALL_DISKS["proxmox"] for call in calls)
 
 
 def test_build_configs_tailscale_patch_present_when_key_set(cfg, monkeypatch, tmp_path):

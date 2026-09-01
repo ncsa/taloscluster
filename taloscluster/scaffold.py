@@ -26,7 +26,7 @@ CLUSTER_TEMPLATE = """\
 name: {name}
 
 # extra tags exposed by talos as kubernetes node labels (machine.nodeLabels);
-# the openstack project name is always added as ncsa/project (spaces -> _).
+# the provider project/pool name is always added as ncsa/project (spaces -> _).
 # per-pool tags: are also supported and override these on key collision.
 # tags:
 #   team: platform
@@ -40,20 +40,17 @@ kubernetes:
 
 controlplane:
   count: 3 # keep odd; 1 works (no HA), 3+ recommended
-  flavor: gp.medium
+{controlplane_sizing}
   disk: 40 # GB, boot volume
 
 # worker pools; add a pool (e.g. gpu) or bump a count and re-run converge
 workers:
   worker:
     count: 3
-    flavor: gp.xlarge
+{worker_sizing}
     disk: 100
 
-openstack:
-  url: https://openstack.example.edu:5000/v3/
-  availability_zone: nova
-  external_net: ext-net
+{provider_section}
 
 network:
   cidr: 192.168.0.0/21
@@ -76,15 +73,51 @@ tailscale:
 
 SECRETS_TEMPLATE = """\
 # Secrets for this cluster — never commit (gitignored by `taloscluster init`).
-openstack:
-  # application credential: openstack application credential create taloscluster
-  credential_id: "CHANGE-ME"
-  credential_secret: "CHANGE-ME"
+{provider_section}
 tailscale:
   # reusable (ideally ephemeral) pre-auth key so all nodes can register;
   # omit to leave the baked-in tailscale extension idle
   auth_key: "CHANGE-ME"
 """
+
+PROVIDER_TEMPLATES = {
+    "openstack": {
+        "controlplane_sizing": "  flavor: gp.medium",
+        "worker_sizing": "    flavor: gp.xlarge",
+        "cluster": """\
+openstack:
+  url: https://openstack.example.edu:5000/v3/
+  availability_zone: nova
+  external_net: ext-net""",
+        "secrets": """\
+openstack:
+  # application credential: openstack application credential create taloscluster
+  credential_id: "CHANGE-ME"
+  credential_secret: "CHANGE-ME"
+""",
+    },
+    "proxmox": {
+        "controlplane_sizing": "  cores: 4\n  memory: 8 # GB",
+        "worker_sizing": "    cores: 8\n    memory: 16 # GB",
+        "cluster": """\
+proxmox:
+  url: https://pve.example.edu:8006
+  storage: local-lvm
+  iso_storage: local
+  cidata_storage: local # node-local; temporarily contains machine secrets
+  placement_strategy: spread
+  # nodes: [pve1, pve2, pve3] # omit to discover all online nodes
+  network:
+    cluster:
+      bridge: vmbr0 # use vnet instead for an existing Proxmox SDN VNet
+      kubeapi_vip: 192.168.0.10""",
+        "secrets": """\
+proxmox:
+  token_id: "taloscluster@pve!provider"
+  token_secret: "CHANGE-ME"
+""",
+    },
+}
 
 # everything a cluster directory produces that must never reach git
 GITIGNORE_ENTRIES = (
@@ -94,8 +127,13 @@ GITIGNORE_ENTRIES = (
 )
 
 
-def init(root: Path, name: str) -> None:
-    """Create cluster.yaml, secrets.yaml and .gitignore in `root`."""
+def init(root: Path, name: str, provider: str = "openstack") -> None:
+    """Create provider-specific cluster.yaml and secrets.yaml plus .gitignore."""
+    try:
+        template = PROVIDER_TEMPLATES[provider]
+    except KeyError as e:
+        raise ValueError(f"unsupported provider: {provider}") from e
+
     root.mkdir(parents=True, exist_ok=True)
 
     log(f"init {root}")
@@ -104,14 +142,21 @@ def init(root: Path, name: str) -> None:
     if cluster.exists():
         info(f"{CLUSTER_FILE} exists, keeping existing content")
     else:
-        cluster.write_text(CLUSTER_TEMPLATE.format(name=name))
+        cluster.write_text(CLUSTER_TEMPLATE.format(
+            name=name,
+            controlplane_sizing=template["controlplane_sizing"],
+            worker_sizing=template["worker_sizing"],
+            provider_section=template["cluster"],
+        ))
         info(f"wrote {CLUSTER_FILE}")
 
     secrets = root / SECRETS_FILE
     if secrets.exists():
         info(f"{SECRETS_FILE} exists, keeping existing content")
     else:
-        secrets.write_text(SECRETS_TEMPLATE)
+        secrets.write_text(SECRETS_TEMPLATE.format(
+            provider_section=template["secrets"],
+        ))
         os.chmod(secrets, 0o600)
         info(f"wrote {SECRETS_FILE} (mode 0600)")
 
@@ -119,8 +164,13 @@ def init(root: Path, name: str) -> None:
     _ensure_gitignore(root)
 
     log("next steps")
-    info(f"1. edit {SECRETS_FILE}: openstack application credential + tailscale key")
-    info(f"2. edit {CLUSTER_FILE}: name, versions, pools, openstack endpoint, allowlists")
+    credential = (
+        "openstack application credential"
+        if provider == "openstack"
+        else "proxmox api token"
+    )
+    info(f"1. edit {SECRETS_FILE}: {credential} + tailscale key")
+    info(f"2. edit {CLUSTER_FILE}: name, versions, pools, {provider} settings, allowlists")
     info("3. taloscluster plan      # dry-run, changes nothing")
     info("4. taloscluster converge  # create the cluster")
 

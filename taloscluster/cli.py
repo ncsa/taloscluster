@@ -1,6 +1,6 @@
 """taloscluster command-line entrypoint.
 
-    taloscluster init [NAME]                    # scaffold cluster.yaml / secrets.yaml / .gitignore
+    taloscluster init [--openstack|--proxmox] [NAME] # scaffold provider configuration
     taloscluster converge [--dry-run] [--yes]   # make the cluster match cluster.yaml
     taloscluster sync / apply                   # aliases for converge
     taloscluster plan                           # dry-run converge: print what would change
@@ -44,7 +44,7 @@ def _add_common(p: argparse.ArgumentParser) -> None:
 
 
 def _cmd_init(args, root):
-    _scaffold.init(root, name=args.name)
+    _scaffold.init(root, name=args.name, provider=args.provider)
 
 
 def _cmd_converge(args, root):
@@ -148,10 +148,11 @@ def _plugin_list(root):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="taloscluster",
-        description="Converge a Talos Kubernetes cluster on OpenStack to cluster.yaml.",
+        description="Converge a Talos Kubernetes cluster to cluster.yaml.",
         epilog=(
             "examples:\n"
-            "  taloscluster init mycluster      scaffold cluster.yaml/secrets.yaml/.gitignore\n"
+            "  taloscluster init --openstack mycluster  scaffold OpenStack configuration\n"
+            "  taloscluster init --proxmox mycluster   scaffold Proxmox configuration\n"
             "  taloscluster plan                dry-run: print every create/update/delete\n"
             "  taloscluster converge            make the cluster match cluster.yaml\n"
             "  taloscluster converge --yes      converge, approving deletions without a prompt\n"
@@ -169,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     p_init = sub.add_parser(
         "init",
         help="scaffold cluster.yaml, secrets.yaml and .gitignore in a new directory",
-        description="Write starter cluster.yaml and secrets.yaml templates plus a "
+        description="Write provider-specific cluster.yaml and secrets.yaml templates plus a "
                     ".gitignore covering the secret/derived files (secrets.yaml, "
                     "talossecrets.yaml, talosconfig, kubeconfig). Never overwrites "
                     "an existing cluster.yaml or secrets.yaml; an existing "
@@ -182,7 +183,16 @@ def main(argv: list[str] | None = None) -> int:
         "name", nargs="?", default="mycluster",
         help="cluster name written into cluster.yaml (default: mycluster)",
     )
-    p_init.set_defaults(func=_cmd_init)
+    provider = p_init.add_mutually_exclusive_group()
+    provider.add_argument(
+        "--openstack", dest="provider", action="store_const", const="openstack",
+        help="write OpenStack provider and application-credential sections (default)",
+    )
+    provider.add_argument(
+        "--proxmox", dest="provider", action="store_const", const="proxmox",
+        help="write Proxmox compute, network, storage and API-token sections",
+    )
+    p_init.set_defaults(func=_cmd_init, provider="openstack")
 
     p_con = sub.add_parser(
         "converge",
@@ -215,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Dry-run a converge: print every create/update/delete that "
                     "converge would perform. Changes nothing in OpenStack or the "
                     "cluster (it does POST idempotent schematics to factory.talos.dev "
-                    "and list OpenStack resources).",
+                    "and makes read-only provider inventory requests).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common(p_plan)
@@ -224,11 +234,9 @@ def main(argv: list[str] | None = None) -> int:
     p_status = sub.add_parser(
         "status",
         help="show managed resources and nodes",
-        description="Print the OpenStack endpoint/region/project this cluster "
-                    "lives in (never the credential), the resources tagged as "
-                    "belonging to it (networks, subnets, routers, security group, "
-                    "ports, floating ips, servers), the kube-api and ingress floating "
-                    "ips (with their private VIPs) and, if reachable, "
+        description="Print the infrastructure provider and endpoint this cluster "
+                    "uses (never the credential), provider-owned resources, the "
+                    "kube-api and ingress endpoints and, if reachable, "
                     "`kubectl get nodes`. `-o yaml` prints the same information "
                     "as a yaml document instead.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -265,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         "dashboard",
         help="open talosctl dashboard on all nodes",
         description="Open `talosctl dashboard` on every node of the cluster. "
-                    "Nodes come from OpenStack (every managed machine) plus talos "
+                    "Nodes come from the infrastructure provider plus talos "
                     "cluster discovery (their talos-level addresses), so a node "
                     "that booted but never joined kubernetes is still included. "
                     "Nodes whose apid does not answer are reported and dropped -- "
@@ -282,9 +290,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p_env = sub.add_parser(
         "env",
-        help="print OS_* auth exports for the openstack CLI",
-        description="Print `export OS_...` lines (from cluster.yaml + secrets.yaml) "
-                    "so the openstack CLI uses the same application credential. "
+        help="print provider CLI authentication exports",
+        description="Print provider authentication exports from cluster.yaml and secrets.yaml. "
+                    "OpenStack emits OS_* and Proxmox emits PVE_API_* variables. "
                     "Usage: eval \"$(taloscluster env)\". Prints the credential "
                     "secret to stdout — intended for eval, not logging.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -295,9 +303,9 @@ def main(argv: list[str] | None = None) -> int:
     p_image = sub.add_parser(
         "image",
         help="download (build+upload) or remove the boot image",
-        description="Manage the single Glance boot image (talos-<version>-tailscale, "
-                    "baked with tailscale + qemu-guest-agent). `download` builds it "
-                    "from the factory and uploads it if absent; `remove` deletes it "
+        description="Manage the shared provider boot image for this Talos version and "
+                    "base schematic. `download` builds or downloads it from the factory "
+                    "and uploads it if absent; `remove` deletes it "
                     "(converge never deletes it on its own).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -314,9 +322,8 @@ def main(argv: list[str] | None = None) -> int:
     p_destroy = sub.add_parser(
         "destroy",
         help="delete all managed resources",
-        description="Delete every taloscluster-managed OpenStack resource for this "
-                    "cluster (servers, ports, floating ips, router, subnet, network, "
-                    "security group). The shared boot image is NOT deleted. Prompts "
+        description="Delete every taloscluster-managed infrastructure resource for this "
+                    "cluster. The shared boot image is NOT deleted. Prompts "
                     "for confirmation unless --yes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

@@ -1050,7 +1050,7 @@ wheels = [
 
 [[package]]
 name = "openstacksdk"
-version = "4.19.1"
+version = "4.20.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1070,9 +1070,9 @@ dependencies = [
     { name = "psutil" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/14/93/b3fc4d0f0d2fdc1371eaf15014b73caacffdf2d53536e275dafec5ac965d/openstacksdk-4.19.1.tar.gz", hash = "sha256:706f732a04c6c1cb92a9f41cdd2de5d3ae0e1dc5cf110b59ac3855a989e88dbf", size = 1437828, upload-time = "2026-08-27T10:21:49.569Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/3b/7d0bb61a25002fb0023e2f0e620cb7e78dcd7b79d555005700fc13d92888/openstacksdk-4.20.0.tar.gz", hash = "sha256:f533050d7441b6d41c53488434d2f2df79f1f963a4b431695b4c7f49380ea85c", size = 1440710, upload-time = "2026-09-01T00:23:08.819Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/6d/444b267b6f180b1ca0eb75d02dc9d498982c1e8313b8b044cf4fafe7b502/openstacksdk-4.19.1-py3-none-any.whl", hash = "sha256:61b9568e7b72db9c59a030da25bd75452bc077964732e46d9a6cfc9d359ecb3d", size = 2037680, upload-time = "2026-08-27T10:21:47.81Z" },
+    { url = "https://files.pythonhosted.org/packages/53/b5/ca0656afcb3b3f60fb4677df6f8620bf433eb57c14a4cd19e3f886dd316b/openstacksdk-4.20.0-py3-none-any.whl", hash = "sha256:f727e3366ea2e9bb7e925cd28cd334587b829e30742204359e3b145768f24459", size = 2040297, upload-time = "2026-09-01T00:23:07.022Z" },
 ]
 
 [[package]]
@@ -1141,7 +1141,7 @@ resolution-markers = [
 dependencies = [
     { name = "cliff", version = "4.16.0", source = { registry = "https://pypi.org/simple" } },
     { name = "keystoneauth1", version = "5.17.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "openstacksdk", version = "4.19.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "openstacksdk", version = "4.20.0", source = { registry = "https://pypi.org/simple" } },
     { name = "oslo-i18n", version = "6.9.0", source = { registry = "https://pypi.org/simple" } },
     { name = "oslo-utils", version = "10.2.0", source = { registry = "https://pypi.org/simple" } },
     { name = "pbr" },
@@ -1612,7 +1612,7 @@ dependencies = [
     { name = "cliff", version = "4.16.0", source = { registry = "https://pypi.org/simple" } },
     { name = "cryptography" },
     { name = "iso8601" },
-    { name = "openstacksdk", version = "4.19.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "openstacksdk", version = "4.20.0", source = { registry = "https://pypi.org/simple" } },
     { name = "osc-lib", version = "4.7.0", source = { registry = "https://pypi.org/simple" } },
     { name = "oslo-i18n", version = "6.9.0", source = { registry = "https://pypi.org/simple" } },
     { name = "python-keystoneclient" },
@@ -1808,11 +1808,11 @@ wheels = [
 
 [[package]]
 name = "taloscluster"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "openstacksdk", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "openstacksdk", version = "4.19.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "openstacksdk", version = "4.20.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyyaml" },
     { name = "requests" },
 ]

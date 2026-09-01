@@ -22,7 +22,10 @@ from ..config import Config, Machine, Secrets
 from ..infrastructure import Endpoint
 from . import talosctl
 
-INSTALL_DISK = "/dev/vda"
+INSTALL_DISKS = {
+    "openstack": "/dev/vda",
+    "proxmox": "/dev/sda",
+}
 # Pinned deliberately. Both of these were previously moving targets -- the
 # cert-approver at branch `main` (image tag `main`) and metrics-server at
 # `releases/latest` -- so an upstream push could break a cluster nobody touched.
@@ -52,6 +55,11 @@ def _node_labels(m: Machine, default_tags: dict[str, str] | None) -> dict[str, s
     return {k: _label_value(v) for k, v in labels.items()}
 
 
+def _install_disk(cfg: Config) -> str:
+    """Return the disk name exposed by the selected provider's VM bus."""
+    return INSTALL_DISKS[cfg.provider_name]
+
+
 def _machine_patch(m: Machine, cfg: Config, endpoint: Endpoint, installer_image: str,
                    default_tags: dict[str, str] | None = None) -> dict:
     interfaces = (
@@ -69,7 +77,11 @@ def _machine_patch(m: Machine, cfg: Config, endpoint: Endpoint, installer_image:
                 # pin node ip to the private net so pod traffic never rides tailscale
                 "nodeIP": {"validSubnets": [cfg.cidr]},
             },
-            "install": {"disk": INSTALL_DISK, "image": installer_image, "wipe": True},
+            "install": {
+                "disk": _install_disk(cfg),
+                "image": installer_image,
+                "wipe": True,
+            },
             "time": {"servers": cfg.ntp},
         }
     }
@@ -162,7 +174,7 @@ def build_configs(
                 secrets_path=secrets_path,
                 output_type="controlplane" if m.role == "controlplane" else "worker",
                 install_image=installer_image,
-                install_disk=INSTALL_DISK,
+                install_disk=_install_disk(cfg),
                 kubernetes_version=cfg.kubernetes_version,
                 talos_version=cfg.talos_version,
                 patches=patches,

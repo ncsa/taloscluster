@@ -363,7 +363,7 @@ def reset(talosconfig: Path, endpoint: str, node: str) -> None:
     try:
         rc, out, err = _run_nocheck(
             _talos(talosconfig, endpoint, node, "reset",
-                   "--graceful", "--reboot=false", "--wait", "--timeout", "10m"),
+                   "--graceful", "--reboot=false", "--timeout", "10m"),
             timeout=660,
         )
     except subprocess.TimeoutExpired:

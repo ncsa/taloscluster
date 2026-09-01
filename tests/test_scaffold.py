@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from taloscluster import plugins
+from taloscluster.config import load_config, load_secrets
 from taloscluster.scaffold import GITIGNORE_ENTRIES, init
 
 
@@ -63,6 +64,40 @@ def test_secrets_yaml_is_valid_and_mode_0600(tmp_path):
     d = yaml.safe_load(path.read_text())
     assert d["openstack"].keys() >= {"credential_id", "credential_secret"}
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
+def test_proxmox_templates_are_valid_and_provider_specific(tmp_path):
+    init(tmp_path, name="demo", provider="proxmox")
+
+    cluster = yaml.safe_load((tmp_path / "cluster.yaml").read_text())
+    assert "openstack" not in cluster
+    assert cluster["controlplane"].keys() >= {"count", "cores", "memory", "disk"}
+    assert cluster["workers"]["worker"].keys() >= {
+        "count", "cores", "memory", "disk",
+    }
+    assert cluster["proxmox"].keys() >= {
+        "url", "storage", "iso_storage", "cidata_storage", "placement_strategy",
+        "network",
+    }
+    assert cluster["proxmox"]["network"]["cluster"].keys() >= {
+        "bridge", "kubeapi_vip",
+    }
+
+    secrets = yaml.safe_load((tmp_path / "secrets.yaml").read_text())
+    assert "openstack" not in secrets
+    assert secrets["proxmox"].keys() >= {"token_id", "token_secret"}
+    assert load_config(tmp_path).provider_name == "proxmox"
+    assert load_secrets(tmp_path).provider.token_secret == "CHANGE-ME"
+
+
+def test_openstack_templates_remain_the_default(tmp_path):
+    init(tmp_path, name="demo")
+    cluster = yaml.safe_load((tmp_path / "cluster.yaml").read_text())
+    secrets = yaml.safe_load((tmp_path / "secrets.yaml").read_text())
+    assert "openstack" in cluster and "proxmox" not in cluster
+    assert "openstack" in secrets and "proxmox" not in secrets
+    assert load_config(tmp_path).provider_name == "openstack"
+    assert load_secrets(tmp_path).provider.credential_id == "CHANGE-ME"
 
 
 def test_init_never_overwrites_existing_files(tmp_path):
