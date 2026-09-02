@@ -356,6 +356,148 @@ def test_proxmox_compute_configuration_is_validated(make_config, proxmox, messag
         )
 
 
+def _proxmox_external_overrides() -> dict:
+    """A valid proxmox.network.external section that passes validation."""
+    return {
+        "proxmox": {
+            "url": "https://pve.example:8006",
+            "storage": "vms",
+            "iso_storage": "isos",
+            "network": {
+                "cluster": {"bridge": "vmbr0"},
+                "external": {
+                    "bridge": "vmbr1",
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "kubeapi_vip": "203.0.113.10",
+                    "ingress_pool": "203.0.113.20-203.0.113.40",
+                },
+            },
+        },
+    }
+
+
+def test_proxmox_external_section_validates(make_config):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            **_proxmox_external_overrides(),
+        },
+        remove=("openstack",),
+    )
+    assert cfg.provider.network["external"]["kubeapi_vip"] == "203.0.113.10"
+
+
+def test_proxmox_external_makes_cluster_kubeapi_vip_optional(make_config):
+    # cluster section has only bridge, no kubeapi_vip — valid when external is present
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            **_proxmox_external_overrides(),
+        },
+        remove=("openstack",),
+    )
+    assert "kubeapi_vip" not in cfg.provider.network["cluster"]
+
+
+def test_proxmox_vip_can_be_in_cluster_with_external_present(make_config):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"},
+                    "external": {
+                        "bridge": "vmbr1",
+                        "cidr": "203.0.113.0/24",
+                        "gateway": "203.0.113.1",
+                        "anchor_cidr": "169.254.40.0/24",
+                    },
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+    assert cfg.provider.network["cluster"]["kubeapi_vip"] == "192.168.0.10"
+    assert "kubeapi_vip" not in cfg.provider.network.get("external", {})
+
+
+def test_proxmox_vip_rejected_when_in_both_sections(make_config):
+    with pytest.raises(ConfigError, match="only one of network.cluster or network.external"):
+        make_config(
+            {
+                "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+                "proxmox": {
+                    "url": "https://pve.example:8006",
+                    "storage": "vms",
+                    "iso_storage": "isos",
+                    "network": {
+                        "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"},
+                        "external": {
+                            "bridge": "vmbr1",
+                            "cidr": "203.0.113.0/24",
+                            "gateway": "203.0.113.1",
+                            "anchor_cidr": "169.254.40.0/24",
+                            "kubeapi_vip": "203.0.113.10",
+                        },
+                    },
+                },
+            },
+            remove=("openstack",),
+        )
+
+
+def test_proxmox_vip_rejected_when_in_neither_section(make_config):
+    with pytest.raises(ConfigError, match="kubeapi_vip must be set"):
+        make_config(
+            {
+                "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+                "proxmox": {
+                    "url": "https://pve.example:8006",
+                    "storage": "vms",
+                    "iso_storage": "isos",
+                    "network": {
+                        "cluster": {"bridge": "vmbr0"},
+                        "external": {
+                            "bridge": "vmbr1",
+                            "cidr": "203.0.113.0/24",
+                            "gateway": "203.0.113.1",
+                            "anchor_cidr": "169.254.40.0/24",
+                        },
+                    },
+                },
+            },
+            remove=("openstack",),
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"bridge": ""}, "external.bridge"),
+        ({"cidr": ""}, "external.cidr"),
+        ({"cidr": "192.168.0.0/24"}, "must not overlap network.cidr"),
+        ({"gateway": "10.0.0.1"}, "external.gateway.*inside external.cidr"),
+        ({"anchor_cidr": "10.0.0.0/24"}, "anchor_cidr.*169.254.0.0/16"),
+        ({"kubeapi_vip": "192.168.0.10"}, "external.kubeapi_vip.*inside external.cidr"),
+        ({"ingress_pool": "203.0.113.50-203.0.113.10"}, "start must be <= end"),
+        ({"ingress_pool": "203.0.113.50-999.999.999.999"}, "invalid addresses"),
+    ],
+)
+def test_proxmox_external_section_rejects_invalid_fields(make_config, overrides, message):
+    base = _proxmox_external_overrides()
+    base["proxmox"]["network"]["external"].update(overrides)
+    with pytest.raises(ConfigError, match=message):
+        make_config(
+            {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40}, **base},
+            remove=("openstack",),
+        )
+
+
 def _write_provider_files(root: Path, cluster: dict, secrets: dict) -> None:
     (root / "cluster.yaml").write_text(yaml.safe_dump(cluster))
     (root / "secrets.yaml").write_text(yaml.safe_dump(secrets))

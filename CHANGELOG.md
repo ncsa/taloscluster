@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add directly routed external NIC support for Proxmox with a second VirtIO interface and per-VM firewall.
+- Generate native Talos v1.13 network config documents (LinkAliasConfig, LinkConfig, DHCPv4Config, RoutingRuleConfig, Layer2VIPConfig) for directly routed external addressing.
+- Derive deterministic link-local anchor addresses from cluster and hostname, rejecting collisions.
+- Move kubeapi_vip to proxmox.network.external when the external section is present; keep it in network.cluster otherwise.
+- Enable Proxmox per-VM firewall with ACCEPT input/output policies on the external NIC.
+- Select Talos interfaces by deterministic MAC instead of assuming eth0/eth1 naming.
+- Expose the Proxmox ingress pool in provider status for plugin consumption.
+- Route Proxmox MetalLB replies through every machine's external NIC with native policy routing and a generated Talos static pod that runs `nft` from the kube-proxy image.
+
 ## [0.3.0] - 2026-08-31
 
 - Add Proxmox VM lifecycle support on existing bridges and VNets.

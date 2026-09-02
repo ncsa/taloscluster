@@ -396,6 +396,122 @@ def _int(value: Any, field: str, where: str) -> int:
     raise ConfigError(f"{where}: '{field}' must be an integer, got {value!r}")
 
 
+def _validate_proxmox_external(
+    ext: dict[str, Any], cluster_net: ipaddress.IPv4Network
+) -> None:
+    """Validate proxmox.network.external for directly routed API and ingress."""
+    bridge = ext.get("bridge")
+    if not isinstance(bridge, str) or not bridge.strip():
+        raise ConfigError(
+            "cluster.yaml: proxmox.network.external.bridge must be a non-empty string"
+        )
+
+    ext_cidr = ext.get("cidr")
+    if not isinstance(ext_cidr, str) or not ext_cidr.strip():
+        raise ConfigError("cluster.yaml: proxmox.network.external.cidr must be an IPv4 CIDR")
+    try:
+        ext_network = ipaddress.ip_network(ext_cidr, strict=False)
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"cluster.yaml: proxmox.network.external.cidr is invalid: {ext_cidr!r}"
+        ) from None
+    if ext_network.version != 4:
+        raise ConfigError("cluster.yaml: proxmox.network.external.cidr must be IPv4")
+    if ext_network.overlaps(cluster_net):
+        raise ConfigError(
+            "cluster.yaml: proxmox.network.external.cidr must not overlap network.cidr"
+        )
+
+    gateway = ext.get("gateway")
+    if not isinstance(gateway, str) or not gateway.strip():
+        raise ConfigError(
+            "cluster.yaml: proxmox.network.external.gateway must be an IPv4 address"
+        )
+    try:
+        gw = ipaddress.ip_address(gateway)
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"cluster.yaml: proxmox.network.external.gateway is invalid: {gateway!r}"
+        ) from None
+    if gw.version != 4 or gw not in ext_network:
+        raise ConfigError(
+            "cluster.yaml: proxmox.network.external.gateway must be inside external.cidr"
+        )
+
+    anchor_cidr = ext.get("anchor_cidr")
+    if not isinstance(anchor_cidr, str) or not anchor_cidr.strip():
+        raise ConfigError(
+            "cluster.yaml: proxmox.network.external.anchor_cidr must be an IPv4 CIDR"
+        )
+    try:
+        anchor_net = ipaddress.ip_network(anchor_cidr, strict=False)
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"cluster.yaml: proxmox.network.external.anchor_cidr is invalid: {anchor_cidr!r}"
+        ) from None
+    link_local = ipaddress.IPv4Network("169.254.0.0/16")
+    if not isinstance(anchor_net, ipaddress.IPv4Network):
+        raise ConfigError(
+            "cluster.yaml: proxmox.network.external.anchor_cidr must be IPv4"
+        )
+    if not anchor_net.subnet_of(link_local):
+        raise ConfigError(
+            "cluster.yaml: proxmox.network.external.anchor_cidr must be inside 169.254.0.0/16"
+        )
+
+    kubeapi_vip = ext.get("kubeapi_vip")
+    if kubeapi_vip is not None:
+        if not isinstance(kubeapi_vip, str) or not kubeapi_vip.strip():
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.external.kubeapi_vip must be an IPv4 address"
+            )
+        try:
+            vip = ipaddress.ip_address(kubeapi_vip)
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"cluster.yaml: proxmox.network.external.kubeapi_vip is invalid: {kubeapi_vip!r}"
+            ) from None
+        if vip.version != 4 or vip not in ext_network:
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.external.kubeapi_vip must be inside external.cidr"
+            )
+
+    vlan = ext.get("vlan")
+    if vlan is not None and not 1 <= _int(vlan, "vlan", "proxmox.network.external") <= 4094:
+        raise ConfigError("cluster.yaml: proxmox.network.external.vlan must be 1-4094")
+
+    ingress_pool = ext.get("ingress_pool")
+    if ingress_pool is not None:
+        if not isinstance(ingress_pool, str) or not ingress_pool.strip():
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.external.ingress_pool must be a string"
+            )
+        parts = ingress_pool.split("-")
+        if len(parts) != 2:
+            raise ConfigError(
+                f"proxmox.network.external.ingress_pool must be 'start-end', got {ingress_pool!r}"
+            )
+        try:
+            pool_start = ipaddress.ip_address(parts[0].strip())
+            pool_end = ipaddress.ip_address(parts[1].strip())
+        except ValueError:
+            raise ConfigError(
+                f"proxmox.network.external.ingress_pool has invalid addresses: {ingress_pool!r}"
+            ) from None
+        if pool_start.version != 4 or pool_end.version != 4:
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.external.ingress_pool must be IPv4"
+            )
+        if int(pool_start) > int(pool_end):
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.external.ingress_pool start must be <= end"
+            )
+        if pool_start not in ext_network or pool_end not in ext_network:
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.external.ingress_pool must be inside external.cidr"
+            )
+
+
 def _validate(cfg: Config) -> None:
     """Reject invalid or ambiguous desired state before touching the cluster."""
     if not isinstance(cfg.name, str) or not _NAME_RE.fullmatch(cfg.name):
@@ -500,24 +616,53 @@ def _validate(cfg: Config) -> None:
             raise ConfigError(
                 "cluster.yaml: proxmox.network.cluster requires exactly one bridge or vnet"
             )
-        kubeapi_vip = cluster_network.get("kubeapi_vip")
-        if not isinstance(kubeapi_vip, str) or not kubeapi_vip:
-            raise ConfigError(
-                "cluster.yaml: proxmox.network.cluster.kubeapi_vip must be an IPv4 address"
-            )
-        try:
-            vip = ipaddress.ip_address(kubeapi_vip)
-        except (TypeError, ValueError):
-            raise ConfigError(
-                "cluster.yaml: proxmox.network.cluster.kubeapi_vip must be an IPv4 address"
-            ) from None
-        if vip.version != 4 or vip not in network:
-            raise ConfigError(
-                "cluster.yaml: proxmox.network.cluster.kubeapi_vip must be inside network.cidr"
-            )
         vlan = cluster_network.get("vlan")
         if vlan is not None and not 1 <= _int(vlan, "vlan", "proxmox.network.cluster") <= 4094:
             raise ConfigError("cluster.yaml: proxmox.network.cluster.vlan must be 1-4094")
+
+        external_network = _mapping(
+            provider.network.get("external"), "cluster.yaml: proxmox.network.external"
+        )
+        cluster_vip = cluster_network.get("kubeapi_vip")
+        if external_network:
+            _validate_proxmox_external(external_network, network)
+            external_vip = external_network.get("kubeapi_vip")
+            if not cluster_vip and not external_vip:
+                raise ConfigError(
+                    "cluster.yaml: kubeapi_vip must be set in network.cluster or network.external"
+                )
+            if cluster_vip and external_vip:
+                raise ConfigError(
+                    "kubeapi_vip must be set in only one of "
+                    "network.cluster or network.external"
+                )
+            if cluster_vip:
+                try:
+                    vip = ipaddress.ip_address(cluster_vip)
+                except (TypeError, ValueError):
+                    raise ConfigError(
+                        "cluster.yaml: proxmox.network.cluster.kubeapi_vip must be an IPv4 address"
+                    ) from None
+                if vip.version != 4 or vip not in network:
+                    raise ConfigError(
+                        "proxmox.network.cluster.kubeapi_vip must be "
+                        "inside network.cidr"
+                    )
+        else:
+            if not isinstance(cluster_vip, str) or not cluster_vip:
+                raise ConfigError(
+                    "cluster.yaml: proxmox.network.cluster.kubeapi_vip must be an IPv4 address"
+                )
+            try:
+                vip = ipaddress.ip_address(cluster_vip)
+            except (TypeError, ValueError):
+                raise ConfigError(
+                    "cluster.yaml: proxmox.network.cluster.kubeapi_vip must be an IPv4 address"
+                ) from None
+            if vip.version != 4 or vip not in network:
+                raise ConfigError(
+                    "cluster.yaml: proxmox.network.cluster.kubeapi_vip must be inside network.cidr"
+                )
     if cfg.login_server is not None and not isinstance(cfg.login_server, str):
         raise ConfigError("cluster.yaml: tailscale.login_server must be a string")
 

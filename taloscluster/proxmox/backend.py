@@ -13,8 +13,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-import requests
-
 from .. import naming
 from ..config import Config, Machine, ProxmoxConfig, ProxmoxSecrets, Secrets
 from ..errors import ConfigError, ReconcileError
@@ -40,7 +38,6 @@ from .inventory import (
 from .permissions import requirements, validate_effective_permissions
 from .placement import place
 
-_CHUNK = 8 * 1024 * 1024
 _MIB_PER_GB = 1024
 
 
@@ -81,6 +78,11 @@ class ProxmoxBackend:
     @property
     def cluster_network(self) -> dict[str, Any]:
         value = self.provider.network.get("cluster")
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def external_network(self) -> dict[str, Any]:
+        value = self.provider.network.get("external")
         return value if isinstance(value, dict) else {}
 
     def _raw_inventory(self, *, refresh: bool = False) -> ProxmoxInventory:
@@ -128,6 +130,40 @@ class ProxmoxBackend:
         self._compute_nodes = tuple(sorted(required or usable))
         if not self._compute_nodes:
             raise ReconcileError("no online Proxmox node can access every required storage")
+        self._check_firewall(inventory)
+
+    def _check_firewall(self, inventory: ProxmoxInventory) -> None:
+        """Warn if the Proxmox firewall is not fully enabled.
+
+        Proxmox requires three levels of enablement for VM firewall rules to
+        take effect: cluster-wide, per-VM, and per-NIC.  We set the VM and NIC
+        flags ourselves during creation, but the cluster-wide switch is
+        operator-controlled.  Warn if it is off, and warn if existing owned VMs
+        are missing NIC firewall flags (e.g. created before this was enforced).
+        """
+        if not _truthy(inventory.firewall_options.get("enable")):
+            warn(
+                "Proxmox cluster firewall is not enabled — "
+                "security allowlists are NOT enforced"
+            )
+        for name, vm in inventory.vms.items():
+            if not self._owns_vm(inventory, vm):
+                continue
+            try:
+                config = self.client.get(f"nodes/{vm.node}/qemu/{vm.vmid}/config")
+            except ReconcileError:
+                continue
+            if not isinstance(config, dict):
+                continue
+            for key in sorted(config):
+                if not key.startswith("net"):
+                    continue
+                net = config[key]
+                if isinstance(net, str) and "firewall=1" not in net:
+                    warn(
+                        f"VM {name} {key} does not have firewall=1 — "
+                        "allowlists not enforced on this interface"
+                    )
 
     def _validate_permissions(self, inventory: ProxmoxInventory) -> None:
         nodes = self._compute_nodes
@@ -207,19 +243,14 @@ class ProxmoxBackend:
             info(f"image {filename} exists")
             return next(iter(volumes.values()))
 
-        action(f"upload image {filename} to {self.provider.iso_storage}")
+        action(f"download image {filename} to {self.provider.iso_storage}")
         expected = f"{self.provider.iso_storage}:iso/{filename}"
         if dry_run():
             return expected
-        workdir = Path(tempfile.mkdtemp(prefix="taloscluster-proxmox-image-"))
-        try:
-            local = workdir / filename
-            _download(factory.nocloud_iso_url(schematic, self.cfg.talos_version), local)
-            for node, volume in volumes.items():
-                if not volume:
-                    self._upload_iso(node, self.provider.iso_storage, local)
-        finally:
-            shutil.rmtree(workdir, ignore_errors=True)
+        url = factory.nocloud_iso_url(schematic, self.cfg.talos_version)
+        for node, volume in volumes.items():
+            if not volume:
+                self._download_iso(node, self.provider.iso_storage, url, filename)
         return self._find_iso(nodes[0], self.provider.iso_storage, filename) or expected
 
     def reconcile_network(
@@ -230,7 +261,8 @@ class ProxmoxBackend:
         return self.current_network(inventory)
 
     def current_network(self, inventory: InfrastructureInventory) -> NetworkResult:
-        vip = str(self.cluster_network.get("kubeapi_vip") or "")
+        ext = self.external_network
+        vip = str(ext.get("kubeapi_vip") or self.cluster_network.get("kubeapi_vip") or "")
         return NetworkResult(kubernetes=Endpoint(vip=vip, advertised_address=vip))
 
     def reconcile_machines(
@@ -335,12 +367,13 @@ class ProxmoxBackend:
             cidata.build(workdir / "source", local_iso, machine.name, machine_config)
             self._upload_iso(node, self.provider.cidata_storage, local_iso)
             net0 = (
-                f"virtio={_mac(self.cfg.name, machine.name, 0)},"
-                f"bridge={self.cluster_network.get('bridge') or self.cluster_network.get('vnet')}"
+                f"virtio={naming.mac_address(self.cfg.name, machine.name, 0)},"
+                f"bridge={self.cluster_network.get('bridge') or self.cluster_network.get('vnet')},"
+                f"firewall=1"
             )
             if self.cluster_network.get("vlan") is not None:
                 net0 += f",tag={int(self.cluster_network['vlan'])}"
-            data = {
+            data: dict[str, Any] = {
                 "vmid": vmid,
                 "name": machine.name,
                 "pool": self.pool_id,
@@ -363,8 +396,18 @@ class ProxmoxBackend:
                 "boot": "order=scsi0;ide2",
                 "smbios1": f"uuid={_smbios_uuid(self.cfg.name, machine.name)}",
             }
+            ext = self.external_network
+            if ext:
+                net1 = (
+                    f"virtio={naming.mac_address(self.cfg.name, machine.name, 1)},"
+                    f"bridge={ext['bridge']},firewall=1"
+                )
+                if ext.get("vlan") is not None:
+                    net1 += f",tag={int(ext['vlan'])}"
+                data["net1"] = net1
             self.client.mutate("POST", f"nodes/{node}/qemu", data=data)
             created = True
+            self._configure_firewall(node, vmid)
             self.client.mutate("POST", f"nodes/{node}/qemu/{vmid}/status/start")
             inventory.vms[machine.name] = ProxmoxVM(
                 vmid=vmid,
@@ -379,6 +422,46 @@ class ProxmoxBackend:
             shutil.rmtree(workdir, ignore_errors=True)
             if not created:
                 self._remove_iso_if_present(node, self.provider.cidata_storage, cidata_name)
+
+    def _configure_firewall(self, node: str, vmid: int) -> None:
+        """Apply firewall rules equivalent to the OpenStack security group.
+
+        Default deny ingress, default allow egress (matching Neutron defaults).
+        Proxmox firewall is stateful via conntrack, so return traffic for
+        outbound connections is automatically allowed.  ARP is handled at layer 2
+        and is not subject to these rules — VIP failover via gratuitous ARP works
+        regardless of policy.
+        """
+        base = f"nodes/{node}/qemu/{vmid}/firewall"
+        self.client.mutate(
+            "PUT", f"{base}/options",
+            data={"enable": 1, "policy_in": "DROP", "policy_out": "ACCEPT", "dhcp": 1},
+        )
+        rules: list[dict[str, Any]] = [
+            {"type": "in", "action": "ACCEPT", "enable": 1, "proto": "icmp"},
+            {"type": "in", "action": "ACCEPT", "enable": 1, "proto": "tcp", "dport": 80},
+            {"type": "in", "action": "ACCEPT", "enable": 1, "proto": "tcp", "dport": 443},
+        ]
+        for cidr in self.cfg.security_talos.values():
+            rules.append({
+                "type": "in", "action": "ACCEPT", "enable": 1,
+                "proto": "tcp", "dport": 50000, "source": cidr,
+            })
+        for cidr in self.cfg.security_kubernetes.values():
+            rules.append({
+                "type": "in", "action": "ACCEPT", "enable": 1,
+                "proto": "tcp", "dport": 6443, "source": cidr,
+            })
+        rules.append({
+            "type": "in", "action": "ACCEPT", "enable": 1,
+            "proto": "tcp", "source": self.cfg.cidr,
+        })
+        rules.append({
+            "type": "in", "action": "ACCEPT", "enable": 1,
+            "proto": "udp", "source": self.cfg.cidr,
+        })
+        for rule in rules:
+            self.client.mutate("POST", f"{base}/rules", data=rule)
 
     def finalize_machines(self, inventory: InfrastructureInventory) -> None:
         raw = self._raw(inventory)
@@ -421,12 +504,15 @@ class ProxmoxBackend:
 
     def provider_status(self) -> dict[str, Any]:
         raw = self._require_preflight()
-        return {
+        status: dict[str, Any] = {
             "url": self.provider.url,
             "online_nodes": sorted(name for name, node in raw.nodes.items() if node.online),
             "storage": self.provider.storage,
             "iso_storage": self.provider.iso_storage,
         }
+        if self.external_network:
+            status["ingress_pool"] = str(self.external_network.get("ingress_pool") or "")
+        return status
 
     def print_environment(self) -> None:
         print(f"export PVE_API_URL={shlex.quote(self.provider.url)}")
@@ -544,6 +630,14 @@ class ProxmoxBackend:
                 return str(item["volid"])
         return ""
 
+    def _download_iso(self, node: str, storage: str, url: str, filename: str) -> None:
+        self.client.mutate(
+            "POST",
+            f"nodes/{node}/storage/{storage}/download-url",
+            data={"content": "iso", "url": url, "filename": filename},
+            timeout=(10, 600),
+        )
+
     def _upload_iso(self, node: str, storage: str, path: Path) -> None:
         with path.open("rb") as stream:
             self.client.mutate(
@@ -551,6 +645,7 @@ class ProxmoxBackend:
                 f"nodes/{node}/storage/{storage}/upload",
                 data={"content": "iso"},
                 files={"filename": (path.name, stream, "application/octet-stream")},
+                timeout=(10, 600),
             )
 
     def _remove_iso_if_present(self, node: str, storage: str, filename: str) -> None:
@@ -574,30 +669,8 @@ def _cidata_name(cluster: str, hostname: str) -> str:
     return f"taloscluster-cidata-{digest}.iso"
 
 
-def _mac(cluster: str, hostname: str, index: int) -> str:
-    digest = hashlib.sha256(f"{cluster}/{hostname}/{index}".encode()).digest()
-    octets = [0x02, digest[0], digest[1], digest[2], digest[3], digest[4]]
-    return ":".join(f"{octet:02x}" for octet in octets)
-
-
 def _smbios_uuid(cluster: str, hostname: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"taloscluster:{cluster}:{hostname}"))
-
-
-def _download(url: str, destination: Path) -> None:
-    with requests.get(url, stream=True, timeout=(30, 600)) as response:
-        response.raise_for_status()
-        written = 0
-        with destination.open("wb") as output:
-            for chunk in response.iter_content(chunk_size=_CHUNK):
-                if chunk:
-                    output.write(chunk)
-                    written += len(chunk)
-        expected = response.headers.get("Content-Length")
-        if expected is not None and written != int(expected):
-            raise ReconcileError(
-                f"truncated download from {url}: got {written} of {expected} bytes"
-            )
 
 
 def _storage_nodes(storage: dict[str, Any], online: set[str]) -> set[str]:

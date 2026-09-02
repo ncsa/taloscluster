@@ -44,6 +44,7 @@ class ProxmoxInventory:
     pools: dict[str, ProxmoxPool] = field(default_factory=dict)
     vms: dict[str, ProxmoxVM] = field(default_factory=dict)
     permissions: dict[str, Any] = field(default_factory=dict)
+    firewall_options: dict[str, Any] = field(default_factory=dict)
 
 
 def load(client: ProxmoxClient) -> ProxmoxInventory:
@@ -85,12 +86,14 @@ def load(client: ProxmoxClient) -> ProxmoxInventory:
         )
         vms[vm.name] = vm
     permissions = client.get("access/permissions")
+    fw_opts = client.get("cluster/firewall/options")
     return ProxmoxInventory(
         nodes=nodes,
         storages=storages,
         pools=pools,
         vms=vms,
         permissions=dict(permissions) if isinstance(permissions, dict) else {},
+        firewall_options=dict(fw_opts) if isinstance(fw_opts, dict) else {},
     )
 
 

@@ -53,7 +53,8 @@ def requirements(
         Requirement(network_path, frozenset({"SDN.Use"})),
     ]
     required.extend(
-        Requirement(f"/nodes/{node}", frozenset({"Sys.Audit"})) for node in sorted(set(nodes))
+        Requirement(f"/nodes/{node}", frozenset({"Sys.Audit", "Sys.AccessNetwork"}))
+        for node in sorted(set(nodes))
     )
     required.extend(Requirement(f"/vms/{vmid}", VM_PRIVILEGES) for vmid in sorted(set(vmids)))
     return tuple(required)

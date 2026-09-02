@@ -40,6 +40,15 @@ def test_missing_permissions_list_privilege_and_acl_path():
     assert "VM.Allocate" in message
 
 
+def test_node_requirements_include_access_network():
+    """download-url needs Sys.AccessNetwork on the node path."""
+    reqs = _requirements()
+    node_reqs = [r for r in reqs if r.path == "/nodes/pve001"]
+    assert len(node_reqs) == 1
+    assert "Sys.AccessNetwork" in node_reqs[0].privileges
+    assert "Sys.Audit" in node_reqs[0].privileges
+
+
 def test_parent_acl_path_applies_to_owned_vm_path():
     grants = {
         requirement.path: {privilege: 1 for privilege in requirement.privileges}

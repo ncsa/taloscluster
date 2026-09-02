@@ -10,6 +10,8 @@ Neutron/Nova/Cinder tags are plain strings, so we use a `key=value` convention.
 
 from __future__ import annotations
 
+import hashlib
+
 MANAGED_BY = "taloscluster"
 # the tool was called clusterctl before; resources it created are still tagged
 # managed-by=clusterctl. Discovery accepts either, new resources get MANAGED_BY.
@@ -82,6 +84,17 @@ def secgroup_name(cluster: str) -> str:
 # server, boot volume and per-machine port all share the hostname as their name
 def machine_name(hostname: str) -> str:
     return hostname
+
+
+# ---- deterministic hardware addresses -------------------------------------
+# Deterministic VirtIO MACs so Talos can select interfaces by permanent MAC
+# instead of relying on kernel interface naming (eth0/eth1). Index 0 is the
+# private cluster NIC, index 1 is the external NIC.
+
+def mac_address(cluster: str, hostname: str, index: int) -> str:
+    digest = hashlib.sha256(f"{cluster}/{hostname}/{index}".encode()).digest()
+    octets = [0x02, digest[0], digest[1], digest[2], digest[3], digest[4]]
+    return ":".join(f"{octet:02x}" for octet in octets)
 
 
 # ---- boot image -----------------------------------------------------------

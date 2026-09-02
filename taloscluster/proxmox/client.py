@@ -47,6 +47,7 @@ class ProxmoxClient:
         params: Mapping[str, Any] | None = None,
         data: Mapping[str, Any] | None = None,
         files: Mapping[str, Any] | None = None,
+        timeout: tuple[float, float] | None = None,
     ) -> Any:
         method = method.upper()
         attempts = self.read_attempts if method == "GET" else 1
@@ -59,7 +60,7 @@ class ProxmoxClient:
                     params=params,
                     data=data,
                     files=files,
-                    timeout=(10, 120),
+                    timeout=timeout or (10, 120),
                     verify=self.verify,
                 )
             except requests.RequestException as exc:
