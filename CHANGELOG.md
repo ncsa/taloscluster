@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Select Talos interfaces by deterministic MAC instead of assuming eth0/eth1 naming.
 - Expose the Proxmox ingress pool in provider status for plugin consumption.
 - Route Proxmox MetalLB replies through every machine's external NIC with native policy routing and a generated Talos static pod that runs `nft` from the kube-proxy image.
+- Require `Sys.AccessNetwork` on the Proxmox node path for ISO `download-url`; existing API tokens must add it before upgrading.
 
 ## [0.3.0] - 2026-08-31
 

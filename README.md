@@ -103,8 +103,7 @@ available); edit a `security` allowlist to reconcile the security-group rules.
 ### Proxmox on existing networks
 
 Stage 2 uses an existing bridge or VNet and a private Layer 2 Kubernetes API VIP;
-it does not create Proxmox SDN objects or configure a directly routed external
-NIC. A minimal provider section is:
+it does not create Proxmox SDN objects. A minimal provider section is:
 
 ```yaml
 controlplane:
@@ -151,6 +150,41 @@ Every command performs a read-only `/access/permissions` preflight before a
 Proxmox upload, VM/pool change, power action, or deletion. Missing privileges are
 reported with their ACL paths. TLS certificate verification is enabled by
 default; `proxmox.tls_verify` may name a CA bundle path.
+
+The token also needs `Sys.AccessNetwork` on the node path so Proxmox can fetch
+the boot ISO with `download-url`; tokens created before this requirement must
+add it.
+
+### Proxmox directly routed external NIC
+
+`proxmox.network.external` adds a second VirtIO NIC on an externally routed
+subnet, carrying the Kubernetes API VIP and the MetalLB `ingress_pool`:
+
+```yaml
+proxmox:
+  network:
+    cluster:
+      bridge: vmbr0
+    external:
+      bridge: vmbr0
+      vlan: 1691
+      cidr: 141.142.36.0/25
+      gateway: 141.142.36.1
+      anchor_cidr: 169.254.32.0/20
+      kubeapi_vip: 141.142.36.79
+      ingress_pool: 141.142.36.75-141.142.36.78
+```
+
+`kubeapi_vip` moves to the external section when it is present. Each machine
+gets a deterministic link-local anchor address derived from the cluster and
+hostname; a collision aborts the run, so size `anchor_cidr` at `/20` or larger
+rather than reusing a `/24`.
+
+The per-VM Proxmox firewall defaults to deny-in/allow-out. Ports 6443 and 50000
+are restricted to the `security.kubernetes` and `security.talos` allowlists, but
+**80 and 443 are accepted from any source** — the external NIC is a routable
+subnet, so ingress is deliberately open to the internet. Restrict it upstream if
+that is not what you want.
 
 ## Plugins
 

@@ -111,7 +111,7 @@ def _proxmox_vip(cfg: Config) -> tuple[str, str]:
 
 
 def _proxmox_return_path_pod(m: Machine, cfg: Config) -> dict:
-    """Build the worker static pod that marks externally initiated connections."""
+    """Build the static pod that marks externally initiated connections."""
     assert isinstance(cfg.provider, ProxmoxConfig)
     external = cfg.provider.network["external"]
     external_mac = naming.mac_address(cfg.name, m.name, 1).lower()
