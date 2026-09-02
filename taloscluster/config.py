@@ -49,6 +49,21 @@ class Machine:
     tags: dict[str, str] = field(default_factory=dict)  # node labels, cluster + pool
 
 
+# Named security rules default to their well-known port; anything else must say.
+DEFAULT_SECURITY_PORTS = {"kubernetes": 6443, "talos": 50000, "http": 80, "https": 443}
+# Ports left wide open unless the matching named rule appears in `security:`.
+OPEN_BY_DEFAULT = ("http", "https")
+
+
+@dataclass(frozen=True)
+class SecurityRule:
+    """One named ingress allowance: a tcp port and the CIDRs allowed to reach it."""
+
+    name: str
+    port: int
+    hosts: dict[str, str] = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class OpenStackConfig:
     url: str
@@ -143,9 +158,8 @@ class Config:
     dns: list[str]
     ntp: list[str]
 
-    # allowlists: friendly name -> CIDR
-    security_kubernetes: dict[str, str]
-    security_talos: dict[str, str]
+    # named ingress allowlists, in cluster.yaml order
+    security: dict[str, SecurityRule]
 
     login_server: str | None           # headscale/tailscale login server
 
@@ -168,6 +182,31 @@ class Config:
     @property
     def external_net(self) -> str:
         return self._openstack.external_net
+
+    @property
+    def security_kubernetes(self) -> dict[str, str]:
+        return self.security_hosts("kubernetes")
+
+    @property
+    def security_talos(self) -> dict[str, str]:
+        return self.security_hosts("talos")
+
+    def security_hosts(self, name: str) -> dict[str, str]:
+        rule = self.security.get(name)
+        return dict(rule.hosts) if rule else {}
+
+    def open_ports(self) -> tuple[int, ...]:
+        """Ports left open to every source because no rule claims that port.
+
+        Keyed on the resolved port, not the rule name: `http: {port: 8080}`
+        restricts 8080 and leaves 80 open, which is what the ports say.
+        """
+        claimed = {rule.port for rule in self.security.values()}
+        return tuple(
+            port
+            for port in (DEFAULT_SECURITY_PORTS[name] for name in OPEN_BY_DEFAULT)
+            if port not in claimed
+        )
 
     @property
     def _openstack(self) -> OpenStackConfig:
@@ -284,6 +323,57 @@ def _string_list(value: Any, field: str) -> list[str]:
     return value
 
 
+def _security_rules(security: dict[str, Any], where: str) -> dict[str, SecurityRule]:
+    """Parse `security:` into named rules, in file order.
+
+    Two shapes are accepted per entry. The named shape carries `hosts` (and an
+    optional `port`); the legacy shape is a bare name-to-CIDR mapping, which is
+    what every pre-0.5 cluster.yaml uses for `kubernetes` and `talos`. A `hosts`
+    key only selects the named shape when it holds a mapping, so a legacy
+    allowlist whose friendly name happens to be `hosts` still parses as a CIDR.
+    """
+    rules: dict[str, SecurityRule] = {}
+    for name, value in security.items():
+        if not isinstance(name, str) or not name:
+            raise ConfigError(f"{where}: security rule names must be non-empty strings")
+        entry = _mapping(value, f"{where}: security.{name}")
+        if isinstance(entry.get("hosts"), dict) or "port" in entry:
+            hosts = _mapping(entry.get("hosts"), f"{where}: security.{name}.hosts")
+            port = entry.get("port", DEFAULT_SECURITY_PORTS.get(name))
+            unknown = sorted(set(entry) - {"hosts", "port"})
+            if unknown:
+                raise ConfigError(
+                    f"{where}: security.{name} has unknown keys: {', '.join(unknown)}"
+                )
+        else:
+            hosts = entry
+            port = DEFAULT_SECURITY_PORTS.get(name)
+        if port is None:
+            raise ConfigError(
+                f"{where}: security.{name} requires an explicit 'port' "
+                "(only kubernetes, talos, http and https have defaults)"
+            )
+        port = _int(port, "port", f"{where}: security.{name}")
+        if not 1 <= port <= 65535:
+            raise ConfigError(f"{where}: security.{name}.port must be 1-65535")
+        # `http` and `https` name a port as well as an allowlist: they are what
+        # opens or closes 80 and 443. Letting them carry some other port makes
+        # the name lie about which port the rule governs, so a different port
+        # needs a differently named rule.
+        if name in OPEN_BY_DEFAULT and port != DEFAULT_SECURITY_PORTS[name]:
+            raise ConfigError(
+                f"{where}: security.{name} cannot change its port from "
+                f"{DEFAULT_SECURITY_PORTS[name]} to {port}; "
+                f"use a differently named rule for port {port}"
+            )
+        rules[name] = SecurityRule(
+            name=name,
+            port=port,
+            hosts={str(label): host for label, host in hosts.items()},
+        )
+    return rules
+
+
 def _provider_config(d: dict[str, Any], where: str) -> ProviderConfig:
     selected = [name for name in ("openstack", "proxmox") if name in d]
     if len(selected) != 1:
@@ -341,9 +431,7 @@ def load_config(root: Path) -> Config:
                          f"{where}: network.dns"),
         ntp=_string_list(require(d, "network", "ntp", where=where),
                          f"{where}: network.ntp"),
-        security_kubernetes=_mapping(security.get("kubernetes"),
-                                     f"{where}: security.kubernetes"),
-        security_talos=_mapping(security.get("talos"), f"{where}: security.talos"),
+        security=_security_rules(security, where),
         login_server=tailscale.get("login_server"),
         raw=d,
     )
@@ -673,11 +761,9 @@ def _validate(cfg: Config) -> None:
             raise ConfigError(
                 f"cluster.yaml: network.dns contains an invalid address: {dns!r}"
             ) from None
-    for field_name, allowlist in (
-        ("security.kubernetes", cfg.security_kubernetes),
-        ("security.talos", cfg.security_talos),
-    ):
-        for label, cidr in allowlist.items():
+    for rule in cfg.security.values():
+        field_name = f"security.{rule.name}"
+        for label, cidr in rule.hosts.items():
             if not isinstance(label, str) or not label or not isinstance(cidr, str):
                 raise ConfigError(
                     f"cluster.yaml: {field_name} must map names to CIDR strings"

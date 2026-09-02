@@ -6,8 +6,10 @@ import pytest
 
 from taloscluster.config import ProxmoxSecrets, Secrets
 from taloscluster.errors import ReconcileError
+from taloscluster.infrastructure import Endpoint
 from taloscluster.output import set_dry_run
 from taloscluster.proxmox import cidata
+from taloscluster.proxmox import talos as proxmox_talos
 from taloscluster.proxmox.backend import ProxmoxBackend, _boot_iso_name, _memory_mib
 from taloscluster.proxmox.permissions import requirements
 from taloscluster.talos import factory
@@ -564,10 +566,10 @@ def test_firewall_matches_openstack_security_group(make_config, monkeypatch):
     )
     assert fw_opts == {"enable": 1, "policy_in": "DROP", "policy_out": "ACCEPT", "dhcp": 1}
 
-    # firewall rules
+    # firewall rules, for the VM this run created
     rules = [
         payload for method, path, payload in client.mutations
-        if method == "POST" and path.endswith("/firewall/rules")
+        if method == "POST" and path == "nodes/pve002/qemu/801/firewall/rules"
     ]
     # ICMP + 80 + 443 + 50000(talos) + 6443x2(kubernetes) + intra tcp + intra udp = 8
     assert len(rules) == 8
@@ -619,3 +621,385 @@ def test_firewall_enabled_without_external_section(proxmox_cfg, monkeypatch):
         if "firewall" in path
     ]
     assert fw_calls  # firewall was configured even without external
+
+
+# ---------------------------------------------------------------------------
+# Stage 4: firewall reconciliation against the named security schema
+# ---------------------------------------------------------------------------
+
+def _firewall_cfg(make_config, security):
+    return make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "nodes": ["pve001", "pve002"],
+                "network": {
+                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"},
+                },
+            },
+            "security": security,
+        },
+        remove=("openstack",),
+    )
+
+
+def _owned(**rule):
+    """A firewall rule carrying this tool's ownership marker."""
+    return {"type": "in", "action": "ACCEPT", "enable": 1,
+            "comment": "taloscluster: rule", **rule}
+
+
+def _reconcile_existing(cfg, existing_rules):
+    """Reconcile the pre-existing owned VM 800 against `existing_rules`."""
+    data = _data()
+    data["nodes/pve001/qemu/800/firewall/rules"] = existing_rules
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+    backend.reconcile_machines(
+        cfg.machines, inventory, "isos:iso/talos.iso",
+        {name: "config" for name in cfg.machines},
+    )
+    created = [
+        payload for method, path, payload in client.mutations
+        if method == "POST" and path == "nodes/pve001/qemu/800/firewall/rules"
+    ]
+    deleted = [
+        path for method, path, _payload in client.mutations
+        if method == "DELETE" and "/firewall/rules/" in path
+    ]
+    return created, deleted
+
+
+def test_firewall_reconcile_adds_only_missing_rules(make_config):
+    cfg = _firewall_cfg(make_config, {"talos": {"vpn": "172.16.0.0/16"}})
+    existing = [
+        _owned(pos=0, proto="icmp"),
+        _owned(pos=1, proto="tcp", dport=50000, source="172.16.0.0/16"),
+    ]
+
+    created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == []
+    keys = {(r["proto"], r.get("dport"), r.get("source")) for r in created}
+    assert ("icmp", None, None) not in keys
+    assert ("tcp", 50000, "172.16.0.0/16") not in keys
+    assert ("tcp", 80, None) in keys
+    assert ("tcp", 443, None) in keys
+
+
+def test_firewall_reconcile_removes_stale_rules(make_config):
+    cfg = _firewall_cfg(make_config, {"talos": {"vpn": "172.16.0.0/16"}})
+    existing = [
+        # an allowlist entry that has since been removed from cluster.yaml
+        _owned(pos=0, proto="tcp", dport=50000, source="10.0.0.0/24"),
+        _owned(pos=1, proto="icmp"),
+    ]
+
+    _created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == ["nodes/pve001/qemu/800/firewall/rules/0"]
+
+
+def test_firewall_reconcile_removes_duplicates_and_leaves_no_extras(make_config):
+    cfg = _firewall_cfg(make_config, {})
+    existing = [_owned(pos=0, proto="icmp"), _owned(pos=1, proto="icmp")]
+
+    created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == ["nodes/pve001/qemu/800/firewall/rules/1"]
+    assert ("icmp", None, None) not in {
+        (r["proto"], r.get("dport"), r.get("source")) for r in created
+    }
+
+
+def test_firewall_reconcile_is_idempotent(make_config):
+    cfg = _firewall_cfg(make_config, {"kubernetes": {"vpn": "172.16.0.0/16"}})
+    desired = _backend(cfg, FakeClient(_data()))._desired_firewall_rules()
+    existing = []
+    for pos, (proto, dport, source) in enumerate(desired):
+        rule = _owned(pos=pos, proto=proto)
+        if dport is not None:
+            rule["dport"] = dport
+        if source is not None:
+            rule["source"] = source
+        existing.append(rule)
+
+    created, deleted = _reconcile_existing(cfg, existing)
+
+    assert created == []
+    assert deleted == []
+
+
+def test_firewall_reconcile_covers_arbitrary_named_ports(make_config):
+    cfg = _firewall_cfg(make_config, {
+        "metrics": {"port": 9100, "hosts": {"vpn": "172.16.0.0/16"}},
+    })
+
+    created, _deleted = _reconcile_existing(cfg, [])
+
+    keys = {(r["proto"], r.get("dport"), r.get("source")) for r in created}
+    assert ("tcp", 9100, "172.16.0.0/16") in keys
+
+
+def test_firewall_http_block_restricts_port_80(make_config):
+    cfg = _firewall_cfg(make_config, {"http": {"hosts": {"office": "203.0.113.0/24"}}})
+
+    created, _deleted = _reconcile_existing(cfg, [])
+
+    keys = {(r["proto"], r.get("dport"), r.get("source")) for r in created}
+    assert ("tcp", 80, None) not in keys
+    assert ("tcp", 80, "203.0.113.0/24") in keys
+    assert ("tcp", 443, None) in keys
+
+
+def test_firewall_reconcile_leaves_egress_rules_alone(make_config):
+    cfg = _firewall_cfg(make_config, {})
+    existing = [_owned(pos=0, type="out", proto="tcp")]
+
+    _created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == []
+
+
+def test_firewall_reconcile_makes_no_mutations_in_dry_run(make_config):
+    cfg = _firewall_cfg(make_config, {"talos": {"vpn": "172.16.0.0/16"}})
+    data = _data()
+    data["nodes/pve001/qemu/800/firewall/rules"] = [
+        {"pos": 0, "type": "in", "action": "ACCEPT", "enable": 1,
+         "proto": "tcp", "dport": 50000, "source": "10.0.0.0/24"},
+    ]
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+    set_dry_run(True)
+
+    backend.reconcile_machines(cfg.machines, inventory, "isos:iso/talos.iso", {})
+
+    assert not [m for m in client.mutations if "firewall" in m[1]]
+
+
+def test_firewall_reconcile_removes_an_owned_port_range_rule(make_config):
+    """A marked rule we could never write today is removed, not crashed on."""
+    cfg = _firewall_cfg(make_config, {})
+    existing = [_owned(pos=0, proto="tcp", dport="8000:8100")]
+
+    _created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == ["nodes/pve001/qemu/800/firewall/rules/0"]
+
+
+def test_anchor_collision_check_runs_once_per_backend(make_config, monkeypatch):
+    """The whole-cluster anchor check is O(1) per converge, not O(N) machines."""
+    cfg = make_config(
+        {
+            "controlplane": {"count": 3, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"bridge": "vmbr0"},
+                    "external": {
+                        "bridge": "vmbr1",
+                        "cidr": "203.0.113.0/24",
+                        "gateway": "203.0.113.1",
+                        "anchor_cidr": "169.254.40.0/24",
+                        "kubeapi_vip": "203.0.113.10",
+                    },
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+    backend = _backend(cfg, FakeClient(_data()))
+    calls = []
+    monkeypatch.setattr(
+        proxmox_talos, "anchor_addresses",
+        lambda cidr, cluster, machines: calls.append(cluster) or {},
+    )
+
+    for machine in cfg.machines.values():
+        backend.talos_contribution(machine, Endpoint(vip="203.0.113.10"))
+
+    assert len(calls) == 1
+
+
+def test_firewall_reconcile_never_deletes_an_operator_rule(make_config, capsys):
+    """A per-VM firewall is shared; an unmarked rule is reported, not removed."""
+    cfg = _firewall_cfg(make_config, {"talos": {"vpn": "172.16.0.0/16"}})
+    # an admin's own SSH allowance, added through the Proxmox UI
+    existing = [{"pos": 0, "type": "in", "action": "ACCEPT", "enable": 1,
+                 "proto": "tcp", "dport": 22, "source": "198.51.100.0/24"}]
+
+    _created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == []
+    assert "leaving unowned firewall rule 0" in capsys.readouterr().err
+
+
+def test_firewall_reconcile_keeps_an_operator_port_range_rule(make_config):
+    cfg = _firewall_cfg(make_config, {})
+    existing = [{"pos": 0, "type": "in", "action": "ACCEPT", "enable": 1,
+                 "proto": "tcp", "dport": "8000:8100"}]
+
+    _created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == []
+
+
+def test_firewall_reconcile_does_not_duplicate_an_operator_rule(make_config):
+    """An unowned rule that already allows what we want is left to do the job."""
+    cfg = _firewall_cfg(make_config, {"talos": {"vpn": "172.16.0.0/16"}})
+    existing = [{"pos": 0, "type": "in", "action": "ACCEPT", "enable": 1,
+                 "proto": "tcp", "dport": 50000, "source": "172.16.0.0/16"}]
+
+    created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == []
+    keys = {(r["proto"], r.get("dport"), r.get("source")) for r in created}
+    assert ("tcp", 50000, "172.16.0.0/16") not in keys
+
+
+def test_firewall_rules_are_created_with_the_ownership_marker(make_config):
+    cfg = _firewall_cfg(make_config, {"talos": {"vpn": "172.16.0.0/16"}})
+
+    created, _deleted = _reconcile_existing(cfg, [])
+
+    assert created
+    assert all(r["comment"].startswith("taloscluster: ") for r in created)
+    assert any(r["comment"] == "taloscluster: talos from vpn" for r in created)
+
+
+def test_firewall_reconcile_refuses_a_non_list_rule_response(make_config):
+    """A malformed response must not read as 'this VM has no rules'."""
+    cfg = _firewall_cfg(make_config, {})
+    data = _data()
+    data["nodes/pve001/qemu/800/firewall/rules"] = {"error": "boom"}
+    backend = _backend(cfg, FakeClient(data))
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="no firewall rule list"):
+        backend.reconcile_machines(
+            cfg.machines, inventory, "isos:iso/talos.iso",
+            {name: "config" for name in cfg.machines},
+        )
+
+
+def test_firewall_removes_a_stale_legacy_rule_written_without_the_marker(make_config):
+    """0.4.0 wrote unmarked rules; dropping a CIDR must still close its port."""
+    cfg = _firewall_cfg(make_config, {"talos": {"vpn": "172.16.0.0/16"}})
+    # written by 0.4.0 for an allowlist entry since replaced
+    existing = [{"pos": 0, "type": "in", "action": "ACCEPT", "enable": 1,
+                 "proto": "tcp", "dport": 50000, "source": "10.0.0.0/24"}]
+
+    created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == ["nodes/pve001/qemu/800/firewall/rules/0"]
+    keys = {(r["proto"], r.get("dport"), r.get("source")) for r in created}
+    assert ("tcp", 50000, "172.16.0.0/16") in keys
+
+
+def test_firewall_removes_rules_for_a_port_no_longer_in_the_config(make_config):
+    """Deleting a whole named rule takes its port out of the managed set."""
+    cfg = _firewall_cfg(make_config, {})
+    # our own rule for a `metrics` block that has since been deleted
+    existing = [_owned(pos=0, proto="tcp", dport=9100, source="172.16.0.0/16")]
+
+    _created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == ["nodes/pve001/qemu/800/firewall/rules/0"]
+
+
+def test_firewall_keeps_an_operator_rule_on_an_unmanaged_port(make_config):
+    cfg = _firewall_cfg(make_config, {"talos": {"vpn": "172.16.0.0/16"}})
+    existing = [{"pos": 0, "type": "in", "action": "ACCEPT", "enable": 1,
+                 "proto": "tcp", "dport": 22, "source": "198.51.100.0/24"}]
+
+    _created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == []
+
+
+def test_firewall_replaces_a_disabled_rule_of_ours(make_config):
+    """A disabled rule allows nothing, so it is stale rather than satisfying."""
+    cfg = _firewall_cfg(make_config, {"talos": {"vpn": "172.16.0.0/16"}})
+    existing = [_owned(pos=0, proto="tcp", dport=50000,
+                       source="172.16.0.0/16", enable=0)]
+
+    created, deleted = _reconcile_existing(cfg, existing)
+
+    assert deleted == ["nodes/pve001/qemu/800/firewall/rules/0"]
+    keys = {(r["proto"], r.get("dport"), r.get("source")) for r in created}
+    assert ("tcp", 50000, "172.16.0.0/16") in keys
+    assert all(r["enable"] == 1 for r in created)
+
+
+def test_firewall_adds_before_deleting(make_config):
+    """Swapping an allowlist CIDR must never leave the port closed in between."""
+    cfg = _firewall_cfg(make_config, {"talos": {"vpn": "10.1.0.0/24"}})
+    data = _data()
+    data["nodes/pve001/qemu/800/firewall/rules"] = [
+        _owned(pos=0, proto="tcp", dport=50000, source="10.0.0.0/24"),
+    ]
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_machines(
+        cfg.machines, inventory, "isos:iso/talos.iso",
+        {name: "config" for name in cfg.machines},
+    )
+
+    order = [
+        method for method, path, _payload in client.mutations
+        if "/firewall/rules" in path
+    ]
+    assert order, "no firewall rule mutations"
+    assert order.index("POST") < order.index("DELETE")
+
+
+def test_firewall_options_are_not_rewritten_when_already_correct(make_config):
+    cfg = _firewall_cfg(make_config, {})
+    data = _data()
+    data["nodes/pve001/qemu/800/firewall/options"] = {
+        "enable": 1, "policy_in": "DROP", "policy_out": "ACCEPT", "dhcp": 1,
+    }
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_machines(
+        cfg.machines, inventory, "isos:iso/talos.iso",
+        {name: "config" for name in cfg.machines},
+    )
+
+    assert not [
+        m for m in client.mutations if m[0] == "PUT" and m[1].endswith("/firewall/options")
+    ]
+
+
+def test_firewall_options_are_set_when_they_drift(make_config):
+    cfg = _firewall_cfg(make_config, {})
+    data = _data()
+    data["nodes/pve001/qemu/800/firewall/options"] = {
+        "enable": 1, "policy_in": "ACCEPT", "policy_out": "ACCEPT", "dhcp": 1,
+    }
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_machines(
+        cfg.machines, inventory, "isos:iso/talos.iso",
+        {name: "config" for name in cfg.machines},
+    )
+
+    put = next(
+        payload for method, path, payload in client.mutations
+        if method == "PUT" and path.endswith("/firewall/options")
+    )
+    assert put["policy_in"] == "DROP"

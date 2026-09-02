@@ -64,8 +64,35 @@ class NetworkResult:
         )
 
 
+@dataclass(frozen=True)
+class TalosPatch:
+    """One named machine-config patch or Talos resource document.
+
+    `document` is either a patch mapping, a list of Talos resource documents, or
+    a raw YAML string. The shared generator writes it to `<host>-<name>.yaml`
+    and stacks it as a `--config-patch`; it never inspects the content.
+    """
+
+    name: str
+    document: dict[str, Any] | list[dict[str, Any]] | str
+
+
+@dataclass(frozen=True)
+class TalosContribution:
+    """Everything a provider adds to one machine's Talos configuration."""
+
+    install_disk: str
+    patches: tuple[TalosPatch, ...] = ()
+
+
 class InfrastructureBackend(Protocol):
     name: str
+    # Talos Image Factory installer platform for this provider's boot artifacts.
+    installer_platform: str
+
+    def talos_contribution(
+        self, machine: Machine, endpoint: Endpoint
+    ) -> TalosContribution: ...
 
     def load_inventory(self) -> InfrastructureInventory: ...
 

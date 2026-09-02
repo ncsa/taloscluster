@@ -68,7 +68,7 @@ def converge(root: Path, assume_yes: bool = False) -> int:
     backend = backend_for(cfg, secrets)
 
     # installer image ref per extension set (schematic drives extension removal)
-    installer_platform = "nocloud" if backend.name == "proxmox" else "openstack"
+    installer_platform = backend.installer_platform
     installer_images = {
         s: factory.installer_image(
             factory.schematic_id(s), cfg.talos_version, platform=installer_platform
@@ -117,9 +117,13 @@ def converge(root: Path, assume_yes: bool = False) -> int:
 
     configs: dict[str, str] = {}
     if state.secrets_exist() and refs.kubernetes.advertised_address:
+        contributions = {
+            host: backend.talos_contribution(m, refs.kubernetes)
+            for host, m in machines.items()
+        }
         configs = machineconfig.build_configs(
             cfg, secrets, machines, refs.kubernetes, secrets_path, installer_images,
-            default_tags=default_tags,
+            contributions, default_tags=default_tags,
         )
 
     # ---- 4. DISCOVER: is the cluster reachable? --------------------------

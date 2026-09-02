@@ -156,3 +156,46 @@ def test_rule_key_extra_rule_not_in_desired(make_config):
     extra = _fake_rule(protocol="tcp", port_range_min=22, port_range_max=22,
                        remote_ip_prefix="0.0.0.0/0")
     assert _rule_key(extra, SG_ID) not in desired
+
+
+# ---------------------------------------------------------------------------
+# named rules (Stage 4 schema)
+# ---------------------------------------------------------------------------
+
+def test_desired_rules_named_port_rule(make_config):
+    cfg = make_config({"security": {
+        "metrics": {"port": 9100, "hosts": {"vpn": "172.16.0.0/16"}},
+    }})
+    rules = _desired_rules(cfg)
+    assert rules[("tcp", 9100, 9100, "172.16.0.0/16", None)] == "metrics from vpn"
+
+
+def test_desired_rules_http_block_replaces_the_open_rule(make_config):
+    cfg = make_config({"security": {"http": {"hosts": {"office": "203.0.113.0/24"}}}})
+    rules = _desired_rules(cfg)
+    assert ("tcp", 80, 80, None, None) not in rules
+    assert ("tcp", 80, 80, "203.0.113.0/24", None) in rules
+    # https is untouched and stays open
+    assert ("tcp", 443, 443, None, None) in rules
+
+
+def test_desired_rules_https_block_replaces_the_open_rule(make_config):
+    cfg = make_config({"security": {"https": {"hosts": {"office": "203.0.113.0/24"}}}})
+    rules = _desired_rules(cfg)
+    assert ("tcp", 443, 443, None, None) not in rules
+    assert ("tcp", 443, 443, "203.0.113.0/24", None) in rules
+    assert ("tcp", 80, 80, None, None) in rules
+
+
+def test_desired_rules_empty_http_hosts_closes_port_80(make_config):
+    cfg = make_config({"security": {"http": {"hosts": {}}}})
+    rules = _desired_rules(cfg)
+    assert not [key for key in rules if key[1] == 80]
+
+
+def test_desired_rules_updating_a_host_replaces_its_rule(make_config):
+    before = _desired_rules(make_config({"security": {"talos": {"vpn": "10.0.0.0/24"}}}))
+    after = _desired_rules(make_config({"security": {"talos": {"vpn": "10.1.0.0/24"}}}))
+    assert ("tcp", 50000, 50000, "10.0.0.0/24", None) in before
+    assert ("tcp", 50000, 50000, "10.0.0.0/24", None) not in after
+    assert ("tcp", 50000, 50000, "10.1.0.0/24", None) in after

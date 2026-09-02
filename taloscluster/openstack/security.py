@@ -1,8 +1,9 @@
 """Reconcile the cluster security group + rules, the port of security_group.tf.
 
-Rules: ICMP, tcp/80, tcp/443, tcp/50000 per `security.talos` allowlist entry,
-tcp/6443 per `security.kubernetes` allowlist entry, and intra-SG allow-all
-tcp+udp. Editing an allowlist in cluster.yaml converges here.
+Rules: ICMP, one rule per host CIDR of every named `security:` entry (on that
+entry's port), tcp/80 and tcp/443 open to all unless an `http` or `https` entry
+restricts them, and intra-SG allow-all tcp+udp. Editing an allowlist in
+cluster.yaml converges here.
 
 This is the one place true diffing matters: we compute the desired ingress rule
 set as comparable tuples, then add the missing ones and delete the extra ones.
@@ -32,12 +33,11 @@ def _desired_rules(cfg: Config) -> dict[tuple, str]:
     """desired rule tuple -> human description."""
     rules: dict[tuple, str] = {}
     rules[("icmp", None, None, None, None)] = "icmp"
-    rules[("tcp", 80, 80, None, None)] = "http"
-    rules[("tcp", 443, 443, None, None)] = "https"
-    for name, cidr in cfg.security_talos.items():
-        rules[("tcp", 50000, 50000, cidr, None)] = f"talos api from {name}"
-    for name, cidr in cfg.security_kubernetes.items():
-        rules[("tcp", 6443, 6443, cidr, None)] = f"kubeapi from {name}"
+    for port in cfg.open_ports():
+        rules[("tcp", port, port, None, None)] = f"tcp/{port} open"
+    for rule in cfg.security.values():
+        for name, cidr in rule.hosts.items():
+            rules[("tcp", rule.port, rule.port, cidr, None)] = f"{rule.name} from {name}"
     rules[("tcp", None, None, None, SELF)] = "intra-sg tcp"
     rules[("udp", None, None, None, SELF)] = "intra-sg udp"
     return rules

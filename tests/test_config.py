@@ -14,6 +14,7 @@ from taloscluster.config import (
     OpenStackSecrets,
     ProxmoxConfig,
     ProxmoxSecrets,
+    SecurityRule,
     load_secrets,
     validate_warnings,
 )
@@ -546,3 +547,102 @@ def test_secrets_provider_must_match_cluster_provider(tmp_path):
 
     with pytest.raises(ConfigError, match="proxmox.*credentials"):
         load_secrets(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# security rules
+# ---------------------------------------------------------------------------
+
+def test_security_legacy_name_to_cidr_shape_still_loads(make_config):
+    cfg = make_config({"security": {
+        "kubernetes": {"vpn": "172.16.0.0/16"},
+        "talos": {"vpn": "172.16.0.0/16"},
+    }})
+    assert cfg.security["kubernetes"].port == 6443
+    assert cfg.security["talos"].port == 50000
+    assert cfg.security["kubernetes"].hosts == {"vpn": "172.16.0.0/16"}
+    # the pre-Stage-4 accessors keep working
+    assert cfg.security_kubernetes == {"vpn": "172.16.0.0/16"}
+    assert cfg.security_talos == {"vpn": "172.16.0.0/16"}
+
+
+def test_security_named_rule_requires_explicit_port(make_config):
+    with pytest.raises(ConfigError, match="requires an explicit 'port'"):
+        make_config({"security": {"metrics": {"hosts": {"vpn": "172.16.0.0/16"}}}})
+
+
+def test_security_named_rule_with_port(make_config):
+    cfg = make_config({"security": {
+        "metrics": {"port": 9100, "hosts": {"vpn": "172.16.0.0/16"}},
+    }})
+    assert cfg.security["metrics"] == SecurityRule(
+        name="metrics", port=9100, hosts={"vpn": "172.16.0.0/16"}
+    )
+
+
+def test_security_hosts_shape_accepts_default_ports(make_config):
+    cfg = make_config({"security": {
+        "talos": {"hosts": {"vpn": "172.16.0.0/16"}},
+    }})
+    assert cfg.security["talos"].port == 50000
+
+
+def test_security_rejects_unknown_keys(make_config):
+    with pytest.raises(ConfigError, match="unknown keys: protocol"):
+        make_config({"security": {
+            "talos": {"hosts": {"vpn": "172.16.0.0/16"}, "protocol": "udp"},
+        }})
+
+
+def test_security_rejects_out_of_range_port(make_config):
+    with pytest.raises(ConfigError, match="port must be 1-65535"):
+        make_config({"security": {"metrics": {"port": 70000, "hosts": {}}}})
+
+
+def test_http_and_https_are_open_by_default(make_config):
+    cfg = make_config({"security": {"talos": {"vpn": "172.16.0.0/16"}}})
+    assert cfg.open_ports() == (80, 443)
+
+
+def test_http_block_closes_the_default_open_port(make_config):
+    cfg = make_config({"security": {
+        "http": {"hosts": {"office": "203.0.113.0/24"}},
+    }})
+    assert cfg.open_ports() == (443,)
+    assert cfg.security["http"].port == 80
+
+
+def test_https_block_closes_the_default_open_port(make_config):
+    cfg = make_config({"security": {"https": {"hosts": {}}}})
+    assert cfg.open_ports() == (80,)
+    assert cfg.security["https"].port == 443
+    assert cfg.security["https"].hosts == {}
+
+
+def test_security_rejects_invalid_cidr_on_a_named_rule(make_config):
+    with pytest.raises(ConfigError, match="security.metrics.vpn has invalid CIDR"):
+        make_config({"security": {"metrics": {"port": 9100, "hosts": {"vpn": "nope"}}}})
+
+
+def test_http_and_https_cannot_change_their_port(make_config):
+    """`http`/`https` name the port they govern; another port needs another name."""
+    with pytest.raises(ConfigError, match="cannot change its port from 80 to 8080"):
+        make_config({"security": {
+            "http": {"port": 8080, "hosts": {"office": "203.0.113.0/24"}},
+        }})
+    with pytest.raises(ConfigError, match="cannot change its port from 443 to 8443"):
+        make_config({"security": {"https": {"port": 8443, "hosts": {}}}})
+
+
+def test_http_and_https_may_restate_their_default_port(make_config):
+    cfg = make_config({"security": {
+        "https": {"port": 443, "hosts": {"office": "203.0.113.0/24"}},
+    }})
+    assert cfg.open_ports() == (80,)
+
+
+def test_any_rule_claiming_443_closes_the_default_open_port(make_config):
+    cfg = make_config({"security": {
+        "ingress": {"port": 443, "hosts": {"office": "203.0.113.0/24"}},
+    }})
+    assert cfg.open_ports() == (80,)

@@ -98,7 +98,7 @@ Typical `cluster.yaml` edits and what converge does with them: bump a pool
 `count` to add nodes; lower it to drain + remove them; bump `talos.version`
 or `kubernetes.version` for a rolling upgrade (existing nodes are upgraded
 *before* new ones are added — `taloscluster check` tells you which bumps are
-available); edit a `security` allowlist to reconcile the security-group rules.
+available); edit a `security` rule to reconcile the OpenStack security group or the Proxmox per-VM firewall.
 
 ### Proxmox on existing networks
 
@@ -180,11 +180,28 @@ gets a deterministic link-local anchor address derived from the cluster and
 hostname; a collision aborts the run, so size `anchor_cidr` at `/20` or larger
 rather than reusing a `/24`.
 
-The per-VM Proxmox firewall defaults to deny-in/allow-out. Ports 6443 and 50000
-are restricted to the `security.kubernetes` and `security.talos` allowlists, but
-**80 and 443 are accepted from any source** — the external NIC is a routable
-subnet, so ingress is deliberately open to the internet. Restrict it upstream if
-that is not what you want.
+The per-VM Proxmox firewall defaults to deny-in/allow-out and is reconciled on every converge: rules for the current `security:` block are added, stale ones are removed, and duplicates are collapsed. Ownership is by port: the tool reconciles the ports `security:` governs (plus ICMP and intra-cluster traffic) and leaves every other port to you. A rule of yours on tcp/22 is reported and kept; a rule on tcp/6443 is the kube-API allowlist's business and gets reconciled. Generated rules also carry a `taloscluster:` comment so a port you later remove from `security:` still gets cleaned up. Missing rules are added before stale ones are deleted, so editing an allowlist never leaves a port briefly closed. Ports 6443 and 50000 are restricted to the `security.kubernetes` and `security.talos` allowlists, and **80 and 443 are accepted from any source** unless you add an `http:` or `https:` rule — the external NIC is a routable subnet, so ingress is deliberately open by default.
+
+### Security allowlists
+
+Every entry under `security:` is a named rule: a tcp port plus the source CIDRs allowed to reach it. `kubernetes` and `talos` default to ports 6443 and 50000, `http` to 80 and `https` to 443; any other name needs an explicit `port`. Both providers reconcile the same schema — the OpenStack security group and the Proxmox per-VM firewall.
+
+```yaml
+security:
+  kubernetes:                     # tcp/6443, bare name -> CIDR shape
+    tailscale: 100.64.0.0/10
+  talos:                          # tcp/50000
+    tailscale: 100.64.0.0/10
+  https:                          # restricts tcp/443, which is otherwise open
+    hosts:
+      office vpn: 203.0.113.0/24
+  metrics:                        # any other rule must name its port
+    port: 9100
+    hosts:
+      office vpn: 203.0.113.0/24
+```
+
+Only tcp/80 and tcp/443 are open by default, and a port stays open until some rule claims it. Omitting `http` and `https` leaves both open; a rule with no hosts closes its port entirely. `http` and `https` always mean 80 and 443 — pointing them at another port is rejected — but any other rule that claims 80 or 443 restricts it just the same.
 
 ## Plugins
 

@@ -8,3 +8,14 @@ talossecrets.yaml
 secrets.yaml
 cluster.yaml
 *.swp
+
+/openstack/
+/proxmox/
+/.claude/
+
+# local cluster bootstrap manifests, not part of the tool
+install.sh
+namespaces.yaml
+metallb-pool.yaml
+metallb-values.yaml
+traefik-values.yaml

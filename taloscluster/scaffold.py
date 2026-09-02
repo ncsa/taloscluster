@@ -57,8 +57,11 @@ network:
   dns: [8.8.8.8, 8.8.4.4]
   ntp: [pool.ntp.org]
 
-# source CIDRs allowed to reach the kube api (6443) and talos api (50000);
-# friendly name -> CIDR
+# named ingress rules: friendly name -> CIDR allowed to reach that rule's port.
+# kubernetes defaults to 6443 and talos to 50000; any other rule needs a `port`.
+# tcp/80 and tcp/443 stay open to everyone until some rule claims that port
+# (an `http:` or `https:` rule, or any other rule pointed at 80 or 443).
+# Claiming a port with an empty hosts map closes it to everyone.
 security:
   kubernetes:
     # office vpn: 203.0.113.0/24
@@ -66,6 +69,13 @@ security:
   talos:
     # office vpn: 203.0.113.0/24
     tailscale: 100.64.0.0/10
+  # https:                        # restrict tcp/443 (omit to leave it open)
+  #   hosts:
+  #     office vpn: 203.0.113.0/24
+  # metrics:                      # any other port needs an explicit `port`
+  #   port: 9100
+  #   hosts:
+  #     office vpn: 203.0.113.0/24
 
 tailscale:
   login_server: https://headscale.example.edu

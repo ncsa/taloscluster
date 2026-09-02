@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from taloscluster.config import ProxmoxSecrets, Secrets
+import pytest
+
+from taloscluster.config import ConfigError, ProxmoxSecrets, Secrets
 from taloscluster.infrastructure import (
     InfrastructureInventory,
     InfrastructureMachine,
@@ -74,3 +76,48 @@ def test_proxmox_backend_is_selected(make_config):
     )
 
     assert backend_for(cfg, secrets).name == "proxmox"
+
+
+def test_backends_declare_a_talos_contribution_and_installer_platform():
+    """Every backend supplies the Stage 4 hooks the shared generator calls."""
+    from taloscluster.openstack.backend import OpenStackBackend
+    from taloscluster.proxmox.backend import ProxmoxBackend
+
+    assert OpenStackBackend.installer_platform == "openstack"
+    assert ProxmoxBackend.installer_platform == "nocloud"
+    for backend in (OpenStackBackend, ProxmoxBackend):
+        assert callable(backend.talos_contribution)
+
+
+def test_proxmox_backend_contribution_rejects_anchor_collisions(make_config):
+    from taloscluster.infrastructure import Endpoint
+    from taloscluster.proxmox.backend import ProxmoxBackend
+
+    cfg = make_config(
+        {
+            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"bridge": "vmbr0"},
+                    "external": {
+                        "bridge": "vmbr1",
+                        "cidr": "203.0.113.0/24",
+                        "gateway": "203.0.113.1",
+                        # a /32 forces every machine onto the same anchor
+                        "anchor_cidr": "169.254.40.1/32",
+                        "kubeapi_vip": "203.0.113.10",
+                    },
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+    secrets = Secrets(provider=ProxmoxSecrets("user@pve!provider", "secret"))
+    backend = ProxmoxBackend(cfg, secrets, client=object())
+    machine = cfg.machines["testcluster-controlplane-01"]
+
+    with pytest.raises(ConfigError, match="anchor address collision"):
+        backend.talos_contribution(machine, Endpoint(vip="203.0.113.10"))

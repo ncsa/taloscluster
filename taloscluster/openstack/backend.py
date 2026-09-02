@@ -15,9 +15,10 @@ from ..infrastructure import (
     InfrastructureMachine,
     NetworkAttachment,
     NetworkResult,
+    TalosContribution,
 )
 from ..output import action, dry_run, info, log, warn
-from . import compute, image, network, security
+from . import compute, image, network, security, talos
 from .network import _fixed_ip
 from .session import REGION, Inventory, connect, project_name
 
@@ -28,6 +29,7 @@ _STATUS_KINDS = (
 
 class OpenStackBackend:
     name = "openstack"
+    installer_platform = talos.INSTALLER_PLATFORM
 
     def __init__(self, cfg: Config, secrets: Secrets):
         if not isinstance(cfg.provider, OpenStackConfig):
@@ -37,6 +39,11 @@ class OpenStackBackend:
         self.cfg = cfg
         self.secrets = secrets
         self.conn = connect(cfg, secrets)
+
+    def talos_contribution(
+        self, machine: Machine, endpoint: Endpoint
+    ) -> TalosContribution:
+        return talos.contribution(machine, self.cfg, endpoint)
 
     def load_inventory(self) -> InfrastructureInventory:
         raw = Inventory(self.conn, self.cfg.name).load()
