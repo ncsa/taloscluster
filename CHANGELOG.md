@@ -7,30 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+
+## [0.4.0] - 2026-09-01
+
+### Changed
+
+- Move kubeapi_vip to proxmox.network.external when the external section is present; keep it in network.cluster otherwise.
+- Select Talos interfaces by deterministic MAC instead of assuming eth0/eth1 naming.
+- Require `Sys.AccessNetwork` on the Proxmox node path for ISO `download-url`; existing API tokens must add it before upgrading.
+
+### Added
+
 - Add directly routed external NIC support for Proxmox with a second VirtIO interface and per-VM firewall.
 - Generate native Talos v1.13 network config documents (LinkAliasConfig, LinkConfig, DHCPv4Config, RoutingRuleConfig, Layer2VIPConfig) for directly routed external addressing.
 - Derive deterministic link-local anchor addresses from cluster and hostname, rejecting collisions.
-- Move kubeapi_vip to proxmox.network.external when the external section is present; keep it in network.cluster otherwise.
-- Enable Proxmox per-VM firewall with ACCEPT input/output policies on the external NIC.
-- Select Talos interfaces by deterministic MAC instead of assuming eth0/eth1 naming.
+- Enable Proxmox per-VM firewall with default-deny ingress and default-allow egress.
 - Expose the Proxmox ingress pool in provider status for plugin consumption.
 - Route Proxmox MetalLB replies through every machine's external NIC with native policy routing and a generated Talos static pod that runs `nft` from the kube-proxy image.
-- Require `Sys.AccessNetwork` on the Proxmox node path for ISO `download-url`; existing API tokens must add it before upgrading.
 
 ## [0.3.0] - 2026-08-31
 
-- Add Proxmox VM lifecycle support on existing bridges and VNets.
-- Add `init --openstack` and `init --proxmox` provider-specific configuration templates.
+### Changed
+
 - Express Proxmox pool memory in GB in `cluster.yaml` and convert it for the API.
 - Accept a Proxmox server URL without the `/api2/json` suffix.
 - Name Proxmox boot ISOs `talos-<version>-tailscale.iso` like OpenStack images.
+- Boot Proxmox VMs with UEFI (OVMF) on q35 instead of legacy BIOS.
+- Spread Proxmox control planes across distinct nodes during placement.
+- Place control planes by node name instead of available memory so the first node is not systematically skipped.
+
+### Added
+
+- Add Proxmox VM lifecycle support on existing bridges and VNets.
+- Add `init --openstack` and `init --proxmox` provider-specific configuration templates.
 - Install Talos to Proxmox SCSI disks at `/dev/sda` while retaining `/dev/vda` on OpenStack.
+
+### Fixed
+
 - Stop running Proxmox VMs before deletion so destroy does not fail on a running guest.
 - Query live Proxmox VM status before deletion so a VM already shut down by `talosctl reset` is not re-stopped.
 - Tolerate drain failure during scale-down so an interrupted run can be resumed.
 - Drop `--wait` from `talosctl reset` since `--reboot=false` shuts the node down; waiting for a reboot that never happens hung scale-down for 10 minutes.
 - Delete nodes with no resolvable address during scale-down so an already-reset node is not stuck.
-- Boot Proxmox VMs with UEFI (OVMF) on q35 instead of legacy BIOS.
 - Wait for kube-api to stabilize (two consecutive checks) before Kubernetes upgrade after machine-config apply.
 - Skip kubeconfig re-fetch on an already-up cluster and use cp-01 instead of the VIP, which may have moved during a reboot.
 - Wait for all desired nodes to become Ready before detaching cidata ISOs so new machines can finish booting.
@@ -38,8 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Treat kubectl API failure during scale-down as unknown (not NotReady) and abort deletion.
 - Re-read Kubernetes server version after kube-api stabilization to avoid skipping minor-version upgrade steps.
 - Remove stale swap file and ignore `*.swp` files.
-- Spread Proxmox control planes across distinct nodes during placement.
-- Place control planes by node name instead of available memory so the first node is not systematically skipped.
 
 ## [0.2.0] - 2026-08-31
 
