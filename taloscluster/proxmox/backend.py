@@ -571,15 +571,38 @@ class ProxmoxBackend:
             )
         stale, seen = self._classify_firewall(existing, desired, name, quiet=False)
 
-        self._reconcile_firewall_options(base, name)
-        created = 0
-        for key, description in desired.items():
-            if key in seen:
-                continue
+        wanted_opts = {"enable": 1, "policy_in": "DROP", "policy_out": "ACCEPT", "dhcp": 1}
+        current_opts = self.client.get(f"{base}/options")
+        opts_diff = not (
+            isinstance(current_opts, dict)
+            and all(
+                str(current_opts.get(k, "")) == str(v)
+                for k, v in wanted_opts.items()
+            )
+        )
+        to_create = [key for key in desired if key not in seen]
+
+        if not opts_diff and not to_create and not stale:
+            return
+
+        parts: list[str] = []
+        if opts_diff:
+            parts.append("policy")
+        if to_create:
+            parts.append(f"{len(to_create)} rule{'s' if len(to_create) != 1 else ''} added")
+        if stale:
+            parts.append(f"{len(stale)} rule{'s' if len(stale) != 1 else ''} deleted")
+        action(f"configure firewall on {name} ({', '.join(parts)})")
+
+        if dry_run():
+            return
+
+        if opts_diff:
+            self.client.mutate("PUT", f"{base}/options", data=wanted_opts)
+
+        for key in to_create:
             proto, dport, source = key
-            action(f"create firewall rule on {name}: {description}")
-            if dry_run():
-                continue
+            description = desired[key]
             data: dict[str, Any] = {
                 "type": "in", "action": "ACCEPT", "enable": 1,
                 "proto": proto, "comment": f"{_FIREWALL_MARKER}{description}",
@@ -589,11 +612,10 @@ class ProxmoxBackend:
             if source is not None:
                 data["source"] = source
             self.client.mutate("POST", f"{base}/rules", data=data)
-            created += 1
 
         if not stale:
             return
-        if created:
+        if to_create:
             # Proxmox splices new rules in at the top, so every position we
             # recorded has shifted. Re-read rather than guess the offset.
             refreshed = self.client.get(f"{base}/rules")
@@ -603,21 +625,7 @@ class ProxmoxBackend:
                 )
             stale, _ = self._classify_firewall(refreshed, desired, name, quiet=True)
         for pos in sorted(stale, reverse=True):
-            action(f"delete firewall rule {pos} on {name}")
-            if not dry_run():
-                self.client.mutate("DELETE", f"{base}/rules/{pos}")
-
-    def _reconcile_firewall_options(self, base: str, name: str) -> None:
-        """Set the VM firewall policy, but only when it actually differs."""
-        wanted = {"enable": 1, "policy_in": "DROP", "policy_out": "ACCEPT", "dhcp": 1}
-        current = self.client.get(f"{base}/options")
-        if isinstance(current, dict) and all(
-            str(current.get(key, "")) == str(value) for key, value in wanted.items()
-        ):
-            return
-        action(f"configure firewall policy on {name}")
-        if not dry_run():
-            self.client.mutate("PUT", f"{base}/options", data=wanted)
+            self.client.mutate("DELETE", f"{base}/rules/{pos}")
 
     def finalize_machines(self, inventory: InfrastructureInventory) -> None:
         raw = self._raw(inventory)

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-01
+
 ### Changed
 
 - Make the Talos machine-config generator provider-neutral: each backend contributes its install disk, installer platform, and named machine-config patches.
@@ -18,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add missing Proxmox firewall rules before deleting stale ones, so editing an allowlist never leaves a port briefly closed.
 - Replace a disabled Proxmox firewall rule of ours instead of treating it as satisfying the allowlist.
 - Write the Proxmox per-VM firewall policy only when it differs, so a steady-state converge makes no firewall mutation.
+- Collapse per-node Proxmox firewall reconcile output into a single summary line instead of one line per rule.
 
 ### Added
 
