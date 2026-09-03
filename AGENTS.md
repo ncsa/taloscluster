@@ -69,6 +69,7 @@ Following rules are here to help the AI avoid the same mistakes again:
 - Track changes in the CHANGELOG.md, if no unreleased section exists, then add it, make sure to not add a new subsection.
 - Keep CHANGELOG entries short: one terse bullet per logical change, present tense, user-facing language. Do not write long narrative paragraphs explaining the "why" at length. Where a change has an obvious PR, link it (e.g. `(#123)`).
 - When bumping the version in pyproject.toml, also run `uv lock` to update uv.lock.
+- Talos commands (`talosctl`) always target a server's real address, never the kube-api VIP or floating IP. The VIP belongs to whichever control plane currently owns it and may be pointed at an address no node owns yet; the endpoint is controlplane-01's tailscale name or real address, and the node is its own private address.
 - When cutting a release, first pull the latest dependencies (`uv lock --upgrade`) and then run the full test suite (`uv run pytest`) before tagging — upgraded dependencies can introduce breaking changes, so the release must not go out unless the tests pass.
 
 <!-- gitnexus:start -->

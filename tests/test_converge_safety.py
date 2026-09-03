@@ -307,3 +307,147 @@ def test_resolve_cp1_address_gives_up_after_timeout(monkeypatch):
     cfg = SimpleNamespace(name="phoenix")
     backend = SimpleNamespace(load_inventory=lambda: InfrastructureInventory())
     assert converge._resolve_cp1_address(backend, cfg, NetworkResult(), timeout_s=0) == ""
+
+
+def _kubeconfig(tmp_path, server):
+    path = tmp_path / "kubeconfig"
+    path.write_text(
+        "clusters:\n"
+        "- name: other\n  cluster:\n    server: https://10.0.0.1:6443\n"
+        f"- name: phoenix\n  cluster:\n    server: {server}\n"
+    )
+    return path
+
+
+def test_recorded_endpoint_reads_the_cluster_entry_of_the_kubeconfig(tmp_path):
+    path = _kubeconfig(tmp_path, "https://141.142.36.79:6443")
+    assert converge._recorded_endpoint(path, "phoenix") == "141.142.36.79"
+    assert converge._recorded_endpoint(path, "unknown") == ""
+    assert converge._recorded_endpoint(tmp_path / "missing", "phoenix") == ""
+
+
+def test_kubeapi_endpoint_move_is_reported_with_the_old_address(tmp_path, capsys):
+    path = _kubeconfig(tmp_path, "https://141.142.36.79:6443")
+    assert converge._endpoint_move(path, "phoenix", "141.142.36.77") == "141.142.36.79"
+    assert "move kube-api endpoint 141.142.36.79 -> 141.142.36.77" in capsys.readouterr().out
+
+
+def test_unchanged_or_unknown_kubeapi_endpoint_is_not_a_move(tmp_path):
+    path = _kubeconfig(tmp_path, "https://141.142.36.79:6443")
+    assert converge._endpoint_move(path, "phoenix", "141.142.36.79") == ""
+    assert converge._endpoint_move(path, "phoenix", "") == ""  # endpoint still pending
+    assert converge._endpoint_move(tmp_path / "missing", "phoenix", "141.142.36.77") == ""
+
+
+# ---- talosctl endpoint: a real control plane, never the VIP -----------------
+
+def _no_tailscale_cfg():
+    return SimpleNamespace(name="phoenix", tailscale_enabled=False)
+
+
+def test_talos_endpoint_prefers_static_then_inventory_never_the_vip(tmp_path):
+    host = "phoenix-controlplane-01"
+    refs = NetworkResult(
+        machine_attachments={host: (NetworkAttachment(name="cluster", address="192.168.100.11"),)}
+    )
+    inv = InfrastructureInventory(
+        machines={
+            host: InfrastructureMachine(
+                name=host, attachments=(NetworkAttachment(name="cluster", address="172.29.21.248"),)
+            )
+        }
+    )
+    assert converge._talos_endpoint(_no_tailscale_cfg(), refs, inv) == "192.168.100.11"
+    assert converge._talos_endpoint(_no_tailscale_cfg(), NetworkResult(), inv) == "172.29.21.248"
+
+
+def test_talos_endpoint_falls_back_to_the_recorded_talosconfig(tmp_path):
+    path = tmp_path / "talosconfig"
+    path.write_text(
+        "context: phoenix\ncontexts:\n  phoenix:\n    endpoints:\n    - 172.29.21.248\n"
+    )
+    assert converge._talos_endpoint(_no_tailscale_cfg(), talosconfig=path) == "172.29.21.248"
+
+
+def test_talos_endpoint_without_any_address_is_an_error(tmp_path):
+    with pytest.raises(ReconcileError, match="no address known for phoenix-controlplane-01"):
+        converge._talos_endpoint(_no_tailscale_cfg(), NetworkResult(), InfrastructureInventory())
+    assert (
+        converge._talos_endpoint(_no_tailscale_cfg(), talosconfig=tmp_path / "none", required=False)
+        == "phoenix-controlplane-01"
+    )
+
+
+def test_talos_endpoint_with_tailscale_is_the_magicdns_name():
+    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=True)
+    assert converge._talos_endpoint(cfg) == "phoenix-controlplane-01"
+
+
+# ---- --reboot: one node at a time, control planes first ------------------
+
+def test_reboot_nodes_is_serial_controlplanes_first_and_health_checked(monkeypatch, tmp_path):
+    events = []
+    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=False)
+    machines = {
+        "phoenix-worker-01": SimpleNamespace(role="worker"),
+        "phoenix-controlplane-01": SimpleNamespace(role="controlplane"),
+        "phoenix-worker-02": SimpleNamespace(role="worker"),
+    }
+    addresses = {
+        "phoenix-controlplane-01": "10.0.0.1",
+        "phoenix-worker-01": "10.0.0.11",
+        "phoenix-worker-02": "10.0.0.12",
+    }
+    inv = InfrastructureInventory(
+        machines={
+            h: InfrastructureMachine(name=h, attachments=(NetworkAttachment("cluster", a),))
+            for h, a in addresses.items()
+        }
+    )
+    backend = SimpleNamespace(
+        restart_machine=lambda name, _inv: events.append(("restart", name))
+    )
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *a, **k: {})
+    monkeypatch.setattr(converge, "_wait_reachable", lambda tc, e, n: events.append(("up", n)))
+    monkeypatch.setattr(
+        converge, "_health_or_kube_fallback",
+        lambda *a, **k: events.append(("health",)) or True,
+    )
+
+    converge._reboot_nodes(
+        backend, cfg, machines, inv, NetworkResult(),
+        {"phoenix-worker-02", "phoenix-controlplane-01"},  # worker-01 unchanged
+        tmp_path / "talosconfig", tmp_path / "kubeconfig",
+    )
+
+    assert events == [
+        ("restart", "phoenix-controlplane-01"), ("up", "10.0.0.1"), ("health",),
+        ("restart", "phoenix-worker-02"), ("up", "10.0.0.12"), ("health",),
+    ]
+
+
+def test_reboot_rollout_stops_when_the_cluster_is_unhealthy(monkeypatch, tmp_path):
+    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=False)
+    machines = {
+        "phoenix-controlplane-01": SimpleNamespace(role="controlplane"),
+        "phoenix-controlplane-02": SimpleNamespace(role="controlplane"),
+    }
+    addresses = {"phoenix-controlplane-01": "10.0.0.1", "phoenix-controlplane-02": "10.0.0.2"}
+    inv = InfrastructureInventory(
+        machines={
+            h: InfrastructureMachine(name=h, attachments=(NetworkAttachment("cluster", a),))
+            for h, a in addresses.items()
+        }
+    )
+    restarted = []
+    backend = SimpleNamespace(restart_machine=lambda name, _inv: restarted.append(name))
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *a, **k: {})
+    monkeypatch.setattr(converge, "_wait_reachable", lambda tc, e, n: None)
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *a, **k: False)
+
+    with pytest.raises(ReconcileError, match="unhealthy after rebooting phoenix-controlplane-01"):
+        converge._reboot_nodes(
+            backend, cfg, machines, inv, NetworkResult(), set(machines),
+            tmp_path / "talosconfig", tmp_path / "kubeconfig",
+        )
+    assert restarted == ["phoenix-controlplane-01"]

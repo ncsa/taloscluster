@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import re
 import shlex
 import shutil
 import tempfile
@@ -875,12 +876,14 @@ class ProxmoxBackend:
         inventory: InfrastructureInventory,
         boot_artifact: str,
         configs: dict[str, str],
-    ) -> None:
+    ) -> set[str]:
         raw = self._raw(inventory)
         self._require_preflight()
+        needs_restart: set[str] = set()
 
         missing: list[Machine] = []
         stopped: list[ProxmoxVM] = []
+        present: list[tuple[ProxmoxVM, Machine]] = []
         for name, machine in machines.items():
             existing = raw.vms.get(name)
             if existing is None:
@@ -890,11 +893,27 @@ class ProxmoxBackend:
                 raise ReconcileError(
                     f"refusing to adopt unowned Proxmox VM named {name!r}"
                 )
-            if existing.status == "running":
-                info(f"server {name} exists")
-            else:
+            present.append((existing, machine))
+            if existing.status != "running":
                 stopped.append(existing)
-            self._reconcile_firewall(existing.node, existing.vmid, name)
+        # Read every existing VM's shape first: a network change is refused
+        # before any VM is touched, so a partial run never leaves the cluster
+        # half-resized.
+        drifts = [(vm, machine, self._vm_drift(vm, machine)) for vm, machine in present]
+        for vm, machine, drift in drifts:
+            stale = drift.pop("stale", False)
+            had_disk = "disk" in drift
+            if not drift and not stale:
+                info(f"server {vm.name} exists")
+            elif not drift:
+                info(f"server {vm.name} exists (restart pending for its new sizing)")
+            self._reconcile_firewall(vm.node, vm.vmid, vm.name)
+            applied = self._apply_vm_drift(vm, machine, drift)
+            # stale: the running VM still has old cores/memory. had_disk: a disk
+            # grow was applied and Talos extends its EPHEMERAL partition on reboot.
+            # A cores/memory revert (applied but not stale, no disk) needs no restart.
+            if (stale or (applied and had_disk)) and vm.status == "running":
+                needs_restart.add(vm.name)
 
         if not dry_run():
             missing_configs = [machine.name for machine in missing if machine.name not in configs]
@@ -938,6 +957,107 @@ class ProxmoxBackend:
                 boot_artifact,
                 configs[machine.name],
             )
+        return needs_restart
+
+    def _vm_drift(self, vm: ProxmoxVM, machine: Machine) -> dict[str, Any]:
+        """Compare a VM's Proxmox config with cluster.yaml.
+
+        Refuses (before any mutation) when the private or external NIC would
+        move to another bridge/VLAN or when the disk would shrink: neither can
+        be reconciled in place, and silently ignoring them would leave
+        cluster.yaml lying about the cluster. Returns the reconcilable drift:
+        `cores`, `memory` (MiB) and `disk` (GiB, grow only), plus `stale` when
+        the *running* VM differs from the desired sizing -- a change written
+        on an earlier run that still waits for a restart.
+        """
+        config = self.client.get(f"nodes/{vm.node}/qemu/{vm.vmid}/config")
+        if not isinstance(config, dict):
+            raise ReconcileError(f"Proxmox returned no config for {vm.name}: {config!r}")
+        # what the VM actually runs with; `config` alone shows pending values
+        running = self.client.get(
+            f"nodes/{vm.node}/qemu/{vm.vmid}/config", params={"current": 1}
+        )
+        if not isinstance(running, dict):
+            running = config
+
+        want_nics = {"net0": (self.cluster_link, self.cluster_network.get("vlan"))}
+        ext = self.external_network
+        if ext:
+            want_nics["net1"] = (str(ext["bridge"]), ext.get("vlan"))
+        for nic, (bridge, vlan) in want_nics.items():
+            have = _kv(config.get(nic))
+            have_bridge, have_tag = have.get("bridge"), have.get("tag")
+            want_tag = str(int(vlan)) if vlan is not None else None
+            if have_bridge != bridge or have_tag != want_tag:
+                raise ReconcileError(
+                    f"refusing to move {vm.name} {nic} from "
+                    f"{_link(have_bridge, have_tag)} to {_link(bridge, want_tag)}: "
+                    "changing a network attachment of a running cluster is not supported; "
+                    "revert the change in cluster.yaml or recreate the cluster"
+                )
+        if not ext and config.get("net1") is not None:
+            raise ReconcileError(
+                f"refusing to detach the external NIC of {vm.name}: removing "
+                "proxmox.network.external from a running cluster is not supported; "
+                "revert the change in cluster.yaml or recreate the cluster"
+            )
+
+        drift: dict[str, Any] = {}
+        have_cores = int(config.get("cores") or 1)
+        if have_cores != machine.cores:
+            drift["cores"] = (have_cores, machine.cores)
+        have_memory = _memory_of(config.get("memory"))
+        if have_memory != _memory_mib(machine.memory):
+            drift["memory"] = (have_memory, _memory_mib(machine.memory))
+        have_disk = _size_gib(_kv(config.get("scsi0")).get("size"))
+        if have_disk is not None and have_disk != machine.disk:
+            if have_disk > machine.disk:
+                raise ReconcileError(
+                    f"refusing to shrink the disk of {vm.name} from {have_disk}GB to "
+                    f"{machine.disk}GB: Proxmox cannot shrink a disk; revert `disk` in "
+                    "cluster.yaml, or replace the machine (scale its pool down past it "
+                    "and back up)"
+                )
+            drift["disk"] = (have_disk, machine.disk)
+        if (
+            int(running.get("cores") or 1) != machine.cores
+            or _memory_of(running.get("memory")) != _memory_mib(machine.memory)
+        ):
+            drift["stale"] = True
+        return drift
+
+    def _apply_vm_drift(self, vm: ProxmoxVM, machine: Machine, drift: dict[str, Any]) -> bool:
+        """Apply reconcilable drift; True when the VM must restart to pick it up."""
+        if not drift:
+            return False
+        sizing = {key: drift[key] for key in ("cores", "memory") if key in drift}
+        if sizing:
+            parts = [
+                f"cores {drift['cores'][0]}->{drift['cores'][1]}" if "cores" in drift else "",
+                f"memory {drift['memory'][0] // _MIB_PER_GB}GB->{machine.memory}GB"
+                if "memory" in drift
+                else "",
+            ]
+            action(f"resize server {vm.name} ({', '.join(p for p in parts if p)})")
+            warn(f"{vm.name}: cores/memory take effect when the VM next restarts")
+            if not dry_run():
+                data: dict[str, Any] = {}
+                if "cores" in drift:
+                    data["cores"] = machine.cores
+                if "memory" in drift:
+                    data["memory"] = _memory_mib(machine.memory)
+                self.client.mutate("PUT", f"nodes/{vm.node}/qemu/{vm.vmid}/config", data=data)
+        if "disk" in drift:
+            have, want = drift["disk"]
+            action(f"grow disk of server {vm.name} ({have}GB->{want}GB)")
+            warn(f"{vm.name}: Talos extends its EPHEMERAL partition on the next reboot")
+            if not dry_run():
+                self.client.mutate(
+                    "PUT",
+                    f"nodes/{vm.node}/qemu/{vm.vmid}/resize",
+                    data={"disk": "scsi0", "size": f"{want}G"},
+                )
+        return True
 
     def _ensure_pool(self, inventory: ProxmoxInventory) -> None:
         existing = inventory.pools.get(self.pool_id)
@@ -1208,6 +1328,23 @@ class ProxmoxBackend:
             stale, _ = self._classify_firewall(refreshed, desired, name, quiet=True)
         for pos in sorted(stale, reverse=True):
             self.client.mutate("DELETE", f"{base}/rules/{pos}")
+
+    def restart_machine(self, name: str, inventory: InfrastructureInventory) -> None:
+        """Proxmox `reboot`: ACPI shutdown (Talos shuts down gracefully), then a
+        fresh QEMU start that applies pending cores/memory. A reboot from inside
+        the guest keeps the old QEMU process and never picks those up."""
+        raw = self._raw(inventory)
+        self._require_preflight()
+        vm = raw.vms.get(name)
+        if vm is None:
+            raise ReconcileError(f"cannot restart unknown Proxmox VM {name!r}")
+        if not self._owns_vm(raw, vm):
+            raise ReconcileError(f"refusing to restart unowned Proxmox VM {name!r}")
+        action(f"restart server {name} (proxmox reboot, applies pending sizing)")
+        if not dry_run():
+            self.client.mutate(
+                "POST", f"nodes/{vm.node}/qemu/{vm.vmid}/status/reboot", data={"timeout": 300}
+            )
 
     def finalize_machines(self, inventory: InfrastructureInventory) -> None:
         raw = self._raw(inventory)
@@ -1509,6 +1646,41 @@ def _storage_nodes(storage: dict[str, Any], online: set[str]) -> set[str]:
     if isinstance(configured, list):
         return online.intersection(str(item) for item in configured)
     return set(online)
+
+
+def _kv(value: Any) -> dict[str, str]:
+    """Split a Proxmox property string (`virtio=MAC,bridge=vmbr0,tag=5`)."""
+    if not isinstance(value, str):
+        return {}
+    out: dict[str, str] = {}
+    for part in value.split(","):
+        key, sep, val = part.partition("=")
+        if sep:
+            out[key] = val
+    return out
+
+
+def _link(bridge: str | None, tag: str | None) -> str:
+    return f"bridge={bridge}" + (f",tag={tag}" if tag is not None else "")
+
+
+def _memory_of(value: Any) -> int:
+    """VM memory in MiB from either the legacy scalar or `current=<MiB>` form."""
+    if isinstance(value, str) and "=" in value:
+        return int(_kv(value).get("current") or 0)
+    return int(value or 0)
+
+
+_SIZE_UNITS = {"": 1 / 1024**3, "K": 1 / 1024**2, "M": 1 / 1024, "G": 1, "T": 1024}
+
+
+def _size_gib(value: str | None) -> int | None:
+    if not value:
+        return None
+    match = re.fullmatch(r"(\d+)([KMGT]?)", value)
+    if match is None:
+        return None
+    return int(int(match.group(1)) * _SIZE_UNITS[match.group(2)])
 
 
 def _truthy(value: Any) -> bool:

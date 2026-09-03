@@ -658,6 +658,11 @@ def _validate_proxmox_external(
             raise ConfigError(
                 "cluster.yaml: proxmox.network.external.ingress_pool must be inside external.cidr"
             )
+        if kubeapi_vip is not None and int(pool_start) <= int(vip) <= int(pool_end):
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.external.kubeapi_vip must not be inside "
+                "ingress_pool (MetalLB could hand the API address to a service)"
+            )
 
 
 def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:

@@ -26,6 +26,9 @@ class FakeClient:
 
     def get(self, path, **kwargs):
         self.calls.append(("GET", path))
+        params = kwargs.get("params") or {}
+        if params.get("current") and f"{path}?current=1" in self.data:
+            return self.data[f"{path}?current=1"]
         return self.data.get(path, [])
 
     def mutate(self, method, path, **kwargs):
@@ -113,6 +116,9 @@ def _data(permissions=None):
         "access/permissions": _permissions() if permissions is None else permissions,
         "cluster/firewall/options": {"enable": 1},
         "nodes/pve001/qemu/800/config": {
+            "cores": 4,
+            "memory": "8192",
+            "scsi0": "vms:vm-800-disk-0,size=40G",
             "net0": "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1",
         },
     }
@@ -392,9 +398,7 @@ def test_warns_when_cluster_firewall_disabled(proxmox_cfg, capsys):
 
 def test_warns_when_vm_nic_missing_firewall_flag(proxmox_cfg, capsys):
     data = _data()
-    data["nodes/pve001/qemu/800/config"] = {
-        "net0": "virtio=02:00:00:00:00:00,bridge=vmbr0",
-    }
+    data["nodes/pve001/qemu/800/config"]["net0"] = "virtio=02:00:00:00:00:00,bridge=vmbr0"
     _backend(proxmox_cfg, FakeClient(data)).load_inventory()
     err = capsys.readouterr().err
     assert "net0 does not have firewall=1" in err
@@ -501,9 +505,17 @@ def test_provider_status_includes_ingress_pool(make_config):
     assert status["ingress_pool"] == "203.0.113.20-203.0.113.40"
 
 
+def _external_data():
+    data = _data()
+    data["nodes/pve001/qemu/800/config"]["net1"] = (
+        "virtio=02:00:00:00:00:01,bridge=vmbr1,firewall=1,tag=1691"
+    )
+    return data
+
+
 def test_vm_create_adds_external_nic_with_firewall(make_config, monkeypatch):
     cfg = _external_cfg(make_config)
-    data = _data()
+    data = _external_data()
     data["cluster/nextid"] = 801
     client = FakeClient(data)
     backend = _backend(cfg, client)
@@ -1043,6 +1055,9 @@ def _sdn_data():
     base = _data(permissions=_permissions(manage_sdn=True))
     # rebase the canonical inventory onto the short SDN cluster name
     data = json.loads(json.dumps(base).replace("testcluster", SDN_CLUSTER))
+    data["nodes/pve001/qemu/800/config"]["net0"] = (
+        f"virtio=02:00:00:00:00:00,bridge={VNET_ID},firewall=1"
+    )
     data["cluster/sdn/zones"] = []
     data["cluster/sdn/vnets"] = []
     data["cluster/sdn/controllers"] = []
@@ -1633,3 +1648,239 @@ def test_sdn_name_override_becomes_the_vnet_bridge(make_config):
         remove=("openstack",),
     )
     assert _backend(cfg, FakeClient({})).cluster_link == "grid"
+
+
+# ---------------------------------------------------------------------------
+# Stage 6: sizing / network drift on existing VMs
+# ---------------------------------------------------------------------------
+
+def _resized_cfg(make_config, **sizing):
+    controlplane = {"count": 2, "cores": 4, "memory": 8, "disk": 40}
+    controlplane.update(sizing)
+    return make_config(
+        {
+            "controlplane": controlplane,
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "nodes": ["pve001", "pve002"],
+                "network": {
+                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+
+
+def _reconcile_cp1(cfg, client):
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+    cp1 = cfg.machines["testcluster-controlplane-01"]
+    backend.restart_result = backend.reconcile_machines(
+        {cp1.name: cp1}, inventory, "isos:iso/talos.iso", {}
+    )
+    return backend
+
+
+def test_reconcile_reports_running_vms_that_need_a_restart(make_config):
+    backend = _reconcile_cp1(_resized_cfg(make_config, cores=8), FakeClient(_data()))
+    assert backend.restart_result == {"testcluster-controlplane-01"}
+
+
+def test_reconcile_reports_no_restart_when_nothing_changed(make_config):
+    backend = _reconcile_cp1(_resized_cfg(make_config), FakeClient(_data()))
+    assert backend.restart_result == set()
+
+
+def test_reconcile_reports_no_restart_for_a_vm_it_is_starting_anyway(make_config):
+    data = _data()
+    data["cluster/resources"][0]["status"] = "stopped"
+    backend = _reconcile_cp1(_resized_cfg(make_config, cores=8), FakeClient(data))
+    assert backend.restart_result == set()
+
+
+def test_reconcile_does_not_need_restart_when_pending_sizing_is_reverted(make_config):
+    # A prior run wrote cores=8 as pending; the running VM still has 4.
+    # cluster.yaml is reverted to 4: the pending config is written back,
+    # but the running VM already matches, so no restart is needed.
+    data = _data()
+    data["nodes/pve001/qemu/800/config"]["cores"] = 8
+    data["nodes/pve001/qemu/800/config?current=1"] = dict(
+        data["nodes/pve001/qemu/800/config"], cores=4
+    )
+    backend = _reconcile_cp1(_resized_cfg(make_config), FakeClient(data))
+    assert backend.restart_result == set()
+
+
+def test_plan_reports_sizing_drift_without_mutating(make_config, capsys):
+    set_dry_run(True)
+    client = FakeClient(_data())
+
+    _reconcile_cp1(_resized_cfg(make_config, cores=8, memory=16), client)
+
+    out = capsys.readouterr().out
+    assert "resize server testcluster-controlplane-01 (cores 4->8, memory 8GB->16GB)" in out
+    assert client.mutations == []
+
+
+def test_converge_resizes_cores_and_memory_in_place(make_config):
+    client = FakeClient(_data())
+
+    _reconcile_cp1(_resized_cfg(make_config, cores=8, memory=16), client)
+
+    assert ("PUT", "nodes/pve001/qemu/800/config", {"cores": 8, "memory": 16384}) in (
+        client.mutations
+    )
+
+
+def test_converge_grows_disk_in_place(make_config, capsys):
+    client = FakeClient(_data())
+
+    _reconcile_cp1(_resized_cfg(make_config, disk=100), client)
+
+    assert (
+        "PUT", "nodes/pve001/qemu/800/resize", {"disk": "scsi0", "size": "100G"}
+    ) in client.mutations
+    assert "grow disk of server testcluster-controlplane-01 (40GB->100GB)" in (
+        capsys.readouterr().out
+    )
+
+
+def test_disk_shrink_is_refused_before_any_mutation(make_config):
+    client = FakeClient(_data())
+
+    with pytest.raises(ReconcileError, match="refusing to shrink the disk"):
+        _reconcile_cp1(_resized_cfg(make_config, disk=20), client)
+    assert client.mutations == []
+
+
+def test_bridge_change_is_refused_before_any_mutation(make_config):
+    data = _data()
+    data["nodes/pve001/qemu/800/config"]["net0"] = (
+        "virtio=02:00:00:00:00:00,bridge=vmbr9,firewall=1"
+    )
+    client = FakeClient(data)
+
+    with pytest.raises(ReconcileError, match="refusing to move .* net0 from bridge=vmbr9"):
+        _reconcile_cp1(_resized_cfg(make_config), client)
+    assert client.mutations == []
+
+
+def test_vlan_change_is_refused(make_config):
+    data = _data()
+    data["nodes/pve001/qemu/800/config"]["net0"] += ",tag=7"
+    client = FakeClient(data)
+
+    with pytest.raises(ReconcileError, match="from bridge=vmbr0,tag=7 to bridge=vmbr0:"):
+        _reconcile_cp1(_resized_cfg(make_config), client)
+    assert client.mutations == []
+
+
+def test_external_nic_change_is_refused(make_config):
+    data = _external_data()
+    data["nodes/pve001/qemu/800/config"]["net1"] = (
+        "virtio=02:00:00:00:00:01,bridge=vmbr1,firewall=1,tag=1700"
+    )
+    client = FakeClient(data)
+    backend = _backend(_external_cfg(make_config), client)
+    inventory = backend.load_inventory()
+    cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+
+    with pytest.raises(ReconcileError, match="net1 from bridge=vmbr1,tag=1700"):
+        backend.reconcile_machines({cp1.name: cp1}, inventory, "isos:iso/talos.iso", {})
+    assert client.mutations == []
+
+
+def test_removing_external_section_is_refused(make_config):
+    client = FakeClient(_external_data())  # the VM still has net1
+
+    with pytest.raises(ReconcileError, match="refusing to detach the external NIC"):
+        _reconcile_cp1(_resized_cfg(make_config), client)
+    assert client.mutations == []
+
+
+def test_memory_property_string_is_not_drift(make_config):
+    data = _data()
+    data["nodes/pve001/qemu/800/config"]["memory"] = "current=8192"
+    client = FakeClient(data)
+
+    _reconcile_cp1(_resized_cfg(make_config), client)
+
+    assert not any(path.endswith("/800/config") for _m, path, _d in client.mutations)
+
+
+def test_resize_is_applied_before_a_stopped_vm_is_started(make_config):
+    data = _data()
+    data["cluster/resources"][0]["status"] = "stopped"
+    client = FakeClient(data)
+
+    _reconcile_cp1(_resized_cfg(make_config, cores=8), client)
+
+    resize = ("PUT", "nodes/pve001/qemu/800/config")
+    start = ("POST", "nodes/pve001/qemu/800/status/start")
+    assert client.calls.index(resize) < client.calls.index(start)
+
+
+def test_interrupted_firewall_is_repaired_before_the_vm_is_started(proxmox_cfg):
+    # The run died between VM creation and power-on: the VM exists, is stopped,
+    # and its firewall has neither the policy nor any rule yet.
+    data = _data()
+    data["cluster/resources"][0]["status"] = "stopped"
+    data["nodes/pve001/qemu/800/firewall/rules"] = []
+    data["nodes/pve001/qemu/800/firewall/options"] = {}
+    client = FakeClient(data)
+
+    _reconcile_cp1(proxmox_cfg, client)
+
+    start = client.calls.index(("POST", "nodes/pve001/qemu/800/status/start"))
+    firewall = [i for i, (m, p) in enumerate(client.calls) if "/firewall/" in p and m != "GET"]
+    assert ("PUT", "nodes/pve001/qemu/800/firewall/options") in client.calls
+    assert ("POST", "nodes/pve001/qemu/800/firewall/rules") in client.calls
+    assert firewall and max(firewall) < start
+
+
+def test_pending_sizing_from_an_earlier_run_needs_a_restart_without_a_new_write(make_config):
+    data = _data()
+    # pending config already says 8 cores; the running VM still has 4
+    data["nodes/pve001/qemu/800/config"]["cores"] = 8
+    data["nodes/pve001/qemu/800/config?current=1"] = dict(
+        data["nodes/pve001/qemu/800/config"], cores=4
+    )
+    client = FakeClient(data)
+
+    backend = _reconcile_cp1(_resized_cfg(make_config, cores=8), client)
+
+    assert backend.restart_result == {"testcluster-controlplane-01"}
+    assert not any(path.endswith("/800/config") for _m, path, _d in client.mutations)
+
+
+def test_restart_machine_uses_the_proxmox_reboot(make_config):
+    client = FakeClient(_data())
+    backend = _backend(_resized_cfg(make_config), client)
+    inventory = backend.load_inventory()
+
+    backend.restart_machine("testcluster-controlplane-01", inventory)
+
+    assert ("POST", "nodes/pve001/qemu/800/status/reboot", {"timeout": 300}) in client.mutations
+
+
+def test_restart_machine_is_read_only_under_plan(make_config):
+    set_dry_run(True)
+    client = FakeClient(_data())
+    backend = _backend(_resized_cfg(make_config), client)
+    inventory = backend.load_inventory()
+
+    backend.restart_machine("testcluster-controlplane-01", inventory)
+
+    assert client.mutations == []
+
+
+def test_restart_machine_refuses_an_unowned_vm(make_config):
+    client = FakeClient(_data())
+    backend = _backend(_resized_cfg(make_config), client)
+    inventory = backend.load_inventory()
+    with pytest.raises(ReconcileError, match="unowned"):
+        backend.restart_machine("foreign", inventory)

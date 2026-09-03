@@ -49,12 +49,12 @@ def _cmd_init(args, root):
 
 def _cmd_converge(args, root):
     set_dry_run(bool(args.dry_run))
-    return _converge.converge(root, assume_yes=args.yes)
+    return _converge.converge(root, assume_yes=args.yes, reboot=args.reboot)
 
 
 def _cmd_plan(args, root):
     set_dry_run(True)
-    return _converge.converge(root, assume_yes=False)
+    return _converge.converge(root, assume_yes=False, reboot=args.reboot)
 
 
 def _cmd_status(args, root):
@@ -217,6 +217,11 @@ def main(argv: list[str] | None = None) -> int:
         "--yes", action="store_true",
         help="approve node/resource deletions without the interactive confirm prompt",
     )
+    p_con.add_argument(
+        "--reboot", action="store_true",
+        help="reboot nodes (one at a time, control planes first, health-checked in between) "
+             "whose new cores/memory/disk only take effect after a restart",
+    )
     p_con.set_defaults(func=_cmd_converge)
 
     p_plan = sub.add_parser(
@@ -229,6 +234,10 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common(p_plan)
+    p_plan.add_argument(
+        "--reboot", action="store_true",
+        help="also show which nodes `converge --reboot` would reboot",
+    )
     p_plan.set_defaults(func=_cmd_plan)
 
     p_status = sub.add_parser(

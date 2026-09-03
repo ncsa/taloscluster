@@ -35,12 +35,25 @@ def test_init_provider_flags_are_mutually_exclusive(tmp_path):
 def test_converge_aliases_use_the_same_handler(monkeypatch, tmp_path, command):
     seen = {}
 
-    def converge(root, assume_yes=False):
+    def converge(root, assume_yes=False, reboot=False):
         seen["root"] = root
         seen["assume_yes"] = assume_yes
+        seen["reboot"] = reboot
 
     monkeypatch.setattr(cli._converge, "converge", converge)
     monkeypatch.setattr(cli, "set_dry_run", lambda enabled: seen.update(dry_run=enabled))
 
     assert cli.main([command, "-C", str(tmp_path), "--dry-run", "--yes"]) == 0
-    assert seen == {"root": tmp_path, "assume_yes": True, "dry_run": True}
+    assert seen == {"root": tmp_path, "assume_yes": True, "dry_run": True, "reboot": False}
+
+
+@pytest.mark.parametrize("command", ["converge", "plan"])
+def test_reboot_flag_reaches_converge(monkeypatch, tmp_path, command):
+    seen = {}
+    monkeypatch.setattr(
+        cli._converge, "converge",
+        lambda root, assume_yes=False, reboot=False: seen.update(reboot=reboot),
+    )
+    monkeypatch.setattr(cli, "set_dry_run", lambda enabled: None)
+    assert cli.main([command, "-C", str(tmp_path), "--reboot"]) == 0
+    assert seen == {"reboot": True}

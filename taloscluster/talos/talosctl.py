@@ -10,14 +10,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
-from ..output import action, dry_run, warn
+from ..output import action, dry_run, info, warn
 
 BIN = "talosctl"
 
@@ -148,7 +150,9 @@ def _member_version(operating_system: str) -> str:
     return ""
 
 
-def members(talosconfig: Path, endpoint: str, exclude_vip: str = "") -> dict[str, Member]:
+def members(
+    talosconfig: Path, endpoint: str, exclude_vip: str | Iterable[str] = ""
+) -> dict[str, Member]:
     """hostname -> Member, from talos cluster discovery (`get members`).
 
     Covers nodes that booted and joined the talos cluster but never became
@@ -156,8 +160,9 @@ def members(talosconfig: Path, endpoint: str, exclude_vip: str = "") -> dict[str
     reports several addresses; we prefer its tailscale (100.64/10) one because
     it is unique per node -- among the private ips, controlplane-01 also
     carries the shared kube-api VIP, which would target the wrong node. Without
-    tailscale, pass the VIP as ``exclude_vip`` so the owner's next (real)
-    address is used instead of the floating one.
+    tailscale, pass the VIP (or every VIP the cluster may still carry, during
+    an endpoint move) as ``exclude_vip`` so the owner's next (real) address is
+    used instead of the floating one.
 
     Discovery also reports each member's talos version, so ONE call answers
     "which nodes exist, where, and on what version" -- no per-node
@@ -171,6 +176,7 @@ def members(talosconfig: Path, endpoint: str, exclude_vip: str = "") -> dict[str
     )
     if rc != 0:
         return {}
+    excluded = {exclude_vip} if isinstance(exclude_vip, str) else set(exclude_vip)
     found: dict[str, Member] = {}
     decoder = json.JSONDecoder()
     idx, n = 0, len(out)
@@ -186,7 +192,7 @@ def members(talosconfig: Path, endpoint: str, exclude_vip: str = "") -> dict[str
         if not host or not addrs:
             continue
         tailscale = [a for a in addrs if a.startswith("100.64.")]
-        stable = [a for a in addrs if a != exclude_vip]
+        stable = [a for a in addrs if a not in excluded]
         found[host] = Member(
             address=tailscale[0] if tailscale else (stable[0] if stable else addrs[0]),
             version=_member_version(str(spec.get("operatingSystem") or "")),
@@ -195,7 +201,7 @@ def members(talosconfig: Path, endpoint: str, exclude_vip: str = "") -> dict[str
 
 
 def member_addresses(
-    talosconfig: Path, endpoint: str, exclude_vip: str = ""
+    talosconfig: Path, endpoint: str, exclude_vip: str | Iterable[str] = ""
 ) -> dict[str, str]:
     """hostname -> address only, for callers that do not care about versions."""
     return {
@@ -225,22 +231,56 @@ def apply_config(talosconfig: Path, endpoint: str, node: str, config: str,
     mode=auto lets talos decide: config changes it can apply live are applied
     live, and only ones that genuinely need a restart reboot the node. Applying
     an unchanged config is a no-op, which keeps converge idempotent.
+
+    Under `plan` this still talks to the node, with `--dry-run`: talos then
+    reports how the change would be applied and prints the config diff without
+    changing anything, so `plan` shows what `converge` would push.
     """
     action(f"talosctl apply-config {node} (mode={mode})")
-    if dry_run():
-        return
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
         fh.write(config)
         path = fh.name
     try:
         rc, out, err = _run_nocheck(
             _talos(talosconfig, endpoint, node, "apply-config",
-                   "--mode", mode, "--file", path)
+                   "--mode", mode, "--file", path,
+                   *(["--dry-run"] if dry_run() else []))
         )
     finally:
         os.unlink(path)
     if rc != 0:
+        if dry_run():
+            warn(f"could not diff machine config on {node}: {(err or out).strip()}")
+            return
         raise RuntimeError(f"apply-config on {node} failed: {(err or out).strip()}")
+    if dry_run():
+        # talosctl writes the summary and diff to stderr
+        for line in _dry_run_summary(out + "\n" + err):
+            info(f"    {line}")
+
+
+def _dry_run_summary(out: str) -> list[str]:
+    """The lines worth showing from `talosctl apply-config --dry-run`.
+
+    talos prints a "Dry run summary:" header, how the change would be applied,
+    and either "No changes." or "Config diff:" followed by a unified diff.
+    """
+    lines = [line.rstrip() for line in out.splitlines()]
+    lines = [line for line in lines if line and line != "Dry run summary:"]
+    if any(line.startswith("No changes") for line in lines):
+        return ["no changes"]
+    return [_redact(line) for line in lines]
+
+
+_SECRET_KEY = re.compile(r"^([-+ ]?\s*)([A-Za-z]*(?:key|secret|token)[A-Za-z]*):\s*\S.*$", re.I)
+
+
+def _redact(line: str) -> str:
+    """Hide secret values in a machine-config diff line (keys, tokens, secrets)."""
+    match = _SECRET_KEY.match(line)
+    if match is None:
+        return line
+    return f"{match.group(1)}{match.group(2)}: <redacted>"
 
 
 def bootstrap(talosconfig: Path, endpoint: str, node: str) -> None:

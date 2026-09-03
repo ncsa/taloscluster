@@ -23,6 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 import yaml
@@ -31,7 +32,6 @@ from . import plugins, versions
 from .config import (
     Config,
     Machine,
-    ProxmoxConfig,
     load_config,
     load_secrets,
     validate_warnings,
@@ -52,7 +52,7 @@ from .state import State
 from .talos import factory, machineconfig, talosctl
 
 
-def converge(root: Path, assume_yes: bool = False) -> int:
+def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     """Make the cluster match cluster.yaml. Returns a non-zero exit code only
     when an installed plugin failed -- the cluster itself is already built by
     then, so a downstream registration failure must not look like a converge
@@ -107,23 +107,16 @@ def converge(root: Path, assume_yes: bool = False) -> int:
         f"vip {refs.kubernetes.vip or '(pending)'}"
     )
 
+    moving_from = _endpoint_move(kubeconfig_path, cfg.name, refs.kubernetes.advertised_address)
+
     # write the client talosconfig now that the endpoint (fip) is known. cp-01's
     # tailscale name goes in as the context endpoint so a hand-typed `talosctl`
     # needs no -e; -n stays mandatory. taloscluster itself still passes both.
     if state.secrets_exist() and refs.kubernetes.advertised_address and not dry_run():
-        talosconfig_path.write_text(
-            talosctl.gen_talosconfig(
-                cfg.name, refs.kubernetes.advertised_address, secrets_path,
-                # without tailscale the MagicDNS name never resolves; the VIP
-                # answers talos on whichever control plane owns it
-                client_endpoint=(
-                    f"{cfg.name}-controlplane-01"
-                    if cfg.tailscale_enabled
-                    else refs.kubernetes.vip
-                ),
-            )
+        _write_talosconfig(
+            talosconfig_path, cfg, refs, secrets_path,
+            _talos_endpoint(cfg, refs, inv, talosconfig_path, required=False),
         )
-        os.chmod(talosconfig_path, 0o600)
 
     # ---- machine configs (need the fip/vip from the network phase) -------
     default_tags = backend.default_node_tags()
@@ -160,7 +153,16 @@ def converge(root: Path, assume_yes: bool = False) -> int:
     # Before the upgrade phase on purpose: cluster.extraManifests lives in the
     # machine config, and `talosctl upgrade-k8s` refuses to finish until every
     # bootstrap manifest reconciles -- so a manifest fix has to land first.
-    if up and configs:
+    if up and configs and moving_from and not dry_run():
+        # control planes first, settled one at a time; then a kubeconfig for the
+        # new endpoint -- the old one dies with the old VIP, and the worker pass
+        # needs kubectl to see the nodes
+        _apply_configs(cfg, machines, inv, refs, configs, talosconfig_path, kubeconfig_path,
+                       settle=True, roles=("controlplane",))
+        _finish_endpoint_move(cfg, refs, inv, talosconfig_path, kubeconfig_path)
+        _apply_configs(cfg, machines, inv, refs, configs, talosconfig_path, kubeconfig_path,
+                       roles=("worker",))
+    elif up and configs:
         _apply_configs(cfg, machines, inv, refs, configs, talosconfig_path, kubeconfig_path)
 
     # ---- 7. UPGRADE (before adding new nodes) ----------------------------
@@ -169,10 +171,23 @@ def converge(root: Path, assume_yes: bool = False) -> int:
 
     # ---- 7. COMPUTE (create / scale up) ----------------------------------
     log("compute")
+    needs_restart: set[str] = set()
     if configs or dry_run():
-        backend.reconcile_machines(machines, inv, boot_image, configs)
+        needs_restart = backend.reconcile_machines(machines, inv, boot_image, configs) or set()
     else:
         warn("skipping compute: no machine configs (network fip not ready)")
+
+    # ---- 7b. REBOOT (opt-in) for changes the provider applied but the
+    # running machine has not picked up (cores, memory, a grown disk)
+    if needs_restart and reboot and up:
+        _reboot_nodes(backend, cfg, machines, inv, refs, needs_restart,
+                      talosconfig_path, kubeconfig_path)
+    elif needs_restart:
+        warn(
+            f"{len(needs_restart)} node(s) need a restart to pick up their new sizing: "
+            + ", ".join(sorted(needs_restart))
+            + " -- rerun with `converge --reboot` to reboot them one at a time"
+        )
 
     # talosctl control operations go through cp-01's tailscale name (this host
     # must be on the tailnet anyway), which is always reachable -- unlike the
@@ -183,6 +198,10 @@ def converge(root: Path, assume_yes: bool = False) -> int:
     cp1 = f"{cfg.name}-controlplane-01"
     if not cfg.tailscale_enabled and not dry_run():
         cp1 = _resolve_cp1_address(backend, cfg, refs) or cp1
+        # the talosconfig written above may predate cp-01's address (first
+        # run) or carry a stale DHCP lease; keep it pointing at the real node
+        if state.secrets_exist() and refs.kubernetes.advertised_address:
+            _write_talosconfig(talosconfig_path, cfg, refs, secrets_path, cp1)
 
     # ---- 8. BOOTSTRAP (if the cluster isn't up) --------------------------
     if not up and not dry_run():
@@ -212,7 +231,7 @@ def converge(root: Path, assume_yes: bool = False) -> int:
         print(f"kube api:   https://{refs.kubernetes.advertised_address}:6443")
         print(f"ingress ip: {refs.ingress.advertised_address} (reserved)")
         print(f"talosctl:   talosctl --talosconfig {talosconfig_path} "
-              f"-e {cp1} -n {refs.kubernetes.vip} <cmd>")
+              f"-e {cp1} -n {cp1} <cmd>")
         print(f"kubectl:    kubectl --kubeconfig {kubeconfig_path} get nodes")
         backend.finalize_machines(inv)
 
@@ -248,25 +267,157 @@ def _run_plugins(ctx: Context, hook: str, reverse: bool = False, **kw) -> int:
 # phases that need cross-resource reasoning
 # ---------------------------------------------------------------------------
 
-def _talos_endpoint(cfg: Config, refs: NetworkResult | None = None) -> str:
-    """The endpoint talosctl calls go through.
+def _recorded_endpoint(kubeconfig: Path, cluster: str) -> str:
+    """The kube-api host the running cluster was last converged to, or "".
 
-    With tailscale that is cp-01's MagicDNS name. Without it the name never
-    resolves, so use the API VIP instead -- apid answers on whichever control
-    plane currently owns it, and it is the one address guaranteed routable
-    from wherever the operator can use the cluster at all.
+    `talosctl kubeconfig` names its cluster entry after the Talos cluster and
+    points it at cluster.controlPlane.endpoint, so the kubeconfig converge
+    wrote is a provider-neutral record of the endpoint every node, certificate
+    and client is bound to.
     """
+    try:
+        doc = yaml.safe_load(kubeconfig.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return ""
+    for entry in doc.get("clusters") or []:
+        if not isinstance(entry, dict) or entry.get("name") != cluster:
+            continue
+        server = str((entry.get("cluster") or {}).get("server") or "")
+        return urlparse(server).hostname or ""
+    return ""
+
+
+def _reboot_nodes(backend: InfrastructureBackend, cfg: Config, machines: dict[str, Machine],
+                  inv: InfrastructureInventory, refs: NetworkResult, hosts: set[str],
+                  talosconfig: Path, kubeconfig: Path) -> None:
+    """Restart `hosts` one at a time, control planes first, and require the
+    cluster healthy again before the next -- so a sizing rollout never takes
+    two control planes down together.
+
+    The restart goes through the provider, not `talosctl reboot`: a reboot from
+    inside the guest keeps the same VM process, so provider-side sizing changes
+    (Proxmox pending cores/memory) would never apply. The provider's reboot is
+    still an ACPI shutdown that Talos handles gracefully.
+    """
+    log("reboot")
+    endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
+    discovered = talosctl.member_addresses(
+        talosconfig, endpoint, exclude_vip=_cluster_vips(cfg, refs, kubeconfig)
+    )
+    ordered = sorted(
+        (h for h in machines if h in hosts),
+        key=lambda h: 0 if machines[h].role == "controlplane" else 1,
+    )
+    for host in ordered:
+        address = resolve_node_address(host, discovered, inv, refs)
+        if not address:
+            warn(f"{host}: no address known, not rebooted")
+            continue
+        backend.restart_machine(host, inv)  # returns once the provider restarted it
+        if dry_run():
+            continue
+        _wait_reachable(talosconfig, address, address)
+        if not _health_or_kube_fallback(talosconfig, endpoint, refs.kubernetes.vip,
+                                        kubeconfig, timeout="10m"):
+            raise ReconcileError(f"cluster unhealthy after rebooting {host}; stopping the rollout")
+        info(f"{host} rebooted")
+
+
+def _cluster_vips(cfg: Config, refs: NetworkResult, kubeconfig: Path) -> set[str]:
+    """Every kube-api address a node may still carry: the desired VIP and,
+    during an endpoint move, the one the cluster was last converged to.
+    Discovery lists them among the owner's addresses; none of them is a node."""
+    return {refs.kubernetes.vip, _recorded_endpoint(kubeconfig, cfg.name)} - {""}
+
+
+def _endpoint_move(kubeconfig: Path, cluster: str, advertised: str) -> str:
+    """The old kube-api endpoint when cluster.yaml moves it, else "".
+
+    A move re-applies every node's cluster endpoint, both certificate SAN sets
+    and the control planes' Layer 2 VIP through the machine config (control
+    planes first, each settled before the next), then regenerates the
+    kubeconfig from a control plane -- see `_finish_endpoint_move`. talosctl
+    itself never depends on the VIP, so the move cannot lock us out.
+    """
+    previous = _recorded_endpoint(kubeconfig, cluster)
+    if previous and advertised and previous != advertised:
+        action(f"move kube-api endpoint {previous} -> {advertised}")
+        return previous
+    return ""
+
+
+def _finish_endpoint_move(cfg: Config, refs: NetworkResult, inv: InfrastructureInventory,
+                          talosconfig: Path, kubeconfig: Path, timeout_s: int = 300) -> None:
+    """After the machine configs carry the new endpoint: new kubeconfig, and
+    wait until the kube-api answers on the new address."""
+    cp1 = _talos_endpoint(cfg, refs, inv, talosconfig)
+    _wait_reachable(talosconfig, cp1, cp1)
+    talosctl.kubeconfig(talosconfig, cp1, cp1, kubeconfig)
+    new = refs.kubernetes.advertised_address
+    info(f"waiting for kube-api on {new} (up to {timeout_s // 60}m)...")
+    deadline = time.monotonic() + timeout_s
+    while not kubectl.cluster_up(kubeconfig):
+        if time.monotonic() >= deadline:
+            raise ReconcileError(
+                f"kube-api did not answer on {new} after the endpoint move; the nodes "
+                f"carry the new config -- check `talosctl -n <node> get addresses` for {new}"
+            )
+        time.sleep(10)
+    info(f"kube-api answers on {new}")
+
+
+def _write_talosconfig(path: Path, cfg: Config, refs: NetworkResult,
+                       secrets_path: Path, client_endpoint: str) -> None:
+    path.write_text(
+        talosctl.gen_talosconfig(
+            cfg.name, refs.kubernetes.advertised_address, secrets_path,
+            client_endpoint=client_endpoint,
+        )
+    )
+    os.chmod(path, 0o600)
+
+
+def _talos_endpoint(cfg: Config, refs: NetworkResult | None = None,
+                    inv: InfrastructureInventory | None = None,
+                    talosconfig: Path | None = None, *, required: bool = True) -> str:
+    """The endpoint talosctl calls go through: always a real control plane.
+
+    With tailscale that is cp-01's MagicDNS name. Without it, cp-01's real
+    address: the managed-SDN static address, else what the provider inventory
+    (guest agent) reports, else the endpoint converge recorded in the
+    talosconfig on its last run. Never the kube-api VIP -- it belongs to
+    whichever node currently owns it, and a cluster.yaml edit could point it
+    at an address no node owns yet.
+    """
+    host = f"{cfg.name}-controlplane-01"
     # getattr: test fixtures and older plugins hand in duck-typed configs
     if getattr(cfg, "tailscale_enabled", True):
-        return f"{cfg.name}-controlplane-01"
-    if refs is not None and refs.kubernetes.vip:
-        return refs.kubernetes.vip
-    if isinstance(cfg.provider, ProxmoxConfig):
-        for section in ("external", "cluster"):
-            value = cfg.provider.network.get(section)
-            if isinstance(value, dict) and value.get("kubeapi_vip"):
-                return str(value["kubeapi_vip"])
-    return f"{cfg.name}-controlplane-01"
+        return host
+    address = (
+        (refs.machine_address(host) if refs is not None else "")
+        or (inv.machine_address(host) if inv is not None else "")
+        or (_talosconfig_endpoint(talosconfig, cfg.name) if talosconfig is not None else "")
+    )
+    if address:
+        return address
+    if required:
+        raise ReconcileError(
+            f"no address known for {host}: talosctl needs a real control-plane "
+            "address without tailscale (the provider has not reported one and no "
+            "talosconfig from an earlier converge records it)"
+        )
+    return host
+
+
+def _talosconfig_endpoint(talosconfig: Path, cluster: str) -> str:
+    """The context endpoint converge last wrote into the talosconfig, or ""."""
+    try:
+        doc = yaml.safe_load(talosconfig.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return ""
+    ctx = (doc.get("contexts") or {}).get(doc.get("context") or cluster) or {}
+    endpoints = ctx.get("endpoints") or []
+    return str(endpoints[0]) if endpoints else ""
 
 
 def _resolve_cp1_address(backend, cfg, refs, timeout_s: int = 600,
@@ -442,14 +593,14 @@ def _health_or_kube_fallback(talosconfig: Path, endpoint: str, vip: str,
                              kubeconfig: Path, timeout: str = "5m") -> bool:
     """talosctl health, falling back to kube-api readiness on failure.
 
-    Retried once, because the check is aimed at the VIP and the VIP relocates
-    to another control plane whenever one reboots -- so a rolling upgrade tends
-    to reset the health check's own connection:
+    The talos side of the check targets the endpoint control plane itself; the
+    `vip` only names the kube-api URL the server-side check must probe. Retried
+    once, because a rolling upgrade reboots the control plane the check runs
+    on and resets its connection:
 
-        healthcheck error: ... read tcp ...->VIP:50000: connection reset by peer
+        healthcheck error: ... read tcp ...:50000: connection reset by peer
 
-    That is the failover working, not a sick cluster; by the retry the VIP has
-    settled on its new owner.
+    That is the reboot, not a sick cluster; by the retry the node is back.
 
     Returns True if either signal says the cluster is usable.
     """
@@ -457,7 +608,9 @@ def _health_or_kube_fallback(talosconfig: Path, endpoint: str, vip: str,
         try:
             # k8s_endpoint=vip: the server-side check runs on the node, which cannot
             # reach its own floating ip (no NAT hairpin) -- see talosctl.health()
-            talosctl.health(talosconfig, endpoint, vip, timeout=timeout, k8s_endpoint=vip)
+            talosctl.health(
+                talosconfig, endpoint, endpoint, timeout=timeout, k8s_endpoint=vip
+            )
             return True
         except subprocess.CalledProcessError:
             if attempt == 1:
@@ -487,9 +640,9 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
                 refs: NetworkResult, talosconfig: Path,
                 kubeconfig: Path, assume_yes: bool = False) -> None:
     log("scale down")
-    # talosctl endpoint: cp-01's tailscale name (or the VIP without tailscale);
-    # the node is always a numeric private ip apid can route to.
-    endpoint = _talos_endpoint(cfg, refs)
+    # talosctl endpoint: cp-01's tailscale name (or its real address without
+    # tailscale); the node is always a numeric private ip apid can route to.
+    endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
     desired = set(machines)
     live = kubectl.node_names(kubeconfig)
     removals = [node for node in live if node not in desired]
@@ -515,7 +668,9 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
 
     removed = 0
     discovered = (
-        talosctl.member_addresses(talosconfig, endpoint, exclude_vip=refs.kubernetes.vip)
+        talosctl.member_addresses(
+            talosconfig, endpoint, exclude_vip=_cluster_vips(cfg, refs, kubeconfig)
+        )
         if talosconfig.is_file()
         else {}
     )
@@ -552,8 +707,13 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
 def _apply_configs(cfg: Config, machines: dict[str, Machine],
                    inv: InfrastructureInventory, refs: NetworkResult,
                    configs: dict[str, str],
-                   talosconfig: Path, kubeconfig: Path) -> None:
+                   talosconfig: Path, kubeconfig: Path, settle: bool = False,
+                   roles: tuple[str, ...] = ("controlplane", "worker")) -> None:
     """Push the freshly generated machine config to every existing node.
+
+    `settle` waits for each control plane's apid to answer again before the
+    next one is touched, for changes (an endpoint move) where a reboot of two
+    control planes at once would cost etcd quorum.
 
     Closes the gap where editing anything in the machine config (extra
     manifests, kubelet args, network) only reached NEW nodes, so a running
@@ -564,20 +724,26 @@ def _apply_configs(cfg: Config, machines: dict[str, Machine],
     only for a change that genuinely requires it.
     """
     log("machine config")
-    endpoint = _talos_endpoint(cfg, refs)
-    discovered = talosctl.member_addresses(talosconfig, endpoint, exclude_vip=refs.kubernetes.vip)
+    endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
+    discovered = talosctl.member_addresses(
+        talosconfig, endpoint, exclude_vip=_cluster_vips(cfg, refs, kubeconfig)
+    )
     ordered = sorted(machines.items(), key=lambda kv: 0 if kv[1].role == "controlplane" else 1)
     applied = 0
     for host, _m in ordered:
-        if host not in inv.machines or host not in configs:
+        if _m.role not in roles or host not in inv.machines or host not in configs:
             continue
         if not kubectl.node_exists(kubeconfig, host):
+            warn(f"{host}: not visible through {kubeconfig.name}, config not applied")
             continue
         address = resolve_node_address(host, discovered, inv, refs)
         if not address:
             continue
         talosctl.apply_config(talosconfig, endpoint, address, configs[host])
         applied += 1
+        if settle and _m.role == "controlplane" and not dry_run():
+            time.sleep(5)  # let a reboot, if any, actually start
+            _wait_reachable(talosconfig, address, address)
     if not applied:
         info("no existing nodes to configure")
 
@@ -586,8 +752,10 @@ def _upgrade(cfg: Config, machines: dict[str, Machine], inv: InfrastructureInven
              refs: NetworkResult, installer_images: dict[tuple[str, ...], str],
              talosconfig: Path, kubeconfig: Path) -> None:
     log(f"talos version (want {cfg.talos_version})")
-    endpoint = _talos_endpoint(cfg, refs)
-    discovered = talosctl.member_addresses(talosconfig, endpoint, exclude_vip=refs.kubernetes.vip)
+    endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
+    discovered = talosctl.member_addresses(
+        talosconfig, endpoint, exclude_vip=_cluster_vips(cfg, refs, kubeconfig)
+    )
     # controlplanes first
     ordered = sorted(machines.items(), key=lambda kv: 0 if kv[1].role == "controlplane" else 1)
     for host, m in ordered:
@@ -755,7 +923,7 @@ def _running_versions(root: Path, cfg: Config) -> list[dict[str, Any]]:
     """
     talosconfig_path = root / "talosconfig"
     kubeconfig_path = root / "kubeconfig"
-    endpoint = _talos_endpoint(cfg)
+    endpoint = _talos_endpoint(cfg, talosconfig=talosconfig_path, required=False)
 
     up = kubectl.cluster_up(kubeconfig_path)
     kubelets = {
@@ -909,16 +1077,19 @@ def dashboard(root: Path, nodes: list[str] | None = None) -> None:
     talosconfig_path = root / "talosconfig"
     if not talosconfig_path.is_file():
         raise ReconcileError(f"missing {talosconfig_path} (run `taloscluster converge` first)")
-    # cp-01's tailscale name, the endpoint every other talos call here uses
-    endpoint = _talos_endpoint(cfg)
+    # cp-01's tailscale name or real address, the endpoint every talos call uses
+    endpoint = _talos_endpoint(cfg, talosconfig=talosconfig_path)
 
     if nodes:
         targets = {n: n for n in nodes}
     else:
         backend = backend_for(cfg, load_secrets(root))
         inv = backend.load_inventory()
-        vip = backend.current_network(inv).kubernetes.vip
-        members = talosctl.member_addresses(talosconfig_path, endpoint, exclude_vip=vip)
+        refs = backend.current_network(inv)
+        members = talosctl.member_addresses(
+            talosconfig_path, endpoint,
+            exclude_vip=_cluster_vips(cfg, refs, root / "kubeconfig"),
+        )
         hosts = sorted(set(inv.machines) | set(members))
         if not hosts:
             raise ReconcileError(f"no nodes found for cluster {cfg.name}")
@@ -951,7 +1122,7 @@ def dashboard(root: Path, nodes: list[str] | None = None) -> None:
             + (
                 "Is this machine on the tailnet?"
                 if cfg.tailscale_enabled
-                else "Can this machine reach the cluster network / API VIP?"
+                else "Can this machine reach the cluster network?"
             )
         )
     talosctl.dashboard(talosconfig_path, endpoint, up)

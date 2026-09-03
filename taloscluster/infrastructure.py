@@ -112,7 +112,15 @@ class InfrastructureBackend(Protocol):
         inventory: InfrastructureInventory,
         boot_artifact: str,
         configs: dict[str, str],
-    ) -> None: ...
+    ) -> set[str]:
+        """Create missing machines and reconcile existing ones; returns the names
+        of machines whose applied changes only take effect after a restart."""
+        ...
+
+    def restart_machine(self, name: str, inventory: InfrastructureInventory) -> None:
+        """Restart one machine through the provider so it picks up applied
+        sizing changes; returns once the provider reports it started again."""
+        ...
 
     def finalize_machines(self, inventory: InfrastructureInventory) -> None: ...
 

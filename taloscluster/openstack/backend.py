@@ -8,7 +8,7 @@ from openstack import exceptions as os_exceptions
 
 from .. import naming
 from ..config import Config, Machine, OpenStackConfig, OpenStackSecrets, Secrets
-from ..errors import ConfigError
+from ..errors import ConfigError, ReconcileError
 from ..infrastructure import (
     Endpoint,
     InfrastructureInventory,
@@ -126,7 +126,7 @@ class OpenStackBackend:
         inventory: InfrastructureInventory,
         boot_artifact: str,
         configs: dict[str, str],
-    ) -> None:
+    ) -> set[str]:
         compute.reconcile(
             self.conn,
             self.cfg,
@@ -135,9 +135,13 @@ class OpenStackBackend:
             boot_artifact,
             configs,
         )
+        return set()
 
     def delete_machine(self, name: str, inventory: InfrastructureInventory) -> None:
         compute.delete_node(self.conn, name, self._raw(inventory))
+
+    def restart_machine(self, name: str, inventory: InfrastructureInventory) -> None:
+        raise ReconcileError(f"restarting {name} is not supported on OpenStack")
 
     def finalize_machines(self, inventory: InfrastructureInventory) -> None:
         return None

@@ -639,6 +639,10 @@ def test_proxmox_vip_rejected_when_in_neither_section(make_config):
         ({"kubeapi_vip": "192.168.0.10"}, "external.kubeapi_vip.*inside external.cidr"),
         ({"ingress_pool": "203.0.113.50-203.0.113.10"}, "start must be <= end"),
         ({"ingress_pool": "203.0.113.50-999.999.999.999"}, "invalid addresses"),
+        (
+            {"kubeapi_vip": "203.0.113.30", "ingress_pool": "203.0.113.20-203.0.113.40"},
+            "kubeapi_vip must not be inside ingress_pool",
+        ),
     ],
 )
 def test_proxmox_external_section_rejects_invalid_fields(make_config, overrides, message):

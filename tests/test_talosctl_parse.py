@@ -165,3 +165,102 @@ def test_members_skips_the_shared_vip_when_excluded(monkeypatch, tmp_path):
     excluded = talosctl.members(tmp_path / "talosconfig", "ep", exclude_vip="141.142.36.79")
     assert plain["cp-01"].address == "141.142.36.79"
     assert excluded["cp-01"].address == "172.29.21.236"
+
+
+# ---- apply-config under plan ------------------------------------------------
+
+def test_plan_apply_config_runs_talosctl_dry_run_and_prints_the_diff(tmp_path, monkeypatch, capsys):
+    from taloscluster.output import set_dry_run
+
+    seen = []
+
+    def fake_run(args, timeout=None):
+        seen.append(args)
+        # talosctl prints the summary on stderr
+        return 0, "", (
+            "Dry run summary:\n"
+            "Applied configuration without a reboot (skipped in dry-run).\n"
+            "Config diff:\n\n"
+            "--- a\n+++ b\n@@ -1,2 +1,2 @@\n-  ntp: [a]\n+  ntp: [a, b]\n"
+        )
+
+    monkeypatch.setattr(talosctl, "_run_nocheck", fake_run)
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+
+    assert seen and "--dry-run" in seen[0]
+    out = capsys.readouterr().out
+    assert "[dry-run] talosctl apply-config 10.0.0.5" in out
+    assert "+  ntp: [a, b]" in out
+    assert "Dry run summary" not in out
+
+
+def test_plan_apply_config_reports_no_changes(tmp_path, monkeypatch, capsys):
+    from taloscluster.output import set_dry_run
+
+    monkeypatch.setattr(
+        talosctl, "_run_nocheck",
+        lambda args, timeout=None: (0, "", "Dry run summary:\nConfig diff:\n\nNo changes.\n"),
+    )
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+
+    assert "no changes" in capsys.readouterr().out
+
+
+def test_converge_apply_config_does_not_pass_dry_run(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        talosctl, "_run_nocheck",
+        lambda args, timeout=None: (seen.append(args), "", "")[1:] and (0, "", ""),
+    )
+    talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    assert seen and "--dry-run" not in seen[0]
+
+
+def test_plan_apply_config_failure_is_a_warning(tmp_path, monkeypatch, capsys):
+    from taloscluster.output import set_dry_run
+
+    monkeypatch.setattr(
+        talosctl, "_run_nocheck", lambda args, timeout=None: (1, "", "connection refused")
+    )
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+    assert "could not diff machine config on 10.0.0.5" in capsys.readouterr().err
+
+
+def test_plan_apply_config_redacts_secret_values(tmp_path, monkeypatch, capsys):
+    from taloscluster.output import set_dry_run
+
+    diff = (
+        "Dry run summary:\nConfig diff:\n--- a\n+++ b\n"
+        "         key: LS0tLS1CRUdJTiBFRDI1NTE5\n"
+        "     secret: 1kOcNXNRho\n"
+        "-    token: abc.def\n"
+        "+    token: ghi.jkl\n"
+        "     secretboxEncryptionSecret: xyz\n"
+        "         crt: LS0tLS1CRUdJTiBDRVJU\n"
+        "-        endpoint: https://1.2.3.4:6443\n"
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (0, "", diff))
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+    out = capsys.readouterr().out
+    for leaked in ("LS0tLS1CRUdJTiBFRDI1NTE5", "1kOcNXNRho", "abc.def", "ghi.jkl", "xyz"):
+        assert leaked not in out
+    assert "key: <redacted>" in out
+    assert "-    token: <redacted>" in out
+    assert "crt: LS0tLS1CRUdJTiBDRVJU" in out  # certificates are public
+    assert "-        endpoint: https://1.2.3.4:6443" in out
