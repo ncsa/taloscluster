@@ -13,9 +13,14 @@ cluster.yaml
 /proxmox/
 /.claude/
 
+# plans
+proxmox.md
+proxmox-impl.md
+
 # local cluster bootstrap manifests, not part of the tool
 install.sh
 namespaces.yaml
 metallb-pool.yaml
 metallb-values.yaml
 traefik-values.yaml
+speedtest.yaml

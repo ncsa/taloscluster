@@ -5,8 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from openstack import exceptions
 
+from openstack import exceptions
 from taloscluster.openstack import network, security
 
 

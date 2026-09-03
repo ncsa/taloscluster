@@ -18,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from . import naming
 from .errors import ConfigError
 from .naming import BASE_EXTENSIONS
 
@@ -81,6 +82,56 @@ class ProxmoxConfig:
     nodes: tuple[str, ...] = ()
     tls_verify: bool | str = True
     network: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProxmoxSdn:
+    """Resolved managed-SDN settings (EVPN zone + VNet + subnet).
+
+    Every cluster.yaml field is optional; this carries the derived defaults.
+    Empty `exit_nodes` means every online cluster node, resolved at reconcile
+    time, and an empty `primary_exit_node` means the first resolved exit node.
+    """
+
+    name: str = ""  # the SDN zone/VNet id; defaults to the cluster name
+    zone: str = "evpn"
+    controller: str = "evpnctl"
+    asn: int = 65000
+    vrf_tag: int = 0
+    tag: int = 0
+    exit_nodes: tuple[str, ...] = ()
+    primary_exit_node: str = ""
+    mtu: int | None = None
+    nodes: tuple[str, ...] = ()
+
+
+def proxmox_sdn(cluster: str, provider: ProxmoxConfig) -> ProxmoxSdn | None:
+    """The managed-SDN settings with defaults applied, or None when not opted in."""
+    cluster_network = provider.network.get("cluster")
+    if not isinstance(cluster_network, dict) or "sdn" not in cluster_network:
+        return None
+    raw = cluster_network.get("sdn") or {}
+    vrf_tag = int(raw["vrf_tag"]) if raw.get("vrf_tag") is not None else naming.sdn_vni(cluster)
+    tag = int(raw["tag"]) if raw.get("tag") is not None else vrf_tag + 1
+    nodes = tuple(str(node) for node in raw.get("nodes") or ())
+    exit_nodes = tuple(
+        str(node) for node in raw.get("exit_nodes") or nodes or provider.nodes
+    )
+    primary = str(
+        raw.get("primary_exit_node") or (exit_nodes[0] if exit_nodes else "")
+    )
+    return ProxmoxSdn(
+        name=str(raw.get("name") or cluster),
+        zone=str(raw.get("zone") or "evpn"),
+        controller=str(raw.get("controller") or "evpnctl"),
+        asn=int(raw["asn"]) if raw.get("asn") is not None else 65000,
+        vrf_tag=vrf_tag,
+        tag=tag,
+        exit_nodes=exit_nodes,
+        primary_exit_node=primary,
+        mtu=int(raw["mtu"]) if raw.get("mtu") is not None else None,
+        nodes=nodes,
+    )
 
 
 ProviderConfig = OpenStackConfig | ProxmoxConfig
@@ -162,6 +213,9 @@ class Config:
     security: dict[str, SecurityRule]
 
     login_server: str | None           # headscale/tailscale login server
+    # a `tailscale:` section in cluster.yaml opts the installed system into the
+    # tailscale extension; the shared boot ISO always carries it either way
+    tailscale_enabled: bool = True
 
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -263,7 +317,12 @@ class Config:
         return {m.extensions for m in self.machines.values()}
 
     def _resolve_extensions(self, pool: dict[str, Any]) -> tuple[str, ...]:
+        # the boot ISO always bakes BASE_EXTENSIONS, but the installer image
+        # (machine.install.image) drops tailscale when no tailscale: section is
+        # configured, so the installed system does not carry a dormant service
         merged = set(BASE_EXTENSIONS)
+        if not self.tailscale_enabled:
+            merged.discard("siderolabs/tailscale")
         merged.update(self.talos_extensions)
         merged.update(pool.get("extensions", []) or [])
         return tuple(sorted(merged))
@@ -433,6 +492,7 @@ def load_config(root: Path) -> Config:
                          f"{where}: network.ntp"),
         security=_security_rules(security, where),
         login_server=tailscale.get("login_server"),
+        tailscale_enabled="tailscale" in d,
         raw=d,
     )
     _validate(cfg)
@@ -600,6 +660,115 @@ def _validate_proxmox_external(
             )
 
 
+def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:
+    """Validate proxmox.network.cluster.sdn (managed EVPN) and its derived layout."""
+    where = "cluster.yaml: proxmox.network.cluster.sdn"
+    sdn_map = _mapping(raw, where)
+    provider = cfg.provider
+    assert isinstance(provider, ProxmoxConfig)
+
+    sdn_name = sdn_map.get("name")
+    if sdn_name is not None and (not isinstance(sdn_name, str) or not sdn_name.strip()):
+        raise ConfigError(f"{where}.name must be a non-empty string")
+    effective_name = str(sdn_name or cfg.name)
+    if not naming.SDN_ID_RE.fullmatch(effective_name):
+        raise ConfigError(
+            f"cluster.yaml: {effective_name!r} cannot be used as the SDN zone/VNet "
+            "id: it must be 2-8 characters, start with a letter, and contain no "
+            "hyphens (set proxmox.network.cluster.sdn.name to override the "
+            "cluster-name default)"
+        )
+    zone = sdn_map.get("zone")
+    if zone is not None and zone != "evpn":
+        raise ConfigError(
+            f"{where}.zone only supports 'evpn' (a plain VXLAN zone has no gateway, "
+            "SNAT, or DHCP; VLAN and simple zones are deferred)"
+        )
+    controller = sdn_map.get("controller")
+    if controller is not None and (not isinstance(controller, str) or not controller.strip()):
+        raise ConfigError(f"{where}.controller must be a non-empty string")
+    asn = sdn_map.get("asn")
+    if asn is not None and not 0 <= _int(asn, "asn", where) < 2**32:
+        raise ConfigError(f"{where}.asn must be 0-4294967295")
+    for field_name in ("vrf_tag", "tag"):
+        value = sdn_map.get(field_name)
+        if value is not None and not (
+            naming.SDN_VNI_MIN <= _int(value, field_name, where) <= naming.SDN_VNI_MAX
+        ):
+            raise ConfigError(f"{where}.{field_name} must be 1-16777215")
+    mtu = sdn_map.get("mtu")
+    if mtu is not None and _int(mtu, "mtu", where) <= 0:
+        raise ConfigError(f"{where}.mtu must be greater than zero")
+    nodes = _string_list(sdn_map.get("nodes"), f"{where}.nodes")
+    exit_nodes = _string_list(sdn_map.get("exit_nodes"), f"{where}.exit_nodes")
+    primary = sdn_map.get("primary_exit_node")
+    if primary is not None and (not isinstance(primary, str) or not primary.strip()):
+        raise ConfigError(f"{where}.primary_exit_node must be a non-empty string")
+
+    resolved = proxmox_sdn(cfg.name, provider)
+    assert resolved is not None
+    if not naming.SDN_VNI_MIN <= resolved.tag <= naming.SDN_VNI_MAX:
+        raise ConfigError(
+            f"{where}: the default tag (vrf_tag + 1 = {resolved.tag}) is outside "
+            "1-16777215; set an explicit tag"
+        )
+    if resolved.tag == resolved.vrf_tag:
+        raise ConfigError(f"{where}.tag must differ from vrf_tag")
+    if nodes:
+        outside = sorted(set(exit_nodes) - set(nodes))
+        if outside:
+            raise ConfigError(
+                f"{where}.exit_nodes must be members of sdn.nodes: " + ", ".join(outside)
+            )
+        # every compute node needs the VNet bridge, so placement must stay
+        # inside the zone -- not the other way around
+        unplaceable = sorted(set(provider.nodes) - set(nodes)) if provider.nodes else []
+        if unplaceable:
+            raise ConfigError(
+                f"{where}.nodes must include every proxmox.nodes entry "
+                "(VMs placed outside the zone have no bridge): " + ", ".join(unplaceable)
+            )
+    if resolved.exit_nodes and resolved.primary_exit_node not in resolved.exit_nodes:
+        raise ConfigError(f"{where}.primary_exit_node must be one of the exit nodes")
+    if not cfg.dns:
+        raise ConfigError(
+            "cluster.yaml: network.dns is required with proxmox.network.cluster.sdn "
+            "(static addressing has no DHCP-provided DNS)"
+        )
+
+    # static address layout: node_address raises on overflow; check VIP collisions
+    gateway = naming.sdn_gateway(cfg.cidr)
+    worker_pools = tuple(cfg.workers)
+    addresses = {
+        m.name: naming.node_address(cfg.cidr, m.name, m.role, m.pool, worker_pools).ip
+        for m in cfg.machines.values()
+    }
+    if isinstance(cluster_vip, str):
+        try:
+            vip = ipaddress.ip_address(cluster_vip)
+        except ValueError:
+            return  # the main provider block reports invalid VIPs
+        if vip == gateway:
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.cluster.kubeapi_vip collides with the "
+                f"SDN anycast gateway {gateway}"
+            )
+        collision = next((name for name, addr in addresses.items() if addr == vip), None)
+        if collision:
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.cluster.kubeapi_vip collides with the "
+                f"static address of {collision}"
+            )
+        # the layout reserves slots for nodes a pool has not grown to yet;
+        # a VIP parked there collides the moment that node is added
+        if vip in naming.sdn_reserved(cfg.cidr, worker_pools):
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.cluster.kubeapi_vip sits inside the "
+                "SDN static address layout (controlplane range or a worker pool "
+                "block); scaling a pool would assign a node the VIP's address"
+            )
+
+
 def _validate(cfg: Config) -> None:
     """Reject invalid or ambiguous desired state before touching the cluster."""
     if not isinstance(cfg.name, str) or not _NAME_RE.fullmatch(cfg.name):
@@ -700,9 +869,19 @@ def _validate(cfg: Config) -> None:
             provider.network.get("cluster"), "cluster.yaml: proxmox.network.cluster"
         )
         links = [name for name in ("bridge", "vnet") if cluster_network.get(name)]
-        if len(links) != 1:
+        if "sdn" in cluster_network:
+            if links or cluster_network.get("vlan") is not None:
+                raise ConfigError(
+                    "cluster.yaml: proxmox.network.cluster.sdn is mutually exclusive "
+                    "with bridge, vnet, and vlan"
+                )
+            _validate_proxmox_sdn(
+                cluster_network.get("sdn"), cfg, cluster_network.get("kubeapi_vip")
+            )
+        elif len(links) != 1:
             raise ConfigError(
-                "cluster.yaml: proxmox.network.cluster requires exactly one bridge or vnet"
+                "cluster.yaml: proxmox.network.cluster requires exactly one of "
+                "bridge, vnet, or sdn"
             )
         vlan = cluster_network.get("vlan")
         if vlan is not None and not 1 <= _int(vlan, "vlan", "proxmox.network.cluster") <= 4094:

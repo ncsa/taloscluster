@@ -57,3 +57,17 @@ def test_parent_acl_path_applies_to_owned_vm_path():
     }
 
     validate_effective_permissions(grants, _requirements())
+
+
+def test_manage_sdn_adds_allocate_and_audit_on_sdn_root():
+    required = requirements(
+        iso_storage="isos",
+        cidata_storage="local",
+        vm_storage="vms",
+        nodes=["pve001"],
+        network_path="/sdn/vnets/v1234567",
+        manage_sdn=True,
+    )
+    by_path = {item.path: item.privileges for item in required}
+    assert by_path["/sdn"] == frozenset({"SDN.Allocate", "SDN.Audit"})
+    assert by_path["/sdn/vnets/v1234567"] == frozenset({"SDN.Use"})

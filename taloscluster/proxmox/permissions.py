@@ -43,6 +43,7 @@ def requirements(
     nodes: Iterable[str],
     network_path: str,
     vmids: Iterable[int] = (),
+    manage_sdn: bool = False,
 ) -> tuple[Requirement, ...]:
     required = [
         Requirement("/", frozenset({"Pool.Allocate"})),
@@ -52,6 +53,10 @@ def requirements(
         Requirement("/vms", VM_PRIVILEGES),
         Requirement(network_path, frozenset({"SDN.Use"})),
     ]
+    if manage_sdn:
+        # zone/vnet/subnet create+update+delete and the cluster-wide apply all
+        # check SDN.Allocate on /sdn (or below); SDN.Audit covers the reads
+        required.append(Requirement("/sdn", frozenset({"SDN.Allocate", "SDN.Audit"})))
     required.extend(
         Requirement(f"/nodes/{node}", frozenset({"Sys.Audit", "Sys.AccessNetwork"}))
         for node in sorted(set(nodes))

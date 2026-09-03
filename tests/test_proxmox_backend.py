@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from taloscluster import naming
 from taloscluster.config import ProxmoxSecrets, Secrets
 from taloscluster.errors import ReconcileError
 from taloscluster.infrastructure import Endpoint
@@ -58,13 +61,14 @@ def proxmox_cfg(make_config):
     )
 
 
-def _permissions():
+def _permissions(manage_sdn=False):
     required = requirements(
         iso_storage="isos",
         cidata_storage="local",
         vm_storage="vms",
         nodes=["pve001", "pve002"],
         network_path="/sdn/zones/localnetwork",
+        manage_sdn=manage_sdn,
     )
     privileges = set().union(*(item.privileges for item in required))
     return {"/": {privilege: 1 for privilege in privileges}}
@@ -1003,3 +1007,629 @@ def test_firewall_options_are_set_when_they_drift(make_config):
         if method == "PUT" and path.endswith("/firewall/options")
     )
     assert put["policy_in"] == "DROP"
+
+
+# ---------------------------------------------------------------------------
+# managed SDN (EVPN)
+# ---------------------------------------------------------------------------
+
+# SDN ids default to the cluster name; "testcluster" exceeds the 8-char limit
+SDN_CLUSTER = "testc"
+ZONE_ID = SDN_CLUSTER
+VNET_ID = SDN_CLUSTER
+SDN_ALIAS = naming.sdn_alias(SDN_CLUSTER)
+
+
+@pytest.fixture
+def sdn_cfg(make_config):
+    return make_config(
+        {
+            "name": SDN_CLUSTER,
+            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "nodes": ["pve001", "pve002"],
+                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.9"}},
+            },
+        },
+        remove=("openstack",),
+    )
+
+
+def _sdn_data():
+    base = _data(permissions=_permissions(manage_sdn=True))
+    # rebase the canonical inventory onto the short SDN cluster name
+    data = json.loads(json.dumps(base).replace("testcluster", SDN_CLUSTER))
+    data["cluster/sdn/zones"] = []
+    data["cluster/sdn/vnets"] = []
+    data["cluster/sdn/controllers"] = []
+    data[f"cluster/sdn/vnets/{VNET_ID}/subnets"] = []
+    data["cluster/status"] = [
+        {"type": "node", "name": "pve001", "ip": "10.10.0.1"},
+        {"type": "node", "name": "pve002", "ip": "10.10.0.2"},
+    ]
+    data["nodes/pve001/network"] = [{"iface": VNET_ID}]
+    data["nodes/pve002/network"] = [{"iface": VNET_ID}]
+    return data
+
+
+def _sdn_converged_data(sdn):
+    """Inventory echoing our applied objects, with Proxmox-style defaults."""
+    data = _sdn_data()
+    data["cluster/sdn/controllers"] = [
+        {"controller": "evpnctl", "type": "evpn", "asn": 65000, "peers": "10.10.0.1,10.10.0.2"}
+    ]
+    data["cluster/sdn/zones"] = [
+        {
+            "zone": ZONE_ID,
+            "type": "evpn",
+            "controller": "evpnctl",
+            "vrf-vxlan": sdn.vrf_tag,
+            # node lists echo in arbitrary order, booleans echo as ints,
+            # unconfigured fields echo their effective defaults
+            "exitnodes": "pve002,pve001",
+            "exitnodes-primary": "pve001",
+            "advertise-subnets": 1,
+            "disable-arp-nd-suppression": 1,
+            "mtu": 1450,
+            "ipam": "pve",
+        }
+    ]
+    data["cluster/sdn/vnets"] = [
+        {"vnet": VNET_ID, "zone": ZONE_ID, "tag": sdn.tag, "alias": SDN_ALIAS}
+    ]
+    data[f"cluster/sdn/vnets/{VNET_ID}/subnets"] = [
+        {
+            "subnet": f"{ZONE_ID}-192.168.0.0-21",
+            "cidr": "192.168.0.0/21",
+            "gateway": "192.168.0.1",
+            "snat": 1,
+        }
+    ]
+    return data
+
+
+def test_sdn_first_converge_stages_in_dependency_order_then_applies(sdn_cfg):
+    client = FakeClient(_sdn_data())
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert [(method, path) for method, path, _payload in client.mutations] == [
+        ("POST", "cluster/sdn/controllers"),
+        ("POST", "cluster/sdn/zones"),
+        ("POST", "cluster/sdn/vnets"),
+        ("POST", f"cluster/sdn/vnets/{VNET_ID}/subnets"),
+        ("PUT", "cluster/sdn"),
+    ]
+    controller = client.mutations[0][2]
+    assert controller == {
+        "controller": "evpnctl",
+        "type": "evpn",
+        "asn": 65000,
+        "peers": "10.10.0.1,10.10.0.2",
+    }
+    zone = client.mutations[1][2]
+    assert zone["zone"] == ZONE_ID and zone["type"] == "evpn"
+    assert zone["controller"] == "evpnctl"
+    assert zone["vrf-vxlan"] == backend.sdn.vrf_tag
+    assert zone["exitnodes"] == "pve001,pve002"
+    assert zone["exitnodes-primary"] == "pve001"  # SNAT needs a primary
+    assert zone["advertise-subnets"] == 1
+    assert zone["disable-arp-nd-suppression"] == 1
+    vnet = client.mutations[2][2]
+    assert vnet == {
+        "vnet": VNET_ID,
+        "zone": ZONE_ID,
+        "tag": backend.sdn.tag,
+        "alias": SDN_ALIAS,
+    }
+    subnet = client.mutations[3][2]
+    assert subnet == {
+        "subnet": "192.168.0.0/21",
+        "type": "subnet",
+        "gateway": "192.168.0.1",
+        "snat": 1,
+    }
+
+
+def test_sdn_second_converge_makes_no_mutations(sdn_cfg):
+    client = FakeClient(_sdn_converged_data(_backend(sdn_cfg, FakeClient({})).sdn))
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert client.mutations == []
+
+
+def test_sdn_plan_makes_only_reads(sdn_cfg, capsys):
+    client = FakeClient(_sdn_data())
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+    set_dry_run(True)
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    output = capsys.readouterr().out
+    assert f"[dry-run] create SDN zone {ZONE_ID}" in output
+    assert f"[dry-run] create SDN vnet {VNET_ID}" in output
+    assert "[dry-run] apply SDN configuration" in output
+    assert all(method == "GET" for method, _path in client.calls)
+
+
+def test_sdn_net0_attaches_to_derived_vnet(sdn_cfg):
+    backend = _backend(sdn_cfg, FakeClient(_sdn_data()))
+    assert backend.cluster_link == VNET_ID
+
+
+def test_sdn_current_network_resolves_static_addresses_without_guest_agent(sdn_cfg):
+    backend = _backend(sdn_cfg, FakeClient(_sdn_data()))
+    inventory = backend.load_inventory()
+
+    network = backend.current_network(inventory)
+
+    assert network.kubernetes.vip == "192.168.0.9"
+    assert network.machine_address("testc-controlplane-01") == "192.168.0.11"
+    assert network.machine_address("testc-controlplane-02") == "192.168.0.12"
+
+
+def test_sdn_foreign_pending_changes_refuse_before_any_mutation(sdn_cfg):
+    data = _sdn_data()
+    data["cluster/sdn/zones"] = [{"zone": "otherz1", "type": "vlan", "state": "new"}]
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="unapplied Proxmox SDN changes"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert client.mutations == []
+
+
+def test_sdn_own_pending_changes_resume_with_a_single_apply(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    for key in ("cluster/sdn/zones", "cluster/sdn/vnets"):
+        data[key][0]["state"] = "new"
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert [(method, path) for method, path, _payload in client.mutations] == [
+        ("PUT", "cluster/sdn")
+    ]
+
+
+def test_sdn_refuses_zone_containing_foreign_vnet(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data["cluster/sdn/vnets"] = [
+        {"vnet": "other1", "zone": ZONE_ID, "tag": 999, "alias": "someone elses"}
+    ]
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="foreign VNets"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+    assert client.mutations == []
+
+
+def test_sdn_refuses_empty_zone_with_matching_id_but_foreign_settings(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data["cluster/sdn/zones"][0]["controller"] = "someone"
+    data["cluster/sdn/vnets"] = []
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="empty unowned SDN zone"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+    assert client.mutations == []
+
+
+def test_sdn_adopts_own_interrupted_empty_zone(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data["cluster/sdn/vnets"] = []
+    data[f"cluster/sdn/vnets/{VNET_ID}/subnets"] = []
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert [(method, path) for method, path, _payload in client.mutations] == [
+        ("POST", "cluster/sdn/vnets"),
+        ("POST", f"cluster/sdn/vnets/{VNET_ID}/subnets"),
+        ("PUT", "cluster/sdn"),
+    ]
+
+
+def test_sdn_refuses_vni_collision_with_foreign_zone(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_data()
+    data["cluster/sdn/zones"] = [
+        {"zone": "otherz1", "type": "evpn", "vrf-vxlan": backend_probe.sdn.vrf_tag}
+    ]
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="already used by zone"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+    assert client.mutations == []
+
+
+def test_sdn_existing_controller_is_used_untouched_with_asn_warning(sdn_cfg, capsys):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data["cluster/sdn/controllers"][0]["asn"] = 65001
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert client.mutations == []
+    assert "has ASN 65001" in capsys.readouterr().err
+
+
+def test_sdn_wrong_type_controller_is_an_error(sdn_cfg):
+    data = _sdn_data()
+    data["cluster/sdn/controllers"] = [{"controller": "evpnctl", "type": "bgp", "asn": 65000}]
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="not an EVPN controller"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+    assert client.mutations == []
+
+
+def test_sdn_reads_happen_only_after_permission_preflight(sdn_cfg):
+    client = FakeClient(_data(permissions=_permissions()))  # no SDN.Allocate/Audit
+
+    with pytest.raises(ReconcileError, match="missing required effective permissions"):
+        _backend(sdn_cfg, client).load_inventory()
+
+    paths = [path for _method, path in client.calls]
+    assert all(not path.startswith("cluster/sdn") for path in paths)
+    assert all(method == "GET" for method, _path in client.calls)
+
+
+def test_sdn_renumber_guard_refuses_to_reconfigure_a_running_node(sdn_cfg):
+    data = _sdn_converged_data(_backend(sdn_cfg, FakeClient({})).sdn)
+    data["nodes/pve001/qemu/800/agent/network-get-interfaces"] = {
+        "result": [
+            {"name": "eth0", "ip-addresses": [{"ip-address": "192.168.1.23"}]}
+        ]
+    }
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="static addresses"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    set_dry_run(True)
+    backend.reconcile_network(sdn_cfg.machines, inventory)  # plan only reports
+    assert client.mutations == []
+
+
+def test_sdn_destroy_removes_subnet_vnet_zone_and_applies_once(sdn_cfg):
+    data = _sdn_converged_data(_backend(sdn_cfg, FakeClient({})).sdn)
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.destroy_resources(inventory)
+
+    sdn_mutations = [
+        (method, path)
+        for method, path, _payload in client.mutations
+        if path.startswith("cluster/sdn")
+    ]
+    assert sdn_mutations == [
+        ("DELETE", f"cluster/sdn/vnets/{VNET_ID}/subnets/{ZONE_ID}-192.168.0.0-21"),
+        ("DELETE", f"cluster/sdn/vnets/{VNET_ID}"),
+        ("DELETE", f"cluster/sdn/zones/{ZONE_ID}"),
+        ("PUT", "cluster/sdn"),
+    ]
+    assert all(
+        "controllers" not in path for _method, path, _payload in client.mutations
+    )
+
+
+def test_sdn_destroy_keeps_zone_holding_a_foreign_vnet(sdn_cfg, capsys):
+    data = _sdn_converged_data(_backend(sdn_cfg, FakeClient({})).sdn)
+    data["cluster/sdn/vnets"].append(
+        {"vnet": "other1", "zone": ZONE_ID, "tag": 999, "alias": "someone elses"}
+    )
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.destroy_resources(inventory)
+
+    sdn_mutations = [
+        (method, path)
+        for method, path, _payload in client.mutations
+        if path.startswith("cluster/sdn")
+    ]
+    assert ("DELETE", f"cluster/sdn/zones/{ZONE_ID}") not in sdn_mutations
+    assert ("DELETE", f"cluster/sdn/vnets/{VNET_ID}") in sdn_mutations
+    assert f"leaving SDN zone {ZONE_ID}" in capsys.readouterr().err
+
+
+def test_sdn_destroy_summary_mentions_the_managed_network(sdn_cfg):
+    backend = _backend(sdn_cfg, FakeClient(_sdn_data()))
+    inventory = backend.load_inventory()
+    assert "managed SDN network" in backend.destroy_summary(inventory)
+
+
+def test_sdn_default_exit_nodes_include_offline_cluster_nodes(make_config):
+    cfg = make_config(
+        {
+            "name": SDN_CLUSTER,
+            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.9"}},
+            },
+        },
+        remove=("openstack",),
+    )
+    data = _sdn_data()
+    # an offline node must stay in the default exit-node set, or a down node
+    # would drift the zone on every converge and flip the SNAT primary
+    data["nodes"].append({"node": "pve003", "status": "offline"})
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(cfg.machines, inventory)
+
+    zone = next(
+        payload
+        for method, path, payload in client.mutations
+        if (method, path) == ("POST", "cluster/sdn/zones")
+    )
+    assert zone["exitnodes"] == "pve001,pve002,pve003"
+    assert zone["exitnodes-primary"] == "pve001"
+
+
+def test_sdn_foreign_pending_subnet_refuses(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data["cluster/sdn/vnets"].append(
+        {"vnet": "other1", "zone": "otherz1", "tag": 999, "alias": "someone elses"}
+    )
+    data["cluster/sdn/vnets/other1/subnets"] = [
+        {"subnet": "otherz1-10.9.0.0-24", "cidr": "10.9.0.0/24", "state": "new"}
+    ]
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="unapplied Proxmox SDN changes"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+    assert client.mutations == []
+
+
+def test_sdn_pending_subnet_resumes_with_a_single_apply(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data[f"cluster/sdn/vnets/{VNET_ID}/subnets"][0]["state"] = "new"
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert [(method, path) for method, path, _payload in client.mutations] == [
+        ("PUT", "cluster/sdn")
+    ]
+
+
+def test_sdn_pending_controller_resumes_with_a_single_apply(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data["cluster/sdn/controllers"][0]["state"] = "new"
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert [(method, path) for method, path, _payload in client.mutations] == [
+        ("PUT", "cluster/sdn")
+    ]
+
+
+def test_sdn_tolerates_missing_subnet_endpoint_on_never_applied_vnet(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    # zone + vnet staged by an interrupted run but never applied
+    data["cluster/sdn/zones"][0]["state"] = "new"
+    data["cluster/sdn/vnets"][0]["state"] = "new"
+
+    class RaisingClient(FakeClient):
+        def get(self, path, **kwargs):
+            if path.endswith("/subnets"):
+                self.calls.append(("GET", path))
+                raise ReconcileError("404 no such vnet")
+            return super().get(path, **kwargs)
+
+    client = RaisingClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert [(method, path) for method, path, _payload in client.mutations] == [
+        ("POST", f"cluster/sdn/vnets/{VNET_ID}/subnets"),
+        ("PUT", "cluster/sdn"),
+    ]
+
+
+def test_sdn_offline_default_primary_exit_node_warns(make_config, capsys):
+    cfg = make_config(
+        {
+            "name": SDN_CLUSTER,
+            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.9"}},
+            },
+        },
+        remove=("openstack",),
+    )
+    data = _sdn_data()
+    # sorts first, so it becomes the default primary while being offline
+    data["nodes"].append({"node": "aaa1", "status": "offline"})
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(cfg.machines, inventory)
+
+    assert "primary EVPN exit node aaa1 is offline" in capsys.readouterr().err
+    zone = next(
+        payload
+        for method, path, payload in client.mutations
+        if (method, path) == ("POST", "cluster/sdn/zones")
+    )
+    assert zone["exitnodes-primary"] == "aaa1"
+
+
+def test_sdn_stale_zone_node_restriction_still_enforced(sdn_cfg, capsys):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    # cluster.yaml no longer sets sdn.nodes, but the applied zone still
+    # restricts membership; compute node pve002 is outside it
+    data["cluster/sdn/zones"][0]["nodes"] = "pve001"
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="outside the SDN zone"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert "keeps a node restriction" in capsys.readouterr().err
+    assert client.mutations == []
+
+
+def test_sdn_bridge_verify_retries_before_failing(sdn_cfg, monkeypatch):
+    data = _sdn_data()
+    data["nodes/pve002/network"] = []  # bridge never shows up on pve002
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+    sleeps: list[int] = []
+    monkeypatch.setattr(
+        "taloscluster.proxmox.backend.time.sleep", lambda s: sleeps.append(s)
+    )
+
+    with pytest.raises(ReconcileError, match="missing after apply on: pve002"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert len(sleeps) == 4  # the apply reload is async; retried before failing
+
+
+def test_sdn_destroy_tolerates_missing_subnet_endpoint_on_pending_vnet(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    # interrupted converge: zone + vnet staged, never applied
+    data["cluster/sdn/zones"][0]["state"] = "new"
+    data["cluster/sdn/vnets"][0]["state"] = "new"
+
+    class RaisingClient(FakeClient):
+        def get(self, path, **kwargs):
+            if path.endswith("/subnets"):
+                self.calls.append(("GET", path))
+                raise ReconcileError("404 no such vnet")
+            return super().get(path, **kwargs)
+
+    client = RaisingClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.destroy_resources(inventory)
+
+    sdn_mutations = [
+        (method, path)
+        for method, path, _payload in client.mutations
+        if path.startswith("cluster/sdn")
+    ]
+    assert sdn_mutations == [
+        ("DELETE", f"cluster/sdn/vnets/{VNET_ID}"),
+        ("DELETE", f"cluster/sdn/zones/{ZONE_ID}"),
+        ("PUT", "cluster/sdn"),
+    ]
+
+
+def test_sdn_offline_configured_exit_node_warns(sdn_cfg, capsys):
+    data = _sdn_data()
+    # pve002 is a configured exit node (default = proxmox.nodes) but offline;
+    # proxmox.nodes only requires... make it a non-required node instead
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+    backend._inventory.nodes["pve002"] = type(backend._inventory.nodes["pve002"])(
+        name="pve002", online=False
+    )
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert "offline EVPN exit nodes: pve002" in capsys.readouterr().err
+
+
+def test_sdn_foreign_same_named_vnet_fails_before_staging_anything(sdn_cfg):
+    # the ids are now the cluster name, so operator collisions are plausible;
+    # nothing may be staged (not even the controller) before the refusal
+    data = _sdn_data()
+    data["cluster/sdn/vnets"] = [
+        {"vnet": VNET_ID, "zone": "otherz1", "tag": 999, "alias": "someone elses"}
+    ]
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="refusing to adopt unowned SDN vnet"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert client.mutations == []
+
+
+def test_sdn_name_override_becomes_the_vnet_bridge(make_config):
+    cfg = make_config(
+        {
+            "name": SDN_CLUSTER,
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"sdn": {"name": "grid"}, "kubeapi_vip": "192.168.0.9"}
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+    assert _backend(cfg, FakeClient({})).cluster_link == "grid"

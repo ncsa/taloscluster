@@ -278,3 +278,32 @@ def test_final_health_failure_is_fatal(monkeypatch):
             Path("talosconfig"), "testcluster-controlplane-01", "192.0.2.5",
             Path("kubeconfig"),
         )
+
+
+def test_resolve_cp1_address_prefers_network_result_then_inventory():
+    cfg = SimpleNamespace(name="phoenix")
+    host = "phoenix-controlplane-01"
+    static = NetworkResult(
+        machine_attachments={host: (NetworkAttachment(name="cluster", address="192.168.100.11"),)}
+    )
+    backend = SimpleNamespace(load_inventory=lambda: (_ for _ in ()).throw(AssertionError))
+    assert converge._resolve_cp1_address(backend, cfg, static) == "192.168.100.11"
+
+    # bridge mode: no static address; the guest-agent inventory answers
+    inventory = InfrastructureInventory(
+        machines={
+            host: InfrastructureMachine(
+                name=host,
+                attachments=(NetworkAttachment(name="cluster", address="172.29.21.236"),),
+            )
+        }
+    )
+    backend = SimpleNamespace(load_inventory=lambda: inventory)
+    assert converge._resolve_cp1_address(backend, cfg, NetworkResult()) == "172.29.21.236"
+
+
+def test_resolve_cp1_address_gives_up_after_timeout(monkeypatch):
+    monkeypatch.setattr(converge.time, "sleep", lambda s: None)
+    cfg = SimpleNamespace(name="phoenix")
+    backend = SimpleNamespace(load_inventory=lambda: InfrastructureInventory())
+    assert converge._resolve_cp1_address(backend, cfg, NetworkResult(), timeout_s=0) == ""

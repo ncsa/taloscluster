@@ -153,3 +153,15 @@ def test_upgrade_still_raises_on_unclassified_nonzero_exit(monkeypatch):
 
     with pytest.raises(RuntimeError, match="failed to pull installer image"):
         talosctl.upgrade(Path("talosconfig"), "endpoint", "node", "installer:v1.13.9")
+
+
+def test_members_skips_the_shared_vip_when_excluded(monkeypatch, tmp_path):
+    stream = (
+        '{"metadata": {"id": "cp-01"}, "spec": {"addresses": '
+        '["141.142.36.79", "172.29.21.236"], "operatingSystem": "Talos (v1.13.9)"}}'
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda _cmd: (0, stream, ""))
+    plain = talosctl.members(tmp_path / "talosconfig", "ep")
+    excluded = talosctl.members(tmp_path / "talosconfig", "ep", exclude_vip="141.142.36.79")
+    assert plain["cp-01"].address == "141.142.36.79"
+    assert excluded["cp-01"].address == "172.29.21.236"

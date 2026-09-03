@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add opt-in managed Proxmox SDN via `proxmox.network.cluster.sdn`: reconcile an EVPN zone, VNet, and SNAT subnet with derived defaults, refuse unrelated pending SDN changes, and verify the bridge on every compute node after apply. The zone/VNet id is `sdn.name` (default: the cluster name, 2-8 chars); a same-named foreign zone or VNet refuses before anything is staged.
+- Create the default EVPN controller (`evpnctl`) with peers from the cluster when missing; an existing controller is used untouched and never deleted.
+- Assign deterministic static node addresses from `network.cidr` in SDN mode (an EVPN overlay has no DHCP), refuse to silently renumber a running node, and reject a `kubeapi_vip` inside the static layout (gateway, controlplane range, or a worker pool block) so scaling a pool cannot assign a node the VIP.
+- Require `SDN.Allocate` and `SDN.Audit` on `/sdn` in the permission preflight when SDN is managed.
+- Work without tailscale: when cluster.yaml has no `tailscale:` section, bootstrap resolves cp-01's real address from the provider (SDN static or guest agent), and every other talosctl path (scale-down, machine-config apply, upgrade, status, dashboard, the generated talosconfig endpoint) uses the API VIP instead of the MagicDNS name that would never resolve.
+- Skip the shared kube-api VIP when picking a node's address from Talos discovery, so cp-01 is targeted by its own address rather than whichever node currently owns the VIP.
+- Omit the tailscale extension from the installed system (`machine.install.image` schematic) when cluster.yaml has no `tailscale:` section; the shared boot ISO still bakes it. Takes effect at install or the next Talos upgrade; list `siderolabs/tailscale` under `talos.extensions` to force it.
+
+### Changed
+
+- Destroy also removes the owned SDN subnet, VNet, and zone after the VMs and pool, keeping anything foreign.
+
 ## [0.5.0] - 2026-09-01
 
 ### Changed

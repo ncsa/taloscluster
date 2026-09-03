@@ -120,6 +120,11 @@ proxmox:
   network:
     cluster:
       bridge: vmbr0 # use vnet instead for an existing Proxmox SDN VNet
+      # sdn: {} # or replace bridge with a managed EVPN SDN network; all fields
+      #         # optional (name, zone, controller, asn, vrf_tag, tag, exit_nodes,
+      #         # primary_exit_node, mtu, nodes); the zone/VNet id is `name`
+      #         # (default: the cluster name, max 8 chars, no hyphens); removing
+      #         # a set mtu/nodes later does not unset it on the zone
       kubeapi_vip: 192.168.0.10""",
         "secrets": """\
 proxmox:

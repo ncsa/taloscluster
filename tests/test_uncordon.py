@@ -65,7 +65,9 @@ def test_upgrade_resume_uncordons_a_node_already_at_the_target(monkeypatch):
     machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
     inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
     uncordoned: list[str] = []
-    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a: {"cp-01": "192.0.2.1"})
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses", lambda *_a, **_kw: {"cp-01": "192.0.2.1"}
+    )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
     monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
     monkeypatch.setattr(converge.talosctl, "node_image", lambda *_a: "installer:v1.13.9")

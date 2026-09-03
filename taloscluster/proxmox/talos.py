@@ -14,7 +14,7 @@ import ipaddress
 from typing import Any
 
 from .. import naming
-from ..config import Config, ConfigError, Machine, ProxmoxConfig
+from ..config import Config, ConfigError, Machine, ProxmoxConfig, ProxmoxSdn, proxmox_sdn
 from ..infrastructure import Endpoint, TalosContribution, TalosPatch
 
 # Proxmox VMs boot from a virtio-scsi disk.
@@ -42,6 +42,52 @@ def external_network(cfg: Config) -> dict[str, Any]:
 def has_ingress(cfg: Config) -> bool:
     """True when an external NIC carries a MetalLB address pool."""
     return bool(external_network(cfg).get("ingress_pool"))
+
+
+def sdn(cfg: Config) -> ProxmoxSdn | None:
+    """The managed-SDN settings, or None when using an existing bridge/VNet."""
+    return proxmox_sdn(cfg.name, _provider(cfg))
+
+
+def _private_link_docs(m: Machine, cfg: Config) -> list[dict]:
+    """LinkAliasConfig + address documents for the private NIC.
+
+    On an existing bridge the private NIC keeps DHCP. On a managed EVPN
+    network there is no DHCP: the node gets its deterministic static address
+    and a default route via the anycast gateway.
+    """
+    private_mac = naming.mac_address(cfg.name, m.name, 0)
+    docs: list[dict] = [
+        {
+            "apiVersion": "v1alpha1",
+            "kind": "LinkAliasConfig",
+            "name": "private",
+            "selector": {"match": f'mac(link.permanent_addr) == "{private_mac}"'},
+        }
+    ]
+    link: dict = {
+        "apiVersion": "v1alpha1",
+        "kind": "LinkConfig",
+        "name": "private",
+    }
+    managed = sdn(cfg)
+    if managed:
+        address = naming.node_address(
+            cfg.cidr, m.name, m.role, m.pool, tuple(cfg.workers)
+        )
+        link["addresses"] = [{"address": str(address)}]
+        link["routes"] = [{"gateway": str(naming.sdn_gateway(cfg.cidr))}]
+        docs.append(link)
+    else:
+        docs.append(link)
+        docs.append(
+            {
+                "apiVersion": "v1alpha1",
+                "kind": "DHCPv4Config",
+                "name": "private",
+            }
+        )
+    return docs
 
 
 def anchor_address(anchor_cidr: str, cluster: str, hostname: str) -> str:
@@ -187,37 +233,21 @@ def external_network_docs(m: Machine, cfg: Config) -> list[dict]:
     """
     ext = external_network(cfg)
     cluster = cfg.name
-    private_mac = naming.mac_address(cluster, m.name, 0)
     external_mac = naming.mac_address(cluster, m.name, 1)
     anchor = anchor_address(ext["anchor_cidr"], cluster, m.name)
     vip_address, vip_link = vip(cfg)
     vip_on_external = vip_link == "external"
     return_path = has_ingress(cfg)
 
-    docs: list[dict] = [
-        {
-            "apiVersion": "v1alpha1",
-            "kind": "LinkAliasConfig",
-            "name": "private",
-            "selector": {"match": f'mac(link.permanent_addr) == "{private_mac}"'},
-        },
-        {
-            "apiVersion": "v1alpha1",
-            "kind": "LinkConfig",
-            "name": "private",
-        },
-        {
-            "apiVersion": "v1alpha1",
-            "kind": "DHCPv4Config",
-            "name": "private",
-        },
+    docs: list[dict] = _private_link_docs(m, cfg)
+    docs.append(
         {
             "apiVersion": "v1alpha1",
             "kind": "LinkAliasConfig",
             "name": "external",
             "selector": {"match": f'mac(link.permanent_addr) == "{external_mac}"'},
-        },
-    ]
+        }
+    )
 
     ext_link: dict = {
         "apiVersion": "v1alpha1",
@@ -268,7 +298,23 @@ def external_network_docs(m: Machine, cfg: Config) -> list[dict]:
 def contribution(m: Machine, cfg: Config, endpoint: Endpoint) -> TalosContribution:
     """Proxmox install disk plus its network and return-path patches."""
     ext = external_network(cfg)
+    managed = sdn(cfg)
     if not ext:
+        if managed:
+            # A managed EVPN network has no DHCP: static private address plus
+            # a Layer 2 VIP for control planes, all as new-style documents.
+            docs = _private_link_docs(m, cfg)
+            if m.role == "controlplane":
+                docs.append(
+                    {
+                        "apiVersion": "v1alpha1",
+                        "kind": "Layer2VIPConfig",
+                        "name": endpoint.vip,
+                        "link": "private",
+                    }
+                )
+            patches = [TalosPatch("network", docs), _nameservers_patch(cfg)]
+            return TalosContribution(install_disk=INSTALL_DISK, patches=tuple(patches))
         # No external NIC: the API VIP rides the private link as a legacy
         # machine.network interface, exactly like OpenStack.
         interfaces = (
@@ -284,8 +330,18 @@ def contribution(m: Machine, cfg: Config, endpoint: Endpoint) -> TalosContributi
         )
 
     patches = [TalosPatch("network", external_network_docs(m, cfg))]
+    if managed:
+        patches.append(_nameservers_patch(cfg))
     if has_ingress(cfg):
         patches.append(
             TalosPatch("return-path", {"machine": {"pods": [return_path_pod(m, cfg)]}})
         )
     return TalosContribution(install_disk=INSTALL_DISK, patches=tuple(patches))
+
+
+def _nameservers_patch(cfg: Config) -> TalosPatch:
+    """Static addressing has no DHCP-provided DNS, so name the servers explicitly."""
+    return TalosPatch(
+        "nameservers",
+        {"machine": {"network": {"nameservers": list(cfg.dns)}}},
+    )

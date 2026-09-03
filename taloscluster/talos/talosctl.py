@@ -148,14 +148,16 @@ def _member_version(operating_system: str) -> str:
     return ""
 
 
-def members(talosconfig: Path, endpoint: str) -> dict[str, Member]:
+def members(talosconfig: Path, endpoint: str, exclude_vip: str = "") -> dict[str, Member]:
     """hostname -> Member, from talos cluster discovery (`get members`).
 
     Covers nodes that booted and joined the talos cluster but never became
     kubernetes nodes, which is why this beats asking kubectl. Each member
     reports several addresses; we prefer its tailscale (100.64/10) one because
     it is unique per node -- among the private ips, controlplane-01 also
-    carries the shared kube-api VIP, which would target the wrong node.
+    carries the shared kube-api VIP, which would target the wrong node. Without
+    tailscale, pass the VIP as ``exclude_vip`` so the owner's next (real)
+    address is used instead of the floating one.
 
     Discovery also reports each member's talos version, so ONE call answers
     "which nodes exist, where, and on what version" -- no per-node
@@ -184,16 +186,22 @@ def members(talosconfig: Path, endpoint: str) -> dict[str, Member]:
         if not host or not addrs:
             continue
         tailscale = [a for a in addrs if a.startswith("100.64.")]
+        stable = [a for a in addrs if a != exclude_vip]
         found[host] = Member(
-            address=tailscale[0] if tailscale else addrs[0],
+            address=tailscale[0] if tailscale else (stable[0] if stable else addrs[0]),
             version=_member_version(str(spec.get("operatingSystem") or "")),
         )
     return found
 
 
-def member_addresses(talosconfig: Path, endpoint: str) -> dict[str, str]:
+def member_addresses(
+    talosconfig: Path, endpoint: str, exclude_vip: str = ""
+) -> dict[str, str]:
     """hostname -> address only, for callers that do not care about versions."""
-    return {host: m.address for host, m in members(talosconfig, endpoint).items()}
+    return {
+        host: m.address
+        for host, m in members(talosconfig, endpoint, exclude_vip=exclude_vip).items()
+    }
 
 
 def dashboard(talosconfig: Path, endpoint: str, nodes: list[str]) -> None:

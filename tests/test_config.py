@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from taloscluster import naming
 from taloscluster.config import (
     ConfigError,
     OpenStackConfig,
@@ -16,6 +17,7 @@ from taloscluster.config import (
     ProxmoxSecrets,
     SecurityRule,
     load_secrets,
+    proxmox_sdn,
     validate_warnings,
 )
 from taloscluster.naming import BASE_EXTENSIONS
@@ -66,15 +68,26 @@ def test_machines_hostnames_are_zero_padded(make_config):
 # ---------------------------------------------------------------------------
 
 def test_extensions_base_always_present(make_config):
-    cfg = make_config()
+    cfg = make_config({"tailscale": {"login_server": "https://hs.example"}})
     for m in cfg.machines.values():
         assert set(BASE_EXTENSIONS).issubset(set(m.extensions))
         # sorted + deduped tuple
         assert m.extensions == tuple(sorted(set(m.extensions)))
 
 
+def test_tailscale_extension_dropped_without_tailscale_section(make_config):
+    # the boot ISO still bakes it, but the installed system (install.image
+    # schematic) omits tailscale when no tailscale: section is configured
+    cfg = make_config()
+    assert "tailscale" not in cfg.raw
+    for m in cfg.machines.values():
+        assert "siderolabs/tailscale" not in m.extensions
+        assert "siderolabs/qemu-guest-agent" in m.extensions
+
+
 def test_extensions_cluster_and_pool_merged(make_config):
     cfg = make_config({
+        "tailscale": {"login_server": "https://hs.example"},
         "talos": {"extensions": ["siderolabs/nvidia-gpu"]},
         "workers": {"worker": {"count": 1, "flavor": "f", "disk": 20,
                                 "extensions": ["siderolabs/nvidia-gpu", "extra/thing"]}},
@@ -333,7 +346,7 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "iso_storage": "isos",
                 "network": {"cluster": {"bridge": "vmbr0", "vnet": "talos"}},
             },
-            "exactly one bridge or vnet",
+            "exactly one of bridge, vnet, or sdn",
         ),
         (
             {
@@ -344,14 +357,153 @@ def test_proxmox_provider_section_is_typed(make_config):
             },
             "inside network.cidr",
         ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"bridge": "vmbr0", "sdn": {}, "kubeapi_vip": "192.168.0.9"}
+                },
+            },
+            "mutually exclusive",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"sdn": {"zone": "vlan"}, "kubeapi_vip": "192.168.0.9"}
+                },
+            },
+            "only supports 'evpn'",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"sdn": {"vrf_tag": 16777215}, "kubeapi_vip": "192.168.0.9"}
+                },
+            },
+            "set an explicit tag",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {
+                        "sdn": {"nodes": ["pve001"], "exit_nodes": ["pve002"]},
+                        "kubeapi_vip": "192.168.0.9",
+                    }
+                },
+            },
+            "exit_nodes must be members",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "nodes": ["pve001", "pve003"],
+                "network": {
+                    "cluster": {
+                        "sdn": {"nodes": ["pve001", "pve002"]},
+                        "kubeapi_vip": "192.168.0.9",
+                    }
+                },
+            },
+            "must include every proxmox.nodes",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.1"}},
+            },
+            "collides with the SDN anycast gateway",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.11"}},
+            },
+            "collides with the static address",
+        ),
+        (
+            # .12 is cp-02's slot: unallocated today, reserved by the layout
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.12"}},
+            },
+            "sits inside the SDN static address layout",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {
+                        "sdn": {"vrf_tag": 100, "tag": 100},
+                        "kubeapi_vip": "192.168.0.9",
+                    }
+                },
+            },
+            "tag must differ from vrf_tag",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {
+                        "sdn": {
+                            "exit_nodes": ["pve001", "pve002"],
+                            "primary_exit_node": "pve003",
+                        },
+                        "kubeapi_vip": "192.168.0.9",
+                    }
+                },
+            },
+            "primary_exit_node must be one of the exit nodes",
+        ),
     ],
 )
 def test_proxmox_compute_configuration_is_validated(make_config, proxmox, message):
     with pytest.raises(ConfigError, match=message):
         make_config(
             {
+                "name": "testc",  # sdn cases need a name that fits the SDN id format
                 "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
                 "proxmox": proxmox,
+            },
+            remove=("openstack",),
+        )
+
+
+def test_proxmox_sdn_rejects_cluster_name_unfit_for_sdn_ids(make_config):
+    # the zone/VNet are named after the cluster: 2-8 chars, no hyphens
+    with pytest.raises(ConfigError, match="cannot be used as the SDN zone/VNet"):
+        make_config(
+            {
+                "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+                "proxmox": {
+                    "url": "https://pve.example",
+                    "storage": "vms",
+                    "iso_storage": "isos",
+                    "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.9"}},
+                },
             },
             remove=("openstack",),
         )
@@ -646,3 +798,74 @@ def test_any_rule_claiming_443_closes_the_default_open_port(make_config):
         "ingress": {"port": 443, "hosts": {"office": "203.0.113.0/24"}},
     }})
     assert cfg.open_ports() == (80,)
+
+
+def _proxmox_sdn_overrides(sdn: dict | None = None) -> dict:
+    return {
+        "name": "testc",
+        "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+        "proxmox": {
+            "url": "https://pve.example",
+            "storage": "vms",
+            "iso_storage": "isos",
+            "nodes": ["pve001", "pve002"],
+            "network": {
+                "cluster": {"sdn": sdn if sdn is not None else {}, "kubeapi_vip": "192.168.0.9"}
+            },
+        },
+    }
+
+
+def test_proxmox_sdn_empty_mapping_resolves_all_defaults(make_config):
+    cfg = make_config(_proxmox_sdn_overrides(), remove=("openstack",))
+    sdn = proxmox_sdn(cfg.name, cfg.provider)
+    assert sdn is not None
+    assert sdn.zone == "evpn"
+    assert sdn.controller == "evpnctl"
+    assert sdn.asn == 65000
+    assert sdn.vrf_tag == naming.sdn_vni("testc")
+    assert sdn.tag == sdn.vrf_tag + 1
+    assert sdn.exit_nodes == ("pve001", "pve002")
+    assert sdn.primary_exit_node == "pve001"
+    assert sdn.mtu is None and sdn.nodes == ()
+
+
+def test_proxmox_sdn_absent_resolves_to_none(make_config):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.9"}},
+            },
+        },
+        remove=("openstack",),
+    )
+    assert proxmox_sdn(cfg.name, cfg.provider) is None
+
+
+def test_proxmox_sdn_requires_dns(make_config):
+    overrides = _proxmox_sdn_overrides()
+    overrides["network"] = {"dns": []}
+    with pytest.raises(ConfigError, match="network.dns is required"):
+        make_config(overrides, remove=("openstack",))
+
+
+def test_proxmox_sdn_name_overrides_the_cluster_name(make_config):
+    overrides = _proxmox_sdn_overrides({"name": "grid"})
+    overrides["name"] = "a-cluster-name-too-long-for-sdn-ids"
+    cfg = make_config(overrides, remove=("openstack",))
+    sdn = proxmox_sdn(cfg.name, cfg.provider)
+    assert sdn is not None and sdn.name == "grid"
+
+
+def test_proxmox_sdn_vip_inside_a_worker_pool_block_is_rejected(make_config):
+    # .65 is worker-05's slot: unallocated today (one worker), but the pool's
+    # whole 50-address block is reserved, so scaling to it would collide
+    overrides = _proxmox_sdn_overrides()
+    overrides["workers"] = {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}}
+    overrides["proxmox"]["network"]["cluster"]["kubeapi_vip"] = "192.168.0.65"
+    with pytest.raises(ConfigError, match="sits inside the SDN static address layout"):
+        make_config(overrides, remove=("openstack",))

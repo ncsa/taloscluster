@@ -321,3 +321,92 @@ def test_external_network_docs_select_nics_by_mac(make_config):
     external_alias = next(d for d in aliases if d["name"] == "external")
     assert mac_address(cfg.name, m.name, 0) in private_alias["selector"]["match"]
     assert mac_address(cfg.name, m.name, 1) in external_alias["selector"]["match"]
+
+
+def _proxmox_sdn_cfg(make_config, extra_cluster: dict | None = None):
+    cluster = {"sdn": {}, "kubeapi_vip": "192.168.0.9"}
+    cluster.update(extra_cluster or {})
+    return make_config(
+        {
+            "name": "testc",  # SDN ids are the cluster name (max 8 chars)
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "workers": {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "nodes": ["pve001", "pve002"],
+                "network": {"cluster": cluster},
+            },
+        },
+        remove=("openstack",),
+    )
+
+
+def test_contribution_sdn_without_external_uses_static_documents(make_config):
+    cfg = _proxmox_sdn_cfg(make_config)
+    endpoint = Endpoint(vip="192.168.0.9", advertised_address="192.168.0.9")
+    cp = talos.contribution(cfg.machines["testc-controlplane-01"], cfg, endpoint)
+
+    assert [p.name for p in cp.patches] == ["network", "nameservers"]
+    docs = cp.patches[0].document
+    kinds = [doc["kind"] for doc in docs]
+    assert "DHCPv4Config" not in kinds
+    link = next(doc for doc in docs if doc["kind"] == "LinkConfig")
+    assert link["addresses"] == [{"address": "192.168.0.11/21"}]
+    assert link["routes"] == [{"gateway": "192.168.0.1"}]
+    vip_doc = next(doc for doc in docs if doc["kind"] == "Layer2VIPConfig")
+    assert vip_doc == {
+        "apiVersion": "v1alpha1",
+        "kind": "Layer2VIPConfig",
+        "name": "192.168.0.9",
+        "link": "private",
+    }
+    assert cp.patches[1].document == {
+        "machine": {"network": {"nameservers": ["1.1.1.1"]}}
+    }
+
+
+def test_contribution_sdn_worker_has_static_address_and_no_vip(make_config):
+    cfg = _proxmox_sdn_cfg(make_config)
+    endpoint = Endpoint(vip="192.168.0.9", advertised_address="192.168.0.9")
+    wk = talos.contribution(cfg.machines["testc-worker-01"], cfg, endpoint)
+
+    docs = wk.patches[0].document
+    assert all(doc["kind"] != "Layer2VIPConfig" for doc in docs)
+    link = next(doc for doc in docs if doc["kind"] == "LinkConfig")
+    assert link["addresses"] == [{"address": "192.168.0.61/21"}]
+
+
+def test_external_docs_with_sdn_replace_private_dhcp_with_static(make_config):
+    cfg = make_config(
+        {
+            "name": "testc",
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"sdn": {}},
+                    "external": {
+                        "bridge": "vmbr1",
+                        "cidr": "203.0.113.0/24",
+                        "gateway": "203.0.113.1",
+                        "anchor_cidr": "169.254.40.0/24",
+                        "kubeapi_vip": "203.0.113.10",
+                    },
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+    docs = talos.external_network_docs(cfg.machines["testc-controlplane-01"], cfg)
+
+    kinds = [doc["kind"] for doc in docs]
+    assert "DHCPv4Config" not in kinds
+    private = next(
+        doc for doc in docs if doc["kind"] == "LinkConfig" and doc["name"] == "private"
+    )
+    assert private["addresses"] == [{"address": "192.168.0.11/21"}]
+    assert private["routes"] == [{"gateway": "192.168.0.1"}]

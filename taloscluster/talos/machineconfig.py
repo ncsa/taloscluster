@@ -181,7 +181,7 @@ def build_configs(
                 patches.append(
                     _write(workdir, f"{host}-cluster", _cluster_patch(cfg, endpoint))
                 )
-            if secrets.tailscale_auth_key:
+            if secrets.tailscale_auth_key and "siderolabs/tailscale" in m.extensions:
                 patches.append(
                     _write(workdir, f"{host}-tailscale",
                            _tailscale_patch(m, cfg, secrets.tailscale_auth_key))
