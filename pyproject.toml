@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taloscluster"
-version = "0.3.0"
+version = "0.6.0"
 description = "Converge a Talos Kubernetes cluster on OpenStack from cluster.yaml (Python alternative to the terraform/ + bin/cluster.sh workflow)"
 requires-python = ">=3.10"
 dependencies = [
