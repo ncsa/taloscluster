@@ -7,7 +7,7 @@ cluster.yaml (committed) — members are NCSA netids/usernames (not emails):
 
 secrets.yaml (gitignored):
     rancher:
-      url:   https://gonzo-rancher.ncsa.illinois.edu
+      url:   https://rancher.example.edu
       token: token-xxxxx:yyyyyyyyyyyy
 """
 

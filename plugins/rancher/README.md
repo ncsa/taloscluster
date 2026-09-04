@@ -27,7 +27,7 @@ rancher:
 
 ```yaml
 rancher:
-  url:   https://gonzo-rancher.ncsa.illinois.edu
+  url:   https://rancher.example.edu
   token: token-xxxxx:yyyyyyyyyyyy
 ```
 

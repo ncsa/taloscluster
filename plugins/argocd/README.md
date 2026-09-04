@@ -23,7 +23,20 @@ These are merged with the `rancher:` members (if a rancher section exists):
 argocd:
   admins: [carol@example.com]   # merged with rancher.admins -> project 'admin' role
   users:  [dave@example.com]    # merged with rancher.users  -> project 'user' role
+  git:
+    url: https://git.example.com/kubernetes/cluster.git  # this cluster's GitOps repo
+  infra:
+    url: https://git.example.com/kubernetes/infra.git    # repo holding the charts/apps chart
+  nfs:
+    enabled: true
+    servers:                      # passed through to the nfs chart values verbatim
+      shared:
+        server: nfs.example.edu
+        path: /exports/mycluster
+        defaultClass: true
 ```
+
+`infra.url` is required to render the `<cluster>-cluster` Application; it points at the repository whose `charts/apps` chart is the app-of-apps. `nfs.servers` is optional and copied verbatim under the nfs chart's `servers:`.
 
 `secrets.yaml` (gitignored) — `argocd:` holds how to reach the ArgoCD cluster to
 apply changes. Any one of these is sufficient:

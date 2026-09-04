@@ -92,6 +92,8 @@ class Config:
     name: str
     members: Members
     git_url: str | None = None
+    # git repo holding the charts/apps app-of-apps chart the cluster-apps Application points at
+    infra_url: str | None = None
     openstack: Openstack | None = None
     metallb: dict[str, Any] = field(default_factory=dict)
     ingress: dict[str, Any] = field(default_factory=dict)
@@ -112,6 +114,9 @@ class Config:
         git = clan.get("git") or {}
         if not isinstance(git, dict):
             git = {}
+        infra = clan.get("infra") or {}
+        if not isinstance(infra, dict):
+            infra = {}
         metallb = clan.get("metallb") or {}
         if not isinstance(metallb, dict):
             metallb = {}
@@ -141,6 +146,7 @@ class Config:
             name=name,
             members=Members(admins=admins, users=users),
             git_url=git.get("url"),
+            infra_url=infra.get("url"),
             openstack=_load_openstack(d),
             metallb=metallb,
             ingress=ingress,

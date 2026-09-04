@@ -122,11 +122,11 @@ proxmox:
   network:
     cluster:
       bridge: vmbr0
-      kubeapi_vip: 172.29.21.240
+      kubeapi_vip: 10.0.0.240
 
 network:
-  cidr: 172.29.21.0/24
-  dns: [172.29.21.1]
+  cidr: 10.0.0.0/24
+  dns: [10.0.0.1]
   ntp: [pool.ntp.org]
 ```
 
@@ -168,11 +168,11 @@ proxmox:
     external:
       bridge: vmbr0
       vlan: 1691
-      cidr: 141.142.36.0/25
-      gateway: 141.142.36.1
+      cidr: 203.0.113.0/25
+      gateway: 203.0.113.1
       anchor_cidr: 169.254.32.0/20
-      kubeapi_vip: 141.142.36.79
-      ingress_pool: 141.142.36.75-141.142.36.78
+      kubeapi_vip: 203.0.113.79
+      ingress_pool: 203.0.113.75-203.0.113.78
 ```
 
 `kubeapi_vip` moves to the external section when it is present. Each machine
@@ -229,7 +229,7 @@ proxmox:
 
 network:
   cidr: 192.168.100.0/24   # anycast gateway at .1, control planes from .10, worker pools in 50-address blocks
-  dns: [141.142.2.2]       # required: the overlay has no DHCP
+  dns: [192.0.2.53]       # required: the overlay has no DHCP
 ```
 
 Nodes get deterministic static addresses from `network.cidr`, so reordering worker pools would renumber later pools; converge refuses to renumber a running node. Proxmox marks EVPN as a technology preview, and the hosts need preparation that taloscluster cannot do for you:

@@ -40,6 +40,8 @@ argocd:
   users: []
   git:
     url: https://git.example.com/kubernetes/cluster.git
+  infra:
+    url: https://git.example.com/kubernetes/infra.git # charts/apps app-of-apps chart
 """
 
 SECRETS_SCAFFOLD = """\

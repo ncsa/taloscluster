@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import textwrap
 from pathlib import Path
 
 import yaml
@@ -17,11 +18,6 @@ from taloscluster.context import Context
 from taloscluster.errors import ConfigError
 
 from .config import Config, enabled
-
-# Git repo hosting the radiant infrastructure charts (charts/apps) used by the
-# `<cluster>-cluster` app-of-apps.
-INFRA_REPO = "https://git.ncsa.illinois.edu/kubernetes/radiant-cluster.git"
-
 
 def downstream_kubeconfig(root: Path) -> dict:
     """Load this cluster's own (gitignored) kubeconfig."""
@@ -241,6 +237,8 @@ def _cluster_apps(
     """
     if not cfg.git_url:
         raise ConfigError("argocd.git.url not set in cluster.yaml; cannot render cluster-apps")
+    if not cfg.infra_url:
+        raise ConfigError("argocd.infra.url not set in cluster.yaml; cannot render cluster-apps")
     server, _ca, _cert, _key = _cluster_connection(ctx.root)
     name = cfg.name
     rancher_id = _rancher_id(ctx)
@@ -261,16 +259,11 @@ def _cluster_apps(
     cinder_enabled = enabled(cfg.cinder)
     nfs_enabled = enabled(cfg.nfs)
     monitoring_enabled = enabled(cfg.monitoring)
-    nfs_taiga = bool(cfg.nfs.get("taiga")) and nfs_enabled
+    # argocd.nfs.servers is passed through verbatim (name -> server/path/defaultClass)
+    servers = cfg.nfs.get("servers") if nfs_enabled else None
     nfs_servers = "          servers: {}\n"
-    if nfs_taiga:
-        nfs_servers = (
-            "          servers:\n"
-            "            taiga:\n"
-            "              server: taiga-nfs.ncsa.illinois.edu\n"
-            f'              path: "/taiga/ncsa/radiant/{name}"\n'
-            "              defaultClass: true\n"
-        )
+    if isinstance(servers, dict) and servers:
+        nfs_servers = textwrap.indent(yaml.safe_dump({"servers": servers}), " " * 10)
     sync_enabled = cfg.sync
     metallb_version = _version_line(cfg.metallb)
     certmanager_version = _version_line(cfg.certmanager)
@@ -370,7 +363,7 @@ spec:
           templates: []
       version: v3
     path: charts/apps
-    repoURL: {INFRA_REPO}
+    repoURL: {cfg.infra_url}
     targetRevision: HEAD
   syncPolicy:
     automated:

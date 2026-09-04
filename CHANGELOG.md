@@ -5,6 +5,12 @@ All notable changes to taloscluster are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Replace site-specific addresses and hostnames in the README, tests and plugin docs with documentation placeholders; the argocd plugin's infrastructure chart repository and NFS servers are now set through `argocd.infra.url` and `argocd.nfs.servers` in `cluster.yaml` instead of being hardcoded.
+
 ## [0.7.0] - 2026-09-03
 
 ### Added

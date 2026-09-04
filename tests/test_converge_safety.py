@@ -294,12 +294,12 @@ def test_resolve_cp1_address_prefers_network_result_then_inventory():
         machines={
             host: InfrastructureMachine(
                 name=host,
-                attachments=(NetworkAttachment(name="cluster", address="172.29.21.236"),),
+                attachments=(NetworkAttachment(name="cluster", address="10.0.0.236"),),
             )
         }
     )
     backend = SimpleNamespace(load_inventory=lambda: inventory)
-    assert converge._resolve_cp1_address(backend, cfg, NetworkResult()) == "172.29.21.236"
+    assert converge._resolve_cp1_address(backend, cfg, NetworkResult()) == "10.0.0.236"
 
 
 def test_resolve_cp1_address_gives_up_after_timeout(monkeypatch):
@@ -320,23 +320,23 @@ def _kubeconfig(tmp_path, server):
 
 
 def test_recorded_endpoint_reads_the_cluster_entry_of_the_kubeconfig(tmp_path):
-    path = _kubeconfig(tmp_path, "https://141.142.36.79:6443")
-    assert converge._recorded_endpoint(path, "phoenix") == "141.142.36.79"
+    path = _kubeconfig(tmp_path, "https://203.0.113.79:6443")
+    assert converge._recorded_endpoint(path, "phoenix") == "203.0.113.79"
     assert converge._recorded_endpoint(path, "unknown") == ""
     assert converge._recorded_endpoint(tmp_path / "missing", "phoenix") == ""
 
 
 def test_kubeapi_endpoint_move_is_reported_with_the_old_address(tmp_path, capsys):
-    path = _kubeconfig(tmp_path, "https://141.142.36.79:6443")
-    assert converge._endpoint_move(path, "phoenix", "141.142.36.77") == "141.142.36.79"
-    assert "move kube-api endpoint 141.142.36.79 -> 141.142.36.77" in capsys.readouterr().out
+    path = _kubeconfig(tmp_path, "https://203.0.113.79:6443")
+    assert converge._endpoint_move(path, "phoenix", "203.0.113.77") == "203.0.113.79"
+    assert "move kube-api endpoint 203.0.113.79 -> 203.0.113.77" in capsys.readouterr().out
 
 
 def test_unchanged_or_unknown_kubeapi_endpoint_is_not_a_move(tmp_path):
-    path = _kubeconfig(tmp_path, "https://141.142.36.79:6443")
-    assert converge._endpoint_move(path, "phoenix", "141.142.36.79") == ""
+    path = _kubeconfig(tmp_path, "https://203.0.113.79:6443")
+    assert converge._endpoint_move(path, "phoenix", "203.0.113.79") == ""
     assert converge._endpoint_move(path, "phoenix", "") == ""  # endpoint still pending
-    assert converge._endpoint_move(tmp_path / "missing", "phoenix", "141.142.36.77") == ""
+    assert converge._endpoint_move(tmp_path / "missing", "phoenix", "203.0.113.77") == ""
 
 
 # ---- talosctl endpoint: a real control plane, never the VIP -----------------
@@ -353,20 +353,20 @@ def test_talos_endpoint_prefers_static_then_inventory_never_the_vip(tmp_path):
     inv = InfrastructureInventory(
         machines={
             host: InfrastructureMachine(
-                name=host, attachments=(NetworkAttachment(name="cluster", address="172.29.21.248"),)
+                name=host, attachments=(NetworkAttachment(name="cluster", address="10.0.0.248"),)
             )
         }
     )
     assert converge._talos_endpoint(_no_tailscale_cfg(), refs, inv) == "192.168.100.11"
-    assert converge._talos_endpoint(_no_tailscale_cfg(), NetworkResult(), inv) == "172.29.21.248"
+    assert converge._talos_endpoint(_no_tailscale_cfg(), NetworkResult(), inv) == "10.0.0.248"
 
 
 def test_talos_endpoint_falls_back_to_the_recorded_talosconfig(tmp_path):
     path = tmp_path / "talosconfig"
     path.write_text(
-        "context: phoenix\ncontexts:\n  phoenix:\n    endpoints:\n    - 172.29.21.248\n"
+        "context: phoenix\ncontexts:\n  phoenix:\n    endpoints:\n    - 10.0.0.248\n"
     )
-    assert converge._talos_endpoint(_no_tailscale_cfg(), talosconfig=path) == "172.29.21.248"
+    assert converge._talos_endpoint(_no_tailscale_cfg(), talosconfig=path) == "10.0.0.248"
 
 
 def test_talos_endpoint_without_any_address_is_an_error(tmp_path):

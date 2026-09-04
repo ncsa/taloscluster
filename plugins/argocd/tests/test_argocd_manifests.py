@@ -14,6 +14,7 @@ import json
 import pytest
 import yaml
 from taloscluster.context import Context
+from taloscluster.errors import ConfigError
 
 from taloscluster_argocd import manifests
 from taloscluster_argocd.config import Config, Members, Openstack
@@ -47,10 +48,16 @@ def cfg():
         name="testcluster",
         members=Members(admins=("a@example.com",), users=()),
         git_url="https://git.example.com/repo.git",
+        infra_url="https://git.example.com/infra.git",
         openstack=Openstack(project="", url="https://cloud", region="RegionOne"),
         metallb={"enabled": True},
         ingress={"enabled": True},
-        nfs={"enabled": True, "taiga": True},
+        nfs={
+            "enabled": True,
+            "servers": {"shared": {
+                "server": "nfs.example.edu", "path": "/exports/testcluster", "defaultClass": True,
+            }},
+        },
     )
 
 
@@ -78,12 +85,31 @@ def test_cluster_apps_uses_nfs_csi(kubeconfig, cfg):
     assert values["nfs"]["type"] == "csi"
 
 
-def test_cluster_apps_uses_cluster_name_for_taiga_path(kubeconfig, cfg):
+def test_cluster_apps_passes_nfs_servers_through(kubeconfig, cfg):
     doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"])
     values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
-    assert values["nfs"]["servers"]["taiga"]["path"] == (
-        "/taiga/ncsa/radiant/testcluster"
+    assert values["nfs"]["servers"] == cfg.nfs["servers"]
+
+
+def test_cluster_apps_points_at_the_infra_repo(kubeconfig, cfg):
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"])
+    assert doc["spec"]["source"]["repoURL"] == "https://git.example.com/infra.git"
+
+
+def test_render_without_infra_url_fails(kubeconfig, cfg):
+    cfg.infra_url = None
+    with pytest.raises(ConfigError, match="argocd.infra.url"):
+        manifests.render(cfg, ctx_for(kubeconfig))
+
+
+def test_config_loads_infra_url_and_nfs_servers(tmp_path):
+    (tmp_path / "cluster.yaml").write_text(
+        "name: testcluster\nargocd:\n  infra:\n    url: https://git.example.com/infra.git\n"
+        "  nfs:\n    enabled: true\n    servers:\n      shared:\n        server: nfs.example.edu\n"
     )
+    cfg = Config.load(tmp_path)
+    assert cfg.infra_url == "https://git.example.com/infra.git"
+    assert cfg.nfs["servers"] == {"shared": {"server": "nfs.example.edu"}}
 
 
 @pytest.mark.parametrize(
