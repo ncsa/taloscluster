@@ -14,8 +14,8 @@ cluster.yaml
 /.claude/
 
 # plans
-proxmox.md
-proxmox-impl.md
+/proxmox.md
+/proxmox-impl.md
 
 # local cluster bootstrap manifests, not part of the tool
 install.sh
