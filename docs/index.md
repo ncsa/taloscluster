@@ -6,6 +6,8 @@ There is no state file. Every resource is named deterministically and tagged, co
 
 ## Where to start
 
+- **[Why Talos](concepts/talos.md)**: what Talos Linux is, why it is secure and easy to upgrade, and when to use Omni instead.
+- **[Machines and access](concepts/machines.md)**: how nodes are created on each provider and how tailscale replaces a bastion host.
 - **[Configuration](configuration.md)**: every key in `cluster.yaml` and `secrets.yaml`, with one page per section.
 - **[README on GitHub](https://github.com/ncsa/taloscluster#readme)**: installation, commands, provider setup and the plugin system.
 

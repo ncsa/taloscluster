@@ -33,6 +33,9 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Concepts:
+      - Why Talos: concepts/talos.md
+      - Machines and access: concepts/machines.md
   - Configuration:
       - Overview: configuration.md
       - General: configuration/general.md
