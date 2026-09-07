@@ -19,6 +19,7 @@ from taloscluster.errors import ConfigError
 
 from .config import Config, enabled
 
+
 def downstream_kubeconfig(root: Path) -> dict:
     """Load this cluster's own (gitignored) kubeconfig."""
     path = root / "kubeconfig"
