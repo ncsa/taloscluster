@@ -71,6 +71,11 @@ Following rules are here to help the AI avoid the same mistakes again:
 - When bumping the version in pyproject.toml, also run `uv lock` to update uv.lock.
 - Talos commands (`talosctl`) always target a server's real address, never the kube-api VIP or floating IP. The VIP belongs to whichever control plane currently owns it and may be pointed at an address no node owns yet; the endpoint is controlplane-01's tailscale name or real address, and the node is its own private address.
 - When cutting a release, first pull the latest dependencies (`uv lock --upgrade`) and then run the full test suite (`uv run pytest`) before tagging — upgraded dependencies can introduce breaking changes, so the release must not go out unless the tests pass.
+- Documentation lives in `docs/` and is published with MkDocs (`uv run mkdocs build --strict` must pass; the `docs` workflow deploys it). Update it in the same change as the code, not afterwards:
+  - Any new, removed or changed key in `cluster.yaml` or `secrets.yaml` (core or plugin) is reflected in the matching page under `docs/configuration/` (key heading, the `Required · type · default` line, the example) and, for a new top-level key, in the tables in `docs/configuration.md`.
+  - A change in how a module works — a new provider feature, a different converge phase, new firewall or upgrade behaviour, a new plugin or plugin hook — is reflected in the relevant page under `docs/concepts/` (`machines.md` for provider and access behaviour, `lifecycle.md` for check/plan/converge/upgrade behaviour, `plugins.md` for plugins, `talos.md` for security claims).
+  - Examples in `docs/` use placeholder values only: RFC 5737 addresses (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`), RFC 1918 private ranges, and `example.edu`/`example.com` hostnames. Never real NCSA addresses, hostnames or credentials.
+  - Do not hard-wrap prose in markdown files; one paragraph per line.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
