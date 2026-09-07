@@ -2,7 +2,7 @@
 
 Back to the [configuration index](../configuration.md).
 
-The rancher plugin imports the cluster into a Rancher server, installs the cluster agent, and reconciles the members listed here. It is skipped, and shown as `not configured` by `taloscluster plugin list`, unless `cluster.yaml` has a `rancher` section and `secrets.yaml` has both `url` and `token`. See `plugins/rancher/README.md` for what converge, destroy and check do.
+The rancher plugin imports the cluster into a Rancher server, installs the cluster agent, and reconciles the members listed here. It is skipped, and shown as `not configured` by `taloscluster plugin list`, unless `cluster.yaml` has a `rancher` section and `secrets.yaml` has both `url` and `token`. See [Plugins](../concepts/plugins.md#how-plugins-run) for what converge, destroy and check do.
 
 ## cluster.yaml
 
@@ -16,7 +16,7 @@ rancher:
 
 Optional · list of usernames · default empty
 
-Members granted the Rancher `cluster-owner` role. Usernames are resolved through Rancher's configured auth providers; one that cannot be resolved is skipped with a warning. Removing a name revokes that user's binding on the next converge.
+Members granted the Rancher `cluster-owner` role. Usernames are resolved through Rancher's configured auth providers; one that cannot be resolved is skipped with a warning. Removing a name removes stale individual user bindings on the next converge. The creator-owner binding and group bindings are preserved, so access through those bindings remains.
 
 ### `rancher.users`
 

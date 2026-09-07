@@ -2,7 +2,7 @@
 
 Back to the [configuration index](../configuration.md).
 
-Pools on OpenStack size their servers with `flavor` (see [Pools](pools.md)). Converge creates a tenant network from `network.cidr`, a router on `external_net`, a security group from `security`, and a floating IP for the API.
+Pools on OpenStack size their servers with `flavor` (see [Pools](pools.md)). Converge creates a tenant network from `network.cidr`, a router on `external_net`, a security group from `security`, and separate reserved ports and floating IPs for the API and ingress. The provider region is fixed to `RegionOne`; there is no core `region` setting.
 
 ## cluster.yaml
 
@@ -23,7 +23,7 @@ Keystone identity endpoint.
 
 Required · string
 
-Availability zone the servers are created in.
+Availability zone used when creating servers. Changing it does not move existing servers.
 
 ### `openstack.external_net`
 

@@ -1,6 +1,6 @@
 # Configuration
 
-A cluster directory holds two files that taloscluster reads together. `cluster.yaml` describes the desired state and is safe to commit. `secrets.yaml` holds credentials and is gitignored. `taloscluster init [--openstack|--proxmox] NAME` scaffolds both, and every key is validated before anything touches the cluster.
+A cluster directory holds two files that taloscluster reads together. `cluster.yaml` describes the desired state and is safe to commit. `secrets.yaml` holds credentials and is gitignored. `taloscluster init [--openstack|--proxmox] NAME` scaffolds both, and the core loader validates required fields and supported values. Unknown keys are not generally rejected, and plugins read their own sections when their hooks run; a successful core validation does not validate every plugin setting.
 
 All example addresses and hostnames in these pages are placeholders (RFC 5737 documentation ranges and `example.edu`).
 
@@ -91,4 +91,4 @@ tailscale:
 
 ## Other files in the directory
 
-`talossecrets.yaml` is the cluster's cryptographic identity, generated on the first converge and gitignored. It cannot be regenerated for a running cluster, so back it up out of band. `talosconfig` and `kubeconfig` are derived from it and rewritten by converge.
+`talossecrets.yaml` is the cluster's cryptographic identity, generated on the first converge and gitignored. It cannot be regenerated for a running cluster, so back it up out of band. `talosconfig` is derived from it and refreshed by converge. `kubeconfig` is fetched during bootstrap or an API endpoint move and is otherwise retained. Keep both client files with the cluster directory, especially when moving the API endpoint.

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Recommend at least two workers and spare capacity for node maintenance.
+- Shorten the README and organize the documentation around installation, quickstart, usage, commands, configuration, plugins, and troubleshooting.
+- Clarify that users must connect the management machine to the cluster's tailnet themselves.
+- Align documentation with provider behavior, plugin settings, firewall rules, command limitations, and installation requirements.
+- Track audit follow-ups and remaining documentation work in `todo.md`.
+
 ## [0.7.0] - 2026-09-06
 
 ### Added

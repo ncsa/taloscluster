@@ -26,13 +26,13 @@ kubernetes:
 
 Required · string
 
-The cluster name. Lowercase letters, digits and internal hyphens only. It prefixes every hostname (`<name>-controlplane-01`, `<name>-<pool>-01`), the boot image, the Proxmox resource pool and, by default, the managed SDN zone id. Together with the longest pool name it must keep hostnames under 63 characters.
+The cluster name. Lowercase letters, digits and internal hyphens only. It prefixes every hostname (`<name>-controlplane-01`, `<name>-<pool>-01`) and determines the Proxmox resource pool (`taloscluster-<name>`) and, by default, the managed SDN zone id. Boot images are shared and named by Talos version, independently of the cluster name. Together with the longest pool name it must keep hostnames under 63 characters.
 
 ## `tags`
 
 Optional · mapping of label to value
 
-Extra Kubernetes node labels applied to every node through Talos `machine.nodeLabels`. Keys and values are stringified. Every node always gets `ncsa/role`, `ncsa/pool` and `ncsa/project` (the provider project or pool name with spaces replaced by `_`), and a tag here may override those defaults. Per-pool `tags` win over cluster-wide tags on the same key.
+Extra Kubernetes node labels applied to every node through Talos `machine.nodeLabels`. Keys and values are stringified. Every node gets `ncsa/role` and `ncsa/pool`. OpenStack also adds `ncsa/project` when the project name is available; Proxmox supplies no default project label. Spaces in all label values become `_`, and a tag here may override a default. Per-pool `tags` win over cluster-wide tags on the same key.
 
 ## `talos`
 
@@ -40,13 +40,13 @@ Extra Kubernetes node labels applied to every node through Talos `machine.nodeLa
 
 Required · `vMAJOR.MINOR.PATCH`
 
-Talos release to run. Must be v1.13.0 or newer because the generated machine configuration uses multi-document network kinds that older releases reject. Bumping it builds a new boot image from factory.talos.dev and rolls the upgrade over existing nodes on the next converge. Nothing auto-upgrades.
+Talos release to run; use the canonical `vMAJOR.MINOR.PATCH` form. The loader also accepts a missing `v` prefix and prerelease/build suffixes, but upstream lookup and upgrade behavior is designed around release versions. Must be v1.13.0 or newer because the generated machine configuration uses multi-document network kinds that older releases reject. Bumping it builds a new boot image from factory.talos.dev and rolls the upgrade over existing nodes on the next converge. Nothing auto-upgrades.
 
 ### `talos.extensions`
 
 Optional · list of strings · default empty
 
-Extra Talos system extensions added to every node's installer image on top of the base set (`siderolabs/tailscale` and `siderolabs/qemu-guest-agent`). They take effect on the node's first upgrade pass, which converge handles. Pool-level `extensions` are merged in as well.
+Extra Talos system extensions merged with the QEMU guest agent, Tailscale when enabled, and pool-level `extensions`. An explicit `siderolabs/tailscale` entry keeps that extension even without a `tailscale` section. Proxmox installs the resolved image on first boot; OpenStack initially boots the shared volume image and needs a Talos upgrade after bootstrap for a different set. Extensions activate during installation or upgrade, not merely when a machine configuration is applied. Converge compares the node’s version and machine-config installer reference rather than inspecting installed extensions, so an extension-only edit is not a guarantee that an upgrade occurs.
 
 ### `talos.config_patches`
 

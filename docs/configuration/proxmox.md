@@ -39,7 +39,7 @@ The Proxmox server origin. The `/api2/json` path is added internally; URLs that 
 
 Required · storage id
 
-Storage for VM boot disks.
+Storage used when creating VM boot disks. Changing it does not migrate existing disks.
 
 ### `proxmox.iso_storage`
 
@@ -57,11 +57,11 @@ Node-local storage for the per-VM cloud-init volume that briefly carries the mac
 
 Optional · `spread` · default `spread`
 
-How new VMs are placed. `spread` is the only accepted value: creates are spread across the online nodes while reserving memory for earlier choices in the same run.
+How new VMs are placed. `spread` is the only accepted value. Control planes prefer hosts that do not already hold a control plane; workers choose the eligible host with the most available memory. Memory is reserved for earlier choices in the same run. Existing VMs are not rebalanced.
 
 ### `proxmox.nodes`
 
-Optional · list of node names · default all online nodes
+Optional · list of node names · default online nodes with access to all required storages
 
 Proxmox nodes VMs may be placed on. A pool's `node` must be a member. On a managed SDN every entry must also be inside `sdn.nodes` when that is set.
 
@@ -105,7 +105,7 @@ The address control planes share as a Layer 2 VIP for the Kubernetes API. Set it
 
 Optional · mapping, may be empty
 
-Replaces `bridge` or `vnet` with a managed EVPN network that taloscluster creates: an EVPN zone, a VNet and an SNAT subnet from `network.cidr`. `sdn: {}` accepts every default. Nodes get static addresses from `network.cidr`: the anycast gateway at the first host, control planes from host 10, and each worker pool a 50-address block from host 60 in file order. `network.dns` must be set because the overlay has no DHCP, and `network.cidr` cannot change afterwards. The Proxmox hosts need FRR, IP forwarding and firewall rules for BGP and VXLAN; see the README.
+Replaces `bridge` or `vnet` with a managed EVPN network that taloscluster creates: an EVPN zone, a VNet and an SNAT subnet from `network.cidr`. `sdn: {}` accepts every default. Nodes get static addresses from `network.cidr`: the anycast gateway at the first host, controlplane-01 at host offset 11, and the first worker at offset 61. Control planes reserve offsets 10–59; each worker pool reserves a 50-address block beginning at offset 60 plus 50 times its zero-based position in file order. Each pool supports at most 49 nodes, and the subnet must be large enough for their addresses. `network.dns` must be set because the overlay has no DHCP, and `network.cidr` cannot change afterwards. The Proxmox hosts need FRR, IP forwarding and firewall rules for BGP and VXLAN; see [Proxmox setup](../providers/proxmox.md#managed-evpn-sdn).
 
 ```yaml
 proxmox:
@@ -178,13 +178,13 @@ VNet MTU, typically the underlay MTU minus 50 bytes of VXLAN overhead. Changing 
 
 Optional · list of node names · default all nodes
 
-Restrict the zone, and therefore VM placement, to these hosts. Removing it does not unset it on the zone.
+Restrict the zone to these hosts. Also set `proxmox.nodes` to a matching compute-node set when other eligible hosts exist; converge rejects compute nodes outside the zone rather than silently filtering them out. Removing it does not unset it on the zone.
 
 ## `proxmox.network.external`
 
 Optional · mapping
 
-Adds a second NIC on a directly routed external subnet that carries the API VIP and the MetalLB ingress addresses without NAT. Adding or removing this section on a running cluster is refused. Control planes get a dedicated routing table so API and ingress replies leave through the external gateway.
+Adds a second NIC on a directly routed external subnet. It can carry the API VIP and MetalLB ingress addresses without NAT; the API VIP may instead remain on the private cluster link. Adding or removing this section on a running cluster is refused. Control planes get an external routing table when the API VIP is external. With `ingress_pool`, every node gets the routing table and a connection-marking static pod for ingress replies.
 
 ### `bridge`
 
@@ -226,7 +226,7 @@ The API VIP on the external subnet. Set it here or under `cluster`, not both.
 
 Optional · `start-end` IPv4 range inside `cidr`
 
-Addresses MetalLB announces for ingress. When set, every machine runs a small static pod that marks connections entering the external NIC so replies to reverse-NATed traffic return through the external gateway. Edits apply through the machine config on the next converge.
+Range reserved in your address plan for MetalLB ingress. Install and configure MetalLB separately to announce it; core taloscluster does not create a MetalLB address pool. When set, every machine runs a small static pod that marks connections entering the external NIC so replies to reverse-NATed traffic return through the external gateway. Edits apply through the machine config on the next converge.
 
 ## secrets.yaml
 
@@ -240,7 +240,7 @@ proxmox:
 
 Required · `user@realm!tokenname`
 
-Proxmox API token id. Every command runs a read-only permission preflight with it before the first mutating request and reports missing privileges with their ACL paths. The README lists the role privileges needed.
+Proxmox API token id. Provider operations that load Proxmox inventory run a read-only permission preflight before mutation and reports missing privileges with their ACL paths. See [Proxmox API token permissions](../providers/proxmox.md#proxmox-api-token-permissions) for the required privileges.
 
 ### `proxmox.token_secret`
 

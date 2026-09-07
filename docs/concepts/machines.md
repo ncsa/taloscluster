@@ -1,14 +1,14 @@
 # How machines are created and reached
 
-taloscluster has no state file. Every resource is named after the cluster and machine, and tagged, so `taloscluster converge` discovers what exists, creates what is missing, and never touches anything it did not create. Nodes are named `<cluster>-controlplane-01`, `<cluster>-<pool>-01` and so on, which is why adding or removing a node never renumbers the others.
+taloscluster discovers managed infrastructure from provider ownership markers rather than a separate infrastructure state file. Keep the local `talossecrets.yaml`, which holds the cluster identity. Cluster resources use deterministic names, while boot images are shared by Talos version. Nodes are named `<cluster>-controlplane-01`, `<cluster>-<pool>-01` and so on, which is why adding or removing a node never renumbers the others.
 
 ## Boot image
 
-Every converge starts by making sure a boot image for the pinned [`talos.version`](../configuration/general.md#talosversion) exists at the provider. The image is built by the [Talos Image Factory](https://factory.talos.dev/) with the base extensions (tailscale and the QEMU guest agent) baked in. Pools that need more, such as GPU drivers, list them under [`extensions`](../configuration/pools.md#extensions); those land in the node's installer image and apply on its first upgrade pass.
+Every converge starts by making sure a boot image for the pinned [`talos.version`](../configuration/general.md#talosversion) exists at the provider. The image is built by the [Talos Image Factory](https://factory.talos.dev/) with the base extensions (tailscale and the QEMU guest agent) baked in. Pools that need more, such as GPU drivers, list them under [`extensions`](../configuration/pools.md#extensions); those go into the node's installer image. Proxmox installs that image on first boot. OpenStack starts from the shared boot volume image; installing a different extension set requires a Talos upgrade after bootstrap. Converge compares the node’s reported machine-config installer reference and version, not its running extension inventory, so verify extension changes on the nodes.
 
 ## Machine configuration
 
-For each node taloscluster generates a Talos machine configuration from `cluster.yaml` and the cluster's secrets: hostname, role, node labels, network settings, the Kubernetes API VIP, the ingress firewall, the tailscale key, and any freeform [`config_patches`](../configuration/pools.md#config_patches). `taloscluster plan` shows the diff of what would change on a running node.
+For each node taloscluster generates a Talos machine configuration from `cluster.yaml` and the cluster's secrets: hostname, role, node labels, network settings, the Kubernetes API VIP, the ingress firewall, the tailscale key, and any freeform [`config_patches`](../configuration/pools.md#config_patches). `taloscluster plan` shows the diff of what would change on a reachable running node. The generated control-plane configuration also installs the kubelet serving certificate approver and metrics-server, and disables workload scheduling on control planes.
 
 ## OpenStack
 
@@ -16,13 +16,13 @@ Converge creates a private network from [`network.cidr`](../configuration/networ
 
 ## Proxmox
 
-Converge downloads the boot ISO to `iso_storage`, writes each node's machine configuration to a small cloud-init volume on node-local storage, creates the VM in a resource pool named after the cluster, and configures the per-VM firewall. The first NIC attaches to an existing bridge or VNet, or to a managed EVPN SDN network that taloscluster creates itself. An optional second NIC on a routed subnet can carry the API VIP and ingress addresses directly. See the [Proxmox settings](../configuration/proxmox.md).
+Converge downloads the boot ISO to `iso_storage`, writes each node's machine configuration to a small cloud-init volume on node-local storage, creates the VM in the resource pool `taloscluster-<name>`, and configures the per-VM firewall. The first NIC attaches to an existing bridge or VNet, or to a managed EVPN SDN network that taloscluster creates itself. An optional second NIC on a routed subnet can carry the API VIP and ingress addresses directly. After successful health checks, converge detaches and deletes the temporary cloud-init ISO. See the [Proxmox settings](../configuration/proxmox.md).
 
 ## Reaching the nodes
 
 On OpenStack, and on Proxmox with a managed SDN, the nodes sit on a private network with no public address. Only the API VIP and the ingress address are reachable from outside. There is no SSH on Talos anyway, but `talosctl` and `taloscluster` still have to reach the Talos API on port 50000 of a real node address to bootstrap and manage the cluster. The usual answer is a bastion host or a VPN into the tenant network.
 
-taloscluster solves it with [Tailscale](https://tailscale.com/) instead. Every node runs the tailscale extension and, given the [`auth_key`](../configuration/tailscale.md#tailscaleauth_key) in `secrets.yaml`, joins your tailnet at boot under its own hostname. The machine you run `taloscluster` from joins the same tailnet, and the tool reaches the first control plane by its tailscale name, no bastion required. Pod and etcd traffic stays on the private network; tailscale only carries management traffic.
+taloscluster solves it with [Tailscale](https://tailscale.com/) instead. Every node runs the tailscale extension and, given the [`auth_key`](../configuration/tailscale.md#tailscaleauth_key) in `secrets.yaml`, joins your tailnet at boot under its own hostname. You must install and connect Tailscale on the machine you run `taloscluster` from yourself, so it is already on the same tailnet; taloscluster does not add that machine automatically. The tool then reaches the first control plane by its tailscale name, no bastion required. Pod and etcd traffic stays on the private network; tailscale only carries management traffic.
 
 Two things follow from this:
 
