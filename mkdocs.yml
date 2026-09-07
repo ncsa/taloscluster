@@ -1,4 +1,5 @@
 site_name: taloscluster
+site_url: https://ncsa.github.io/taloscluster/
 site_description: Declarative Talos Linux clusters on OpenStack and Proxmox
 repo_url: https://github.com/ncsa/taloscluster
 edit_uri: edit/main/docs/
@@ -33,11 +34,15 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Concepts:
-      - Why Talos: concepts/talos.md
+  - Installation: installation.md
+  - Quickstart: quickstart.md
+  - Usage:
+      - Overview: usage.md
+      - Planning and building: concepts/lifecycle.md
       - Machines and access: concepts/machines.md
-      - Day 0, 1, 2: concepts/lifecycle.md
-      - Plugins: concepts/plugins.md
+      - Proxmox setup: providers/proxmox.md
+      - Why Talos: concepts/talos.md
+  - Commands: commands.md
   - Configuration:
       - Overview: configuration.md
       - General: configuration/general.md
@@ -49,3 +54,5 @@ nav:
       - Tailscale: configuration/tailscale.md
       - Rancher plugin: configuration/rancher.md
       - ArgoCD plugin: configuration/argocd.md
+  - Plugins: concepts/plugins.md
+  - Troubleshooting: troubleshooting.md

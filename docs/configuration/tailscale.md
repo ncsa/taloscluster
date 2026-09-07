@@ -15,13 +15,13 @@ tailscale:
 
 Optional · mapping, may be empty
 
-The presence of this section, even as `tailscale: {}`, keeps the tailscale extension in the installer image. Without it the installed system drops the extension, so nodes run no dormant service.
+The presence of this section, even as `tailscale: {}`, keeps the tailscale extension in the installer image. Without it the installer extension set omits Tailscale unless you explicitly add `siderolabs/tailscale` through `talos.extensions` or a pool's `extensions`. The section also selects Tailscale hostnames for management; adding only the extension does not enable that address selection.
 
 ### `tailscale.login_server`
 
-Optional · URL
+Optional in the loader · URL · default unset
 
-A Headscale or self-hosted control server. Omit to use the public Tailscale control plane.
+Set the Tailscale control-server URL explicitly when supplying an auth key, for example your Headscale server. The current generator always emits `--login-server=<value>` and emits `--login-server=None` when this key is omitted; omission does not reliably select the public Tailscale control plane.
 
 ## secrets.yaml
 
@@ -34,4 +34,4 @@ tailscale:
 
 Optional · string
 
-A reusable, ideally ephemeral, pre-auth key every node registers with. Omit it to leave the extension idle. Replace it before it expires when it is ephemeral. The value is redacted from the machine-config diff that `plan` prints.
+A reusable, ideally ephemeral, pre-auth key every node registers with. Omit it to leave the extension idle. Use a valid key when registering new or recreated nodes; an ephemeral node setting does not make an expired or single-use key reusable. The value is redacted from the machine-config diff that `plan` prints.

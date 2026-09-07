@@ -21,9 +21,9 @@ The network the nodes' private addresses come from, written as a network address
 
 ## `network.dns`
 
-Required · list of IPv4 addresses
+Required · list of IP address strings, may be empty except on managed Proxmox SDN
 
-Resolvers configured on every node. The list may be empty except on a managed Proxmox SDN, which has no DHCP to supply one.
+On OpenStack, these are DHCP nameservers on the subnet when it is first created; converge does not update the existing subnet's DNS settings. On Proxmox managed SDN, they are applied to each node through Talos `ResolverConfig`, including on later converges. Proxmox on an existing bridge or VNet uses DHCP-provided DNS; this list does not override it.
 
 ## `network.ntp`
 
