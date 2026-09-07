@@ -1,0 +1,46 @@
+site_name: taloscluster
+site_description: Declarative Talos Linux clusters on OpenStack and Proxmox
+repo_url: https://github.com/ncsa/taloscluster
+edit_uri: edit/main/docs/
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Light mode
+
+markdown_extensions:
+  - tables
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+nav:
+  - Home: index.md
+  - Configuration:
+      - Overview: configuration.md
+      - General: configuration/general.md
+      - Node pools: configuration/pools.md
+      - OpenStack: configuration/openstack.md
+      - Proxmox: configuration/proxmox.md
+      - Network: configuration/network.md
+      - Security: configuration/security.md
+      - Tailscale: configuration/tailscale.md
+      - Rancher plugin: configuration/rancher.md
+      - ArgoCD plugin: configuration/argocd.md

@@ -24,3 +24,6 @@ metallb-pool.yaml
 metallb-values.yaml
 traefik-values.yaml
 speedtest.yaml
+
+# mkdocs build output
+site/

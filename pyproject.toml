@@ -24,8 +24,14 @@ argocd = ["taloscluster-argocd"]
 rancher = ["taloscluster-rancher"]
 all = ["taloscluster-argocd", "taloscluster-rancher"]
 dev = [
-    "pytest>=8", "ruff>=0.4", "mypy>=1.10", "types-PyYAML", "types-requests",
-    "taloscluster-argocd", "taloscluster-rancher",
+    "pytest>=8",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "types-PyYAML",
+    "types-requests",
+    "taloscluster-argocd",
+    "taloscluster-rancher",
+    "mkdocs-material>=9.7.7",
 ]
 
 # plugins live in this repo; a new one is a new folder under plugins/ and is
