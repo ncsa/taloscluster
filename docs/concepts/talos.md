@@ -20,3 +20,4 @@ With taloscluster both are a one-line edit. Bump [`talos.version`](../configurat
 - [What is Talos](https://docs.siderolabs.com/talos/latest/overview/what-is-talos)
 - [Omni](https://docs.siderolabs.com/omni), Sidero's multi-cluster management product
 - [How machines are created](machines.md) by taloscluster
+- [Day 0, 1, 2](lifecycle.md) with taloscluster

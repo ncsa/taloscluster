@@ -36,6 +36,7 @@ nav:
   - Concepts:
       - Why Talos: concepts/talos.md
       - Machines and access: concepts/machines.md
+      - Day 0, 1, 2: concepts/lifecycle.md
   - Configuration:
       - Overview: configuration.md
       - General: configuration/general.md
