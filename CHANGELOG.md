@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-06
+
 ### Added
 
+- Reconcile Proxmox VM sizing on every converge: `cores` and `memory` are updated in place and `disk` is grown online; `plan` reports each change. Nodes whose new cores or memory waits on a restart are listed on every run until they restart, and `converge --reboot` restarts them one at a time (control planes first, health-checked in between) through a Proxmox reboot, since a guest-initiated reboot does not apply pending sizing. Shrinking a disk, moving a NIC to another bridge/VLAN/VNet, or adding/removing the `external:` section is refused before any mutation with recreation guidance instead of being silently ignored.
+- Point every talosctl call at controlplane-01's real address when tailscale is off (SDN static address, guest-agent inventory, or the endpoint recorded in the talosconfig) instead of the kube-api VIP; converge keeps the talosconfig endpoint current.
+- Move the kube-api VIP of a running cluster when `kubeapi_vip` changes: control planes are re-applied one at a time (endpoint, certificate SANs, Layer 2 VIP), the kubeconfig is regenerated from a control plane, converge waits for the API on the new address, then the workers follow; `plan` reports the move and the per-node diff.
+- Reject a `kubeapi_vip` inside `ingress_pool`, where MetalLB could hand the API address to a service.
+- Redact keys, secrets and tokens from the machine-config diff `plan` prints.
+- Exclude both the current and the previous kube-api VIP when picking node addresses from Talos discovery, so control-plane-01 is never addressed by a VIP during a move.
+- Show the machine-config diff under `plan` using `talosctl apply-config --dry-run`, so plan output tells you what converge would push to each node.
+- Document Proxmox API token permissions, managed EVPN SDN with its host prerequisites, post-creation `cluster.yaml` changes, and the link-local anchor / return-path design in the README.
 - Add `pytest-timeout` (30s per test) and `pytest-cov` to the dev extra, with a `tests` workflow running the suite with coverage on pushes and pull requests.
 - Add a `docs/` configuration reference: an index of every `cluster.yaml` and `secrets.yaml` key with one page per section, including the rancher and argocd plugins.
 - Add an MkDocs Material site for `docs/` (`uv run mkdocs serve`), published to GitHub Pages by a `docs` workflow on pushes to main.
@@ -22,19 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgrade Kubernetes through `talosctl upgrade-k8s` one minor at a time: machine configs for a running cluster are generated with the Kubernetes version it runs, so applying them no longer swaps the kubelet and control-plane images straight to the target and skips the intermediate minors. A `kubernetes.version` older than the running cluster is refused.
 - Retry `talosctl bootstrap` while Talos answers "bootstrap is not available yet" (apid is up before etcd is ready), for up to five minutes, instead of failing the first converge.
 - Redact `NAME=value` environment entries such as the Tailscale auth key from the machine-config diff `plan` prints; only `key: value` mappings were redacted before.
-
-## [0.7.0] - 2026-09-03
-
-### Added
-
-- Reconcile Proxmox VM sizing on every converge: `cores` and `memory` are updated in place and `disk` is grown online; `plan` reports each change. Nodes whose new cores or memory waits on a restart are listed on every run until they restart, and `converge --reboot` restarts them one at a time (control planes first, health-checked in between) through a Proxmox reboot, since a guest-initiated reboot does not apply pending sizing. Shrinking a disk, moving a NIC to another bridge/VLAN/VNet, or adding/removing the `external:` section is refused before any mutation with recreation guidance instead of being silently ignored.
-- Point every talosctl call at controlplane-01's real address when tailscale is off (SDN static address, guest-agent inventory, or the endpoint recorded in the talosconfig) instead of the kube-api VIP; converge keeps the talosconfig endpoint current.
-- Move the kube-api VIP of a running cluster when `kubeapi_vip` changes: control planes are re-applied one at a time (endpoint, certificate SANs, Layer 2 VIP), the kubeconfig is regenerated from a control plane, converge waits for the API on the new address, then the workers follow; `plan` reports the move and the per-node diff.
-- Reject a `kubeapi_vip` inside `ingress_pool`, where MetalLB could hand the API address to a service.
-- Redact keys, secrets and tokens from the machine-config diff `plan` prints.
-- Exclude both the current and the previous kube-api VIP when picking node addresses from Talos discovery, so control-plane-01 is never addressed by a VIP during a move.
-- Show the machine-config diff under `plan` using `talosctl apply-config --dry-run`, so plan output tells you what converge would push to each node.
-- Document Proxmox API token permissions, managed EVPN SDN with its host prerequisites, post-creation `cluster.yaml` changes, and the link-local anchor / return-path design in the README.
 
 ## [0.6.0] - 2026-09-03
 
