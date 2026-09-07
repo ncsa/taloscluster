@@ -57,7 +57,7 @@ taloscluster converge   # image, network, machines, bootstrap, kubeconfig, healt
 taloscluster status     # provider resources, endpoints, kubectl get nodes
 ```
 
-Converge builds the boot image, creates the network and firewall rules, creates the machines, bootstraps etcd on the first control plane, writes `talosconfig` and `kubeconfig` next to `cluster.yaml`, and waits until every node is ready. Installed [plugins](../configuration/rancher.md) run at the end. Back up `talossecrets.yaml` now; it is the cluster's identity and cannot be regenerated.
+Converge builds the boot image, creates the network and firewall rules, creates the machines, bootstraps etcd on the first control plane, writes `talosconfig` and `kubeconfig` next to `cluster.yaml`, and waits until every node is ready. Installed [plugins](plugins.md) run at the end. Back up `talossecrets.yaml` now; it is the cluster's identity and cannot be regenerated.
 
 ## Day 2: operate
 

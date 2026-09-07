@@ -62,7 +62,7 @@ This cluster's own GitOps repository. Without it only the Secret and the AppProj
 
 Required to render the Application · URL
 
-The repository whose `charts/apps` chart is the app-of-apps the cluster Application points at.
+The repository whose `charts/apps` chart is the app-of-apps the cluster Application points at. NCSA's is [ncsa/radiant-cluster](https://github.com/ncsa/radiant-cluster/tree/main/charts/apps).
 
 ### `argocd.sync`
 
