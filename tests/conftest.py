@@ -22,7 +22,7 @@ from taloscluster.config import load_config
 # passes. Tests override or remove pieces to exercise specific behaviour.
 MINIMAL: dict[str, Any] = {
     "name": "testcluster",
-    "talos": {"version": "v1.8.3"},
+    "talos": {"version": "v1.13.9"},
     "kubernetes": {"version": "v1.31.0"},
     "controlplane": {"count": 3, "flavor": "gp.medium", "disk": 40},
     "openstack": {

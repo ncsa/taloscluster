@@ -1,7 +1,7 @@
 """Tests for the OpenStack Talos contribution.
 
-OpenStack contributes only the virtio install disk and the legacy
-``machine.network.interfaces`` block carrying the Layer 2 API VIP on eth0.
+OpenStack contributes only the virtio install disk and the network documents
+that keep DHCP on eth0 and carry the Layer 2 API VIP there.
 """
 
 from __future__ import annotations
@@ -13,6 +13,10 @@ from taloscluster.openstack import talos
 
 VIP = "192.168.0.10"
 FIP = "203.0.113.10"
+ETH0_DHCP = [
+    {"apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "eth0"},
+    {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": "eth0"},
+]
 
 
 @pytest.fixture
@@ -38,14 +42,15 @@ def test_controlplane_gets_the_vip_on_eth0(cfg, ep):
     contribution = talos.contribution(m, cfg, ep)
 
     assert [p.name for p in contribution.patches] == ["network"]
-    interfaces = contribution.patches[0].document["machine"]["network"]["interfaces"]
-    assert interfaces == [{"interface": "eth0", "dhcp": True, "vip": {"ip": VIP}}]
+    assert contribution.patches[0].document == ETH0_DHCP + [
+        {"apiVersion": "v1alpha1", "kind": "Layer2VIPConfig", "name": VIP, "link": "eth0"},
+    ]
 
 
-def test_worker_gets_empty_interfaces(cfg, ep):
+def test_worker_keeps_dhcp_without_a_vip(cfg, ep):
     m = cfg.machines["testcluster-worker-01"]
     contribution = talos.contribution(m, cfg, ep)
-    assert contribution.patches[0].document["machine"]["network"]["interfaces"] == []
+    assert contribution.patches[0].document == ETH0_DHCP
 
 
 def test_installer_platform_is_openstack():

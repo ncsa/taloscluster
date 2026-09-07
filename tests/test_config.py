@@ -185,6 +185,7 @@ def test_non_integer_count_in_worker_pool_raises_config_error(make_config):
     [
         ({"name": "Bad_Name"}, "name"),
         ({"talos": {"version": "latest"}}, "talos.version"),
+        ({"talos": {"version": "v1.12.9"}}, "v1.13.0 or newer"),
         ({"network": {"cidr": "not-a-cidr"}}, "network.cidr"),
         ({"controlplane": {"count": 0}}, "controlplane"),
         ({"workers": {"worker": {"count": -1, "flavor": "f", "disk": 20}}}, "count"),

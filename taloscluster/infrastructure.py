@@ -77,6 +77,24 @@ class TalosPatch:
     document: dict[str, Any] | list[dict[str, Any]] | str
 
 
+def dhcp_link_documents(link: str, vip: str | None = None) -> list[dict[str, Any]]:
+    """LinkConfig + DHCPv4Config for one physical link, plus its Layer 2 VIP.
+
+    Any new-style link document turns off Talos's default DHCP on physical
+    links, so the lease the node used to get implicitly is requested
+    explicitly. `vip` adds a Layer2VIPConfig on the same link (control planes).
+    """
+    docs: list[dict[str, Any]] = [
+        {"apiVersion": "v1alpha1", "kind": "LinkConfig", "name": link},
+        {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": link},
+    ]
+    if vip:
+        docs.append(
+            {"apiVersion": "v1alpha1", "kind": "Layer2VIPConfig", "name": vip, "link": link}
+        )
+    return docs
+
+
 @dataclass(frozen=True)
 class TalosContribution:
     """Everything a provider adds to one machine's Talos configuration."""

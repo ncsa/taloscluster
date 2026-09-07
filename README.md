@@ -260,6 +260,8 @@ security:
       office vpn: 203.0.113.0/24
 ```
 
+The same rules are also rendered as the [Talos ingress firewall](https://docs.siderolabs.com/talos/v1.13/networking/ingress-firewall) on every node: default action `block`, all tcp/udp from `network.cidr`, the open-by-default ports from anywhere, each rule's port from its hosts, plus udp/68 for the node's own DHCP lease and udp/41641 for direct tailscale connections. Talos itself lets loopback, established connections, rate-limited ICMP and pod/service traffic through. On a cluster created before this existed the firewall lands live on the next converge; the allowlists must include the network you run `taloscluster` from (the tailnet, when talosctl goes over tailscale) or converge locks itself out.
+
 Only tcp/80 and tcp/443 are open by default, and a port stays open until some rule claims it. Omitting `http` and `https` leaves both open; a rule with no hosts closes its port entirely. `http` and `https` always mean 80 and 443 — pointing them at another port is rejected — but any other rule that claims 80 or 443 restricts it just the same.
 
 ## Plugins
@@ -362,7 +364,7 @@ converge; safe to delete.)
 
 ## Versions & upgrades
 
-`cluster.yaml` pins both versions; nothing auto-upgrades. Find targets with:
+`cluster.yaml` pins both versions; nothing auto-upgrades. `talos.version` must be v1.13.0 or newer: the generated machine configuration uses the multi-document network kinds (`LinkConfig`, `DHCPv4Config`, `Layer2VIPConfig`, `RoutingRuleConfig`, `ResolverConfig`) that older releases reject, and `load_config` refuses an older version. Find targets with:
 
 ```bash
 curl -s https://api.github.com/repos/siderolabs/talos/releases/latest | jq -r .tag_name
@@ -371,7 +373,9 @@ talosctl gen config --help | grep kubernetes-version   # k8s pairing Talos teste
 
 Two rules: upgrade Kubernetes **one minor at a time**, and **bump Talos before
 Kubernetes** when moving both (converge already orders it that way within a
-run). Bumping `talos.version` builds a new ~1 GB boot image via
+run, and steps through any skipped Kubernetes minors itself with
+`talosctl upgrade-k8s`; the machine config keeps the running Kubernetes
+version until that finishes). Bumping `talos.version` builds a new ~1 GB boot image via
 [factory.talos.dev](https://factory.talos.dev/) on the next converge.
 
 ## Extensions

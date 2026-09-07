@@ -99,7 +99,7 @@ def test_contribution_uses_scsi_install_disk(make_config, ep):
     assert talos.contribution(m, cfg, ep).install_disk == "/dev/sda"
 
 
-def test_contribution_without_external_uses_legacy_vip_interface(make_config, ep):
+def test_contribution_without_external_uses_dhcp_eth0_documents(make_config, ep):
     cfg = make_config(
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
@@ -116,10 +116,15 @@ def test_contribution_without_external_uses_legacy_vip_interface(make_config, ep
     cp = talos.contribution(cfg.machines["testcluster-controlplane-01"], cfg, ep)
     worker = talos.contribution(cfg.machines["testcluster-worker-01"], cfg, ep)
 
+    eth0 = [
+        {"apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "eth0"},
+        {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": "eth0"},
+    ]
     assert [p.name for p in cp.patches] == ["network"]
-    interfaces = cp.patches[0].document["machine"]["network"]["interfaces"]
-    assert interfaces == [{"interface": "eth0", "dhcp": True, "vip": {"ip": VIP}}]
-    assert worker.patches[0].document["machine"]["network"]["interfaces"] == []
+    assert cp.patches[0].document == eth0 + [
+        {"apiVersion": "v1alpha1", "kind": "Layer2VIPConfig", "name": VIP, "link": "eth0"},
+    ]
+    assert worker.patches[0].document == eth0
 
 
 def test_contribution_with_external_has_network_and_return_path(make_config, ep):
@@ -362,9 +367,13 @@ def test_contribution_sdn_without_external_uses_static_documents(make_config):
         "name": "192.168.0.9",
         "link": "private",
     }
-    assert cp.patches[1].document == {
-        "machine": {"network": {"nameservers": ["1.1.1.1"]}}
-    }
+    assert cp.patches[1].document == [
+        {
+            "apiVersion": "v1alpha1",
+            "kind": "ResolverConfig",
+            "nameservers": [{"address": "1.1.1.1"}],
+        }
+    ]
 
 
 def test_contribution_sdn_worker_has_static_address_and_no_vip(make_config):

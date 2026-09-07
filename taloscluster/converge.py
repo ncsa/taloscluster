@@ -118,6 +118,16 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             _talos_endpoint(cfg, refs, inv, talosconfig_path, required=False),
         )
 
+    # ---- 4. DISCOVER: is the cluster reachable? --------------------------
+    # The only robust "needs bootstrap" signal is that the kube-api does not
+    # answer. We don't trust a persisted marker (survives destroy) or "servers
+    # exist" (servers can exist un-bootstrapped, e.g. a create that didn't reach
+    # bootstrap). bootstrap itself is idempotent -- on an already-bootstrapped
+    # cluster it reports "already bootstrapped" and we treat that as success --
+    # so attempting it whenever the cluster is down is safe.
+    up = kubectl.cluster_up(kubeconfig_path)
+    info(f"cluster {'UP' if up else 'not up (will bootstrap if needed)'}")
+
     # ---- machine configs (need the fip/vip from the network phase) -------
     default_tags = backend.default_node_tags()
 
@@ -130,17 +140,8 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         configs = machineconfig.build_configs(
             cfg, secrets, machines, refs.kubernetes, secrets_path, installer_images,
             contributions, default_tags=default_tags,
+            kubernetes_version=_config_kubernetes_version(cfg, kubeconfig_path, up),
         )
-
-    # ---- 4. DISCOVER: is the cluster reachable? --------------------------
-    # The only robust "needs bootstrap" signal is that the kube-api does not
-    # answer. We don't trust a persisted marker (survives destroy) or "servers
-    # exist" (servers can exist un-bootstrapped, e.g. a create that didn't reach
-    # bootstrap). bootstrap itself is idempotent -- on an already-bootstrapped
-    # cluster it reports "already bootstrapped" and we treat that as success --
-    # so attempting it whenever the cluster is down is safe.
-    up = kubectl.cluster_up(kubeconfig_path)
-    info(f"cluster {'UP' if up else 'not up (will bootstrap if needed)'}")
 
     # ---- 5. SCALE-DOWN ---------------------------------------------------
     if up:
@@ -525,6 +526,33 @@ def _wait_version(talosconfig: Path, endpoint: str, node: str, want: str,
         f"{node} did not come back on {want} within {timeout_s // 60}m "
         f"(last seen: {seen or 'unreachable'}). Check `talosctl -n {node} dmesg`."
     )
+
+
+def _config_kubernetes_version(cfg: Config, kubeconfig: Path, up: bool) -> str:
+    """The kubernetes version to bake into the machine configs.
+
+    The generated config carries the kubelet and control-plane images for a
+    version, and applying it to a running node swaps them in place -- so
+    generating a running cluster's configs with the *target* version upgrades
+    kubernetes by config push, skipping every minor in between and leaving
+    `talosctl upgrade-k8s` nothing to do. Keep the running version in the
+    config; the upgrade phase then steps to the target with upgrade-k8s, which
+    rewrites those images itself. Fresh clusters (and an unreachable kube-api)
+    use cluster.yaml.
+    """
+    want = cfg.kubernetes_version
+    if not up:
+        return want
+    cur = kubectl.server_version(kubeconfig)
+    if not cur or cur == want:
+        return want
+    if versions.is_older(want, cur):
+        raise ReconcileError(
+            f"kubernetes.version {want} is older than the running {cur}; "
+            "kubernetes downgrades are not supported"
+        )
+    info(f"machine configs keep kubernetes {cur}; upgrade-k8s moves the cluster to {want}")
+    return cur
 
 
 def _k8s_upgrade_path(cur: str, want: str) -> list[str]:

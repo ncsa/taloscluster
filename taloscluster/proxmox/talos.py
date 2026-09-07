@@ -15,7 +15,7 @@ from typing import Any
 
 from .. import naming
 from ..config import Config, ConfigError, Machine, ProxmoxConfig, ProxmoxSdn, proxmox_sdn
-from ..infrastructure import Endpoint, TalosContribution, TalosPatch
+from ..infrastructure import Endpoint, TalosContribution, TalosPatch, dhcp_link_documents
 
 # Proxmox VMs boot from a virtio-scsi disk.
 INSTALL_DISK = "/dev/sda"
@@ -315,18 +315,12 @@ def contribution(m: Machine, cfg: Config, endpoint: Endpoint) -> TalosContributi
                 )
             patches = [TalosPatch("network", docs), _nameservers_patch(cfg)]
             return TalosContribution(install_disk=INSTALL_DISK, patches=tuple(patches))
-        # No external NIC: the API VIP rides the private link as a legacy
-        # machine.network interface, exactly like OpenStack.
-        interfaces = (
-            [{"interface": "eth0", "dhcp": True, "vip": {"ip": endpoint.vip}}]
-            if m.role == "controlplane"
-            else []
-        )
+        # No external NIC: DHCP on eth0 with the API VIP on it, exactly like
+        # OpenStack.
+        vip = endpoint.vip if m.role == "controlplane" else None
         return TalosContribution(
             install_disk=INSTALL_DISK,
-            patches=(
-                TalosPatch("network", {"machine": {"network": {"interfaces": interfaces}}}),
-            ),
+            patches=(TalosPatch("network", dhcp_link_documents("eth0", vip)),),
         )
 
     patches = [TalosPatch("network", external_network_docs(m, cfg))]
@@ -343,5 +337,11 @@ def _nameservers_patch(cfg: Config) -> TalosPatch:
     """Static addressing has no DHCP-provided DNS, so name the servers explicitly."""
     return TalosPatch(
         "nameservers",
-        {"machine": {"network": {"nameservers": list(cfg.dns)}}},
+        [
+            {
+                "apiVersion": "v1alpha1",
+                "kind": "ResolverConfig",
+                "nameservers": [{"address": dns} for dns in cfg.dns],
+            }
+        ],
     )

@@ -435,7 +435,7 @@ def test_patch_order_is_deterministic(cfg, monkeypatch, tmp_path):
     assert first == second
     cp = first[0]
     assert [n.split("-controlplane-01-")[-1] for n in cp] == [
-        "machine.yaml", "hostname.yaml", "cluster.yaml", "a.yaml", "b.yaml",
+        "machine.yaml", "hostname.yaml", "cluster.yaml", "firewall.yaml", "a.yaml", "b.yaml",
     ]
 
 

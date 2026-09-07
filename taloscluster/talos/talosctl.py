@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -273,29 +274,43 @@ def _dry_run_summary(out: str) -> list[str]:
 
 
 _SECRET_KEY = re.compile(r"^([-+ ]?\s*)([A-Za-z]*(?:key|secret|token)[A-Za-z]*):\s*\S.*$", re.I)
+# `- TS_AUTHKEY=...` style environment entries (extension service configs).
+_SECRET_ENV = re.compile(r"^([-+ ]?\s*-\s*)([A-Za-z_]*(?:key|secret|token)[A-Za-z_]*)=\S.*$", re.I)
 
 
 def _redact(line: str) -> str:
     """Hide secret values in a machine-config diff line (keys, tokens, secrets)."""
     match = _SECRET_KEY.match(line)
-    if match is None:
-        return line
-    return f"{match.group(1)}{match.group(2)}: <redacted>"
+    if match is not None:
+        return f"{match.group(1)}{match.group(2)}: <redacted>"
+    match = _SECRET_ENV.match(line)
+    if match is not None:
+        return f"{match.group(1)}{match.group(2)}=<redacted>"
+    return line
 
 
-def bootstrap(talosconfig: Path, endpoint: str, node: str) -> None:
+def bootstrap(talosconfig: Path, endpoint: str, node: str,
+              timeout_s: int = 300, interval_s: int = 10) -> None:
     action(f"talosctl bootstrap (node {node})")
     if dry_run():
         return
-    rc, out, err = _run_nocheck(_talos(talosconfig, endpoint, node, "bootstrap"))
-    if rc == 0:
-        return
-    # etcd already bootstrapped -> treat as success so re-runs are safe. Talos
-    # phrases this a few ways across versions.
-    msg = (err + out).lower()
-    if any(s in msg for s in ("already", "not empty", "alreadyexists")):
-        return
-    raise RuntimeError(f"bootstrap failed: {(err or out).strip()}")
+    deadline = time.monotonic() + timeout_s
+    while True:
+        rc, out, err = _run_nocheck(_talos(talosconfig, endpoint, node, "bootstrap"))
+        if rc == 0:
+            return
+        # etcd already bootstrapped -> treat as success so re-runs are safe. Talos
+        # phrases this a few ways across versions.
+        msg = (err + out).lower()
+        if any(s in msg for s in ("already", "not empty", "alreadyexists")):
+            return
+        # apid answers before etcd is ready to take the bootstrap call
+        # (FailedPrecondition "bootstrap is not available yet"); keep trying.
+        if "not available yet" in msg and time.monotonic() < deadline:
+            info("bootstrap not available yet, retrying...")
+            time.sleep(interval_s)
+            continue
+        raise RuntimeError(f"bootstrap failed: {(err or out).strip()}")
 
 
 def kubeconfig(talosconfig: Path, endpoint: str, node: str, out: Path) -> None:

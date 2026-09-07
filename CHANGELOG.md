@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Replace site-specific addresses and hostnames in the README, tests and plugin docs with documentation placeholders; the argocd plugin's infrastructure chart repository and NFS servers are now set through `argocd.infra.url` and `argocd.nfs.servers` in `cluster.yaml` instead of being hardcoded.
+- Require `talos.version` v1.13.0 or newer; older versions are refused at configuration load.
+- Generate the DHCP link and API VIP as `LinkConfig`, `DHCPv4Config`, and `Layer2VIPConfig` documents on OpenStack and on Proxmox without an external NIC, and nameservers on managed SDN as a `ResolverConfig` document, replacing the deprecated `machine.network.interfaces` and `machine.network.nameservers` fields.
+- Render the `security:` allowlists as the Talos ingress firewall on every node as well: default action block, all traffic from `network.cidr`, the open-by-default ports, each rule's port from its hosts, DHCP and tailscale. Existing clusters get it on their next converge.
+- Upgrade Kubernetes through `talosctl upgrade-k8s` one minor at a time: machine configs for a running cluster are generated with the Kubernetes version it runs, so applying them no longer swaps the kubelet and control-plane images straight to the target and skips the intermediate minors. A `kubernetes.version` older than the running cluster is refused.
+- Retry `talosctl bootstrap` while Talos answers "bootstrap is not available yet" (apid is up before etcd is ready), for up to five minutes, instead of failing the first converge.
+- Redact `NAME=value` environment entries such as the Tailscale auth key from the machine-config diff `plan` prints; only `key: value` mappings were redacted before.
 
 ## [0.7.0] - 2026-09-03
 

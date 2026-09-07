@@ -7,6 +7,7 @@ talosconfig
 talossecrets.yaml
 secrets.yaml
 cluster.yaml
+infra.yaml
 *.swp
 
 /openstack/
@@ -24,6 +25,8 @@ metallb-pool.yaml
 metallb-values.yaml
 traefik-values.yaml
 speedtest.yaml
+pinniped-*.yaml
+gen-infra.py
 
 # mkdocs build output
 site/
@@ -31,3 +34,4 @@ site/
 # coverage output
 .coverage
 htmlcov/
+.DS_Store

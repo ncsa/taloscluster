@@ -102,6 +102,50 @@ def _cluster_patch(cfg: Config, endpoint: Endpoint) -> dict:
     }
 
 
+# Ports the tailscale extension answers on for direct (non-relayed) peers.
+TAILSCALE_PORT = 41641
+DHCP_CLIENT_PORT = 68
+
+
+def _network_rule(name: str, protocol: str, ports: list, subnets: list[str]) -> dict:
+    return {
+        "apiVersion": "v1alpha1",
+        "kind": "NetworkRuleConfig",
+        "name": name,
+        "portSelector": {"ports": ports, "protocol": protocol},
+        "ingress": [{"subnet": subnet} for subnet in subnets],
+    }
+
+
+def _firewall_docs(cfg: Config) -> list[dict]:
+    """The Talos ingress firewall, mirroring the provider security rules.
+
+    Same policy as the OpenStack security group and the Proxmox VM firewall:
+    everything from the cluster network, the open-by-default ports from anywhere,
+    each `security:` rule's port from its hosts, and nothing else. Talos allows
+    loopback, established/related, rate-limited ICMP and pod/service traffic on
+    its own; DHCP replies and tailscale's direct-connection port are opened here
+    because a node must keep its lease and its tailnet reachability while the
+    default action is block.
+    """
+    docs: list[dict] = [
+        {"apiVersion": "v1alpha1", "kind": "NetworkDefaultActionConfig", "ingress": "block"},
+        _network_rule("cluster-tcp", "tcp", ["1-65535"], [cfg.cidr]),
+        _network_rule("cluster-udp", "udp", ["1-65535"], [cfg.cidr]),
+        _network_rule("dhcp-client", "udp", [DHCP_CLIENT_PORT], ["0.0.0.0/0"]),
+    ]
+    if cfg.tailscale_enabled:
+        docs.append(_network_rule("tailscale", "udp", [TAILSCALE_PORT], ["0.0.0.0/0"]))
+    for port in cfg.open_ports():
+        docs.append(_network_rule(f"open-tcp-{port}", "tcp", [port], ["0.0.0.0/0"]))
+    for rule in cfg.security.values():
+        if not rule.hosts:
+            continue  # a rule without hosts closes its port; block does that
+        name = re.sub(r"[^a-z0-9-]+", "-", rule.name.lower()).strip("-")
+        docs.append(_network_rule(name, "tcp", [rule.port], list(rule.hosts.values())))
+    return docs
+
+
 def _tailscale_patch(m: Machine, cfg: Config, auth_key: str) -> dict:
     return {
         "apiVersion": "v1alpha1",
@@ -151,12 +195,16 @@ def build_configs(
     installer_images: dict[tuple[str, ...], str],
     contributions: dict[str, TalosContribution],
     default_tags: dict[str, str] | None = None,
+    kubernetes_version: str | None = None,
 ) -> dict[str, str]:
     """Return {hostname -> machine-config YAML string} for every machine.
 
     `contributions` carries one provider contribution per hostname; the shared
     patches are written first, the provider's next, and the user's freeform
-    patches last.
+    patches last. `kubernetes_version` overrides `cfg.kubernetes_version` for
+    the component images baked into the config (kubelet, kube-apiserver, ...):
+    converge passes the version a running cluster is on so the upgrade goes
+    through `talosctl upgrade-k8s` instead of a config push.
     """
     cluster_endpoint = f"https://{endpoint.advertised_address}:6443"
     configs: dict[str, str] = {}
@@ -181,6 +229,7 @@ def build_configs(
                 patches.append(
                     _write(workdir, f"{host}-cluster", _cluster_patch(cfg, endpoint))
                 )
+            patches.append(_write(workdir, f"{host}-firewall", _firewall_docs(cfg)))
             if secrets.tailscale_auth_key and "siderolabs/tailscale" in m.extensions:
                 patches.append(
                     _write(workdir, f"{host}-tailscale",
@@ -203,7 +252,7 @@ def build_configs(
                 output_type="controlplane" if m.role == "controlplane" else "worker",
                 install_image=installer_image,
                 install_disk=contribution.install_disk,
-                kubernetes_version=cfg.kubernetes_version,
+                kubernetes_version=kubernetes_version or cfg.kubernetes_version,
                 talos_version=cfg.talos_version,
                 patches=patches,
             )

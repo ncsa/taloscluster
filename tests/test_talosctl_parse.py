@@ -250,6 +250,8 @@ def test_plan_apply_config_redacts_secret_values(tmp_path, monkeypatch, capsys):
         "     secretboxEncryptionSecret: xyz\n"
         "         crt: LS0tLS1CRUdJTiBDRVJU\n"
         "-        endpoint: https://1.2.3.4:6443\n"
+        "+    - TS_AUTHKEY=hskey-auth-JwDFrXEz\n"
+        "+    - TS_HOSTNAME=quad-worker-01\n"
     )
     monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (0, "", diff))
     set_dry_run(True)
@@ -258,9 +260,42 @@ def test_plan_apply_config_redacts_secret_values(tmp_path, monkeypatch, capsys):
     finally:
         set_dry_run(False)
     out = capsys.readouterr().out
-    for leaked in ("LS0tLS1CRUdJTiBFRDI1NTE5", "1kOcNXNRho", "abc.def", "ghi.jkl", "xyz"):
+    for leaked in ("LS0tLS1CRUdJTiBFRDI1NTE5", "1kOcNXNRho", "abc.def", "ghi.jkl", "xyz",
+                   "hskey-auth-JwDFrXEz"):
         assert leaked not in out
     assert "key: <redacted>" in out
     assert "-    token: <redacted>" in out
     assert "crt: LS0tLS1CRUdJTiBDRVJU" in out  # certificates are public
     assert "-        endpoint: https://1.2.3.4:6443" in out
+    assert "+    - TS_AUTHKEY=<redacted>" in out
+    assert "+    - TS_HOSTNAME=quad-worker-01" in out
+
+
+def test_bootstrap_retries_until_etcd_accepts_it(tmp_path, monkeypatch):
+    not_ready = "rpc error: code = FailedPrecondition desc = bootstrap is not available yet"
+    results = iter([(1, "", not_ready), (1, "", not_ready), (0, "", "")])
+    calls = []
+    monkeypatch.setattr(talosctl, "_run_nocheck",
+                        lambda args, timeout=None: (calls.append(args), next(results))[1])
+    monkeypatch.setattr(talosctl.time, "sleep", lambda s: None)
+
+    talosctl.bootstrap(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.1")
+
+    assert len(calls) == 3
+
+
+def test_bootstrap_gives_up_when_etcd_never_becomes_available(tmp_path, monkeypatch):
+    not_ready = "rpc error: code = FailedPrecondition desc = bootstrap is not available yet"
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (1, "", not_ready))
+    monkeypatch.setattr(talosctl.time, "sleep", lambda s: None)
+    clock = iter([0.0, 1.0, 400.0])
+    monkeypatch.setattr(talosctl.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(RuntimeError, match="not available yet"):
+        talosctl.bootstrap(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.1", timeout_s=300)
+
+
+def test_bootstrap_treats_already_bootstrapped_as_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(talosctl, "_run_nocheck",
+                        lambda args, timeout=None: (1, "", "etcd data directory is not empty"))
+    talosctl.bootstrap(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.1")

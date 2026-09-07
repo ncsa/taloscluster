@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from . import naming
+from . import naming, versions
 from .errors import ConfigError
 from .naming import BASE_EXTENSIONS
 
@@ -26,6 +26,10 @@ CLUSTER_FILE = "cluster.yaml"
 SECRETS_FILE = "secrets.yaml"
 
 _NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+# Oldest Talos release the generated machine configuration targets: the
+# multi-document network kinds (LinkConfig, DHCPv4Config, Layer2VIPConfig,
+# RoutingRuleConfig, ResolverConfig) all exist from v1.13.
+MIN_TALOS_VERSION = "v1.13.0"
 _VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
@@ -788,6 +792,11 @@ def _validate(cfg: Config) -> None:
             raise ConfigError(
                 f"cluster.yaml: {field_name} must be a release version such as v1.2.3"
             )
+    if versions.is_older(cfg.talos_version, MIN_TALOS_VERSION):
+        raise ConfigError(
+            f"cluster.yaml: talos.version must be {MIN_TALOS_VERSION} or newer, "
+            f"got {cfg.talos_version}"
+        )
 
     if "controlplane" in cfg.workers:
         raise ConfigError("worker pool name 'controlplane' is reserved")

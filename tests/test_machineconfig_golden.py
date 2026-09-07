@@ -79,16 +79,23 @@ GOLDEN = {
         [_machine_patch("controlplane", "controlplane")],
         [_named(HOSTNAME_PATCH, "testcluster-controlplane-01")],
         [CLUSTER_PATCH],
+        "FIREWALL",
         [_named(TAILSCALE_PATCH, "testcluster-controlplane-01")],
-        [{"machine": {"network": {"interfaces": [
-            {"interface": "eth0", "dhcp": True, "vip": {"ip": VIP}},
-        ]}}}],
+        [
+            {"apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "eth0"},
+            {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": "eth0"},
+            {"apiVersion": "v1alpha1", "kind": "Layer2VIPConfig", "name": VIP, "link": "eth0"},
+        ],
     ],
     "testcluster-worker-01": [
         [_machine_patch("worker", "worker")],
         [_named(HOSTNAME_PATCH, "testcluster-worker-01")],
+        "FIREWALL",
         [_named(TAILSCALE_PATCH, "testcluster-worker-01")],
-        [{"machine": {"network": {"interfaces": []}}}],
+        [
+            {"apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "eth0"},
+            {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": "eth0"},
+        ],
     ],
 }
 
@@ -134,4 +141,11 @@ def test_openstack_patch_stack_matches_golden(cfg, monkeypatch, tmp_path):
         },
     )
 
-    assert rendered == GOLDEN
+    # the firewall stack is derived from the same security rules on every node;
+    # its content is covered by tests/test_talos_firewall.py
+    firewall = machineconfig._firewall_docs(cfg)
+    expected = {
+        host: [firewall if patch == "FIREWALL" else patch for patch in stack]
+        for host, stack in GOLDEN.items()
+    }
+    assert rendered == expected
