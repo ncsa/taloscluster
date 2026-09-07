@@ -32,6 +32,8 @@ dev = [
     "taloscluster-argocd",
     "taloscluster-rancher",
     "mkdocs-material>=9.7.7",
+    "pytest-timeout>=2.4",
+    "pytest-cov>=7",
 ]
 
 # plugins live in this repo; a new one is a new folder under plugins/ and is
@@ -55,6 +57,14 @@ include = ["taloscluster*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "plugins"]
+timeout = 30
+
+[tool.coverage.run]
+source = ["taloscluster", "plugins/argocd/taloscluster_argocd", "plugins/rancher/taloscluster_rancher"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 line-length = 100

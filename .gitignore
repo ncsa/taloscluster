@@ -27,3 +27,7 @@ speedtest.yaml
 
 # mkdocs build output
 site/
+
+# coverage output
+.coverage
+htmlcov/

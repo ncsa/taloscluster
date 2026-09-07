@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `pytest-timeout` (30s per test) and `pytest-cov` to the dev extra, with a `tests` workflow running the suite with coverage on pushes and pull requests.
 - Add a `docs/` configuration reference: an index of every `cluster.yaml` and `secrets.yaml` key with one page per section, including the rancher and argocd plugins.
 - Add an MkDocs Material site for `docs/` (`uv run mkdocs serve`), published to GitHub Pages by a `docs` workflow on pushes to main.
 
