@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clarify that users must connect the management machine to the cluster's tailnet themselves.
 - Align documentation with provider behavior, plugin settings, firewall rules, command limitations, and installation requirements.
 - Track audit follow-ups and remaining documentation work in `todo.md`.
+- Note that the README's editable tool install needs `uv sync --extra dev` before `uv run pytest` and `uv run mkdocs serve`, and drop the duplicated command.
+- Emit no `--login-server` argument when `tailscale.login_server` is unset, so omitting it selects the public Tailscale control plane instead of `--login-server=None`.
 
 ## [0.7.0] - 2026-09-06
 

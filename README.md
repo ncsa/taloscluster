@@ -48,8 +48,22 @@ Edit the generated templates for your environment before converging. Back up `ta
 
 ## Development
 
+Install the working tree in editable mode:
+
 ```bash
+uv sync --extra dev --extra all --editable
+```
+
+Or install it as an editable tool with all plugins:
+
+```bash
+uv tool install --editable ".[all]"
 uv sync --extra dev
+```
+
+The `uv run` commands below use the project environment, which the tool install leaves without development dependencies, so run `uv sync --extra dev` first. Then run the tests and local docs:
+
+```bash
 uv run pytest
 uv run mkdocs serve
 ```

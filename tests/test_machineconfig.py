@@ -161,6 +161,21 @@ def test_tailscale_patch_env_lines(cfg):
     assert cfg.login_server in extra[0]
 
 
+def test_tailscale_patch_no_login_server(make_config):
+    cfg = make_config({
+        "controlplane": {"count": 1, "flavor": "gp.medium", "disk": 40},
+        "tailscale": {},
+    })
+    m = cfg.machines["testcluster-controlplane-01"]
+    patch = machineconfig._tailscale_patch(m, cfg, "tskey-secret")
+    env = patch["environment"]
+    assert "TS_AUTHKEY=tskey-secret" in env
+    assert f"TS_HOSTNAME={m.name}" in env
+    extra = [line for line in env if line.startswith("TS_EXTRA_ARGS=")]
+    assert len(extra) == 1
+    assert extra[0] == "TS_EXTRA_ARGS="
+
+
 # ---------------------------------------------------------------------------
 # build_configs
 # ---------------------------------------------------------------------------

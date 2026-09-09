@@ -147,6 +147,7 @@ def _firewall_docs(cfg: Config) -> list[dict]:
 
 
 def _tailscale_patch(m: Machine, cfg: Config, auth_key: str) -> dict:
+    extra_args = f"--login-server={cfg.login_server}" if cfg.login_server else ""
     return {
         "apiVersion": "v1alpha1",
         "kind": "ExtensionServiceConfig",
@@ -154,7 +155,7 @@ def _tailscale_patch(m: Machine, cfg: Config, auth_key: str) -> dict:
         "environment": [
             f"TS_AUTHKEY={auth_key}",
             f"TS_HOSTNAME={m.name}",
-            f"TS_EXTRA_ARGS=--login-server={cfg.login_server}",
+            f"TS_EXTRA_ARGS={extra_args}",
         ],
     }
 

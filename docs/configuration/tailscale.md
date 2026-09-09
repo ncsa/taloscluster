@@ -21,7 +21,7 @@ The presence of this section, even as `tailscale: {}`, keeps the tailscale exten
 
 Optional in the loader · URL · default unset
 
-Set the Tailscale control-server URL explicitly when supplying an auth key, for example your Headscale server. The current generator always emits `--login-server=<value>` and emits `--login-server=None` when this key is omitted; omission does not reliably select the public Tailscale control plane.
+Set the Tailscale control-server URL explicitly when supplying an auth key, for example your Headscale server. When set, the generator emits `--login-server=<value>`. When omitted, no `--login-server` argument is emitted and the public Tailscale control plane is selected by default.
 
 ## secrets.yaml
 
