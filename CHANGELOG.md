@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Track audit follow-ups and remaining documentation work in `todo.md`.
 - Note that the README's editable tool install needs `uv sync --extra dev` before `uv run pytest` and `uv run mkdocs serve`, and drop the duplicated command.
 - Emit no `--login-server` argument when `tailscale.login_server` is unset, so omitting it selects the public Tailscale control plane instead of `--login-server=None`.
+- Detect extension-only edits by comparing a node's running schematic (the factory's `schematic` extension in `talosctl get extensions`) instead of the installer reference in the just-applied machine config, so adding or removing an extension reliably reinstalls the node and an extension-only upgrade waits for the new schematic to appear; after a bootstrap or scale-up, any node that came up on the shared base image without its configured extensions is reinstalled too.
 
 ## [0.7.0] - 2026-09-06
 

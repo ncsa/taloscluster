@@ -46,7 +46,7 @@ Talos release to run; use the canonical `vMAJOR.MINOR.PATCH` form. The loader al
 
 Optional · list of strings · default empty
 
-Extra Talos system extensions merged with the QEMU guest agent, Tailscale when enabled, and pool-level `extensions`. An explicit `siderolabs/tailscale` entry keeps that extension even without a `tailscale` section. Proxmox installs the resolved image on first boot; OpenStack initially boots the shared volume image and needs a Talos upgrade after bootstrap for a different set. Extensions activate during installation or upgrade, not merely when a machine configuration is applied. Converge compares the node’s version and machine-config installer reference rather than inspecting installed extensions, so an extension-only edit is not a guarantee that an upgrade occurs.
+Extra Talos system extensions merged with the QEMU guest agent, Tailscale when enabled, and pool-level `extensions`. An explicit `siderolabs/tailscale` entry keeps that extension even without a `tailscale` section. Proxmox installs the resolved image on first boot; OpenStack initially boots the shared volume image, so a node converges onto those extensions through a Talos upgrade rather than at first boot. Extensions activate during installation or upgrade, not merely when a machine configuration is applied. Converge detects an extension-only change by comparing a node's running schematic (the Image Factory's `schematic` extension reported by `talosctl get extensions`) against cluster.yaml, and after a bootstrap or scale-up asks any node that came up short of its configured extensions to reinstall, so adding or removing an extension reliably takes effect.
 
 ### `talos.config_patches`
 

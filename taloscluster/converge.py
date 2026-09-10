@@ -74,13 +74,14 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
 
     backend = backend_for(cfg, secrets)
 
-    # installer image ref per extension set (schematic drives extension removal)
+    # installer image ref and schematic id per extension set (the schematic
+    # drives extension removal; converge compares it against the RUNNING node to
+    # detect extension-only changes, see _upgrade)
     installer_platform = backend.installer_platform
+    installer_schematics = {s: factory.schematic_id(s) for s in cfg.extension_sets()}
     installer_images = {
-        s: factory.installer_image(
-            factory.schematic_id(s), cfg.talos_version, platform=installer_platform
-        )
-        for s in cfg.extension_sets()
+        s: factory.installer_image(sid, cfg.talos_version, platform=installer_platform)
+        for s, sid in installer_schematics.items()
     }
 
     # ---- 1. IMAGE --------------------------------------------------------
@@ -168,7 +169,8 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
 
     # ---- 7. UPGRADE (before adding new nodes) ----------------------------
     if up:
-        _upgrade(cfg, machines, inv, refs, installer_images, talosconfig_path, kubeconfig_path)
+        _upgrade(cfg, machines, inv, refs, installer_images, installer_schematics,
+                 talosconfig_path, kubeconfig_path)
 
     # ---- 7. COMPUTE (create / scale up) ----------------------------------
     log("compute")
@@ -227,6 +229,12 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         log("health")
         _require_final_health(talosconfig_path, cp1, refs.kubernetes.vip, kubeconfig_path)
         _wait_nodes_ready(kubeconfig_path, machines)
+        # OpenStack first-boot and scaled-up nodes are created on the shared
+        # base image, so re-check every node's running schematic now that it has
+        # joined and reinstall any that came up short of its configured
+        # extensions (a no-op on nodes the upgrade phase already converged).
+        inv = _reconcile_joined(cfg, machines, backend, refs, installer_images,
+                                installer_schematics, talosconfig_path, kubeconfig_path)
         log("status")
         print(kubectl.get_nodes_wide(kubeconfig_path))
         print(f"kube api:   https://{refs.kubernetes.advertised_address}:6443")
@@ -494,13 +502,20 @@ def _wait_nodes_ready(kubeconfig: Path, machines: dict[str, Machine],
 
 
 def _wait_version(talosconfig: Path, endpoint: str, node: str, want: str,
+                  want_schematic: str = "",
                   timeout_s: int = 1800, interval_s: int = 10) -> None:
-    """Block until `node` reboots into talos `want`.
+    """Block until `node` reboots into talos `want` -- and, for an
+    extension-only upgrade that keeps the same talos version (`want_schematic`
+    given), is on the expected schematic.
 
     Replaces `talosctl upgrade --wait`, whose watch stream dies with
     ENHANCE_YOUR_CALM/too_many_pings whenever the client is newer than the
     server -- always true mid-upgrade (see talosctl.upgrade). Polling is
     immune to that, and to the node dropping off the network while it reboots.
+
+    The version alone cannot tell an extension-only reboot apart (it is already
+    at `want` before the upgrade), so when `want_schematic` is supplied the
+    running schematic is the barrier that actually waits out the reboot.
 
     30m matches talosctl's own upgrade timeout: the node has to pull the
     installer image from factory.talos.dev before it can reboot, and a slow or
@@ -510,7 +525,8 @@ def _wait_version(talosconfig: Path, endpoint: str, node: str, want: str,
     """
     if dry_run():
         return
-    info(f"waiting for {node} to come back on {want} (up to {timeout_s // 60}m)...")
+    marker = want if not want_schematic else f"{want}/{want_schematic}"
+    info(f"waiting for {node} to come back on {marker} (up to {timeout_s // 60}m)...")
     deadline = time.monotonic() + timeout_s
     seen = ""
     while time.monotonic() < deadline:
@@ -519,11 +535,18 @@ def _wait_version(talosconfig: Path, endpoint: str, node: str, want: str,
             seen = talosctl.server_version(talosconfig, endpoint, node)
         except subprocess.CalledProcessError:
             continue  # node is rebooting; apid not answering yet
-        if seen == want:
-            info(f"{node} is on {want}")
-            return
+        if seen != want:
+            continue
+        if want_schematic:
+            try:
+                if talosctl.running_schematic(talosconfig, endpoint, node) != want_schematic:
+                    continue
+            except subprocess.CalledProcessError:
+                continue  # node is still down mid-reboot
+        info(f"{node} is on {marker}")
+        return
     raise TimeoutError(
-        f"{node} did not come back on {want} within {timeout_s // 60}m "
+        f"{node} did not come back on {marker} within {timeout_s // 60}m "
         f"(last seen: {seen or 'unreachable'}). Check `talosctl -n {node} dmesg`."
     )
 
@@ -776,9 +799,18 @@ def _apply_configs(cfg: Config, machines: dict[str, Machine],
         info("no existing nodes to configure")
 
 
-def _upgrade(cfg: Config, machines: dict[str, Machine], inv: InfrastructureInventory,
-             refs: NetworkResult, installer_images: dict[tuple[str, ...], str],
-             talosconfig: Path, kubeconfig: Path) -> None:
+def _reconcile_talos(cfg: Config, machines: dict[str, Machine], inv: InfrastructureInventory,
+                     refs: NetworkResult, installer_images: dict[tuple[str, ...], str],
+                     installer_schematics: dict[tuple[str, ...], str],
+                     talosconfig: Path, kubeconfig: Path) -> None:
+    """Bring every existing, talos-reachable node to the target talos version
+    and schematic (extension set), control planes first, health-checked between.
+
+    Shared by the upgrade phase (pre-existing drift, before new nodes join) and
+    the post-join reconcile: OpenStack first-boot and scaled-up nodes are created
+    on the shared base image, so they finish converge a schematic short of the
+    target unless they are reinstalled here after they join.
+    """
     log(f"talos version (want {cfg.talos_version})")
     endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
     discovered = talosctl.member_addresses(
@@ -795,22 +827,65 @@ def _upgrade(cfg: Config, machines: dict[str, Machine], inv: InfrastructureInven
         if not address:
             continue
         want_image = installer_images[m.extensions]
+        want_schematic = installer_schematics[m.extensions]
         cur_ver = talosctl.server_version(talosconfig, endpoint, address)
-        cur_image = talosctl.node_image(talosconfig, endpoint, address)
-        # upgrade on a version change OR a schematic change (extension list edit)
-        if cur_ver == cfg.talos_version and (not cur_image or cur_image == want_image):
+        # the RUNNING schematic, not the installer reference in the machine
+        # config (the apply phase has already rewritten the config to the target
+        # by the time we get here), so an extension-only edit triggers a reinstall
+        cur_schematic = talosctl.running_schematic(talosconfig, endpoint, address)
+        # upgrade on a version change OR a schematic change (extension list edit);
+        # an unreadable schematic is treated as matching, like an unreadable image
+        # used to be, rather than forcing upgrades on nodes we cannot inspect
+        if cur_ver == cfg.talos_version and (not cur_schematic or cur_schematic == want_schematic):
             _uncordon_stale(kubeconfig, host)
             info(f"{host}: {cur_ver or '?'}, ok")
             continue
-        info(f"{host}: {cur_ver or '?'} -> {cfg.talos_version} ({want_image})")
+        reason = "extensions changed" if cur_ver == cfg.talos_version else str(cur_ver or "?")
+        info(f"{host}: {reason} -> {cfg.talos_version} ({want_image})")
         talosctl.upgrade(talosconfig, endpoint, address, want_image)
-        _wait_version(talosconfig, endpoint, address, cfg.talos_version)
+        _wait_version(talosconfig, endpoint, address, cfg.talos_version, want_schematic)
         _uncordon_stale(kubeconfig, host)
         if not _health_or_kube_fallback(talosconfig, endpoint, refs.kubernetes.vip,
                                         kubeconfig, timeout="10m"):
             raise ReconcileError(f"cluster unhealthy after upgrading {host}; aborting rollout")
 
+
+def _reconcile_joined(cfg: Config, machines: dict[str, Machine], backend,
+                      refs: NetworkResult, installer_images: dict[tuple[str, ...], str],
+                      installer_schematics: dict[tuple[str, ...], str],
+                      talosconfig: Path, kubeconfig: Path) -> InfrastructureInventory:
+    """Refresh the inventory and reconcile every node's running schematic, then
+    return the refreshed inventory.
+
+    The compute phase creates machines through the backend without extending the
+    pre-compute inventory `converge` loaded in the network phase, so a caller
+    that reuses that stale inventory would skip every node it just created
+    (`_reconcile_talos` only touches nodes it can see). Loading here guarantees
+    OpenStack first-boot and scaled-up nodes -- which join on the shared base
+    image -- are seen and reinstalled once they are up.
+    """
+    inv = backend.load_inventory()
+    _reconcile_talos(cfg, machines, inv, refs, installer_images, installer_schematics,
+                     talosconfig, kubeconfig)
+    return inv
+
+
+def _upgrade(cfg: Config, machines: dict[str, Machine], inv: InfrastructureInventory,
+             refs: NetworkResult, installer_images: dict[tuple[str, ...], str],
+             installer_schematics: dict[tuple[str, ...], str],
+             talosconfig: Path, kubeconfig: Path) -> None:
+    """Roll existing nodes to the target talos and kubernetes versions before new
+    nodes are created, so a new node never joins newer than the rest (see the
+    converge docstring). Nodes created in the compute phase are caught again by
+    `_reconcile_talos` in the health phase once they join.
+    """
+    _reconcile_talos(cfg, machines, inv, refs, installer_images, installer_schematics,
+                     talosconfig, kubeconfig)
     log(f"kubernetes version (want {cfg.kubernetes_version})")
+    endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
+    discovered = talosctl.member_addresses(
+        talosconfig, endpoint, exclude_vip=_cluster_vips(cfg, refs, kubeconfig)
+    )
     cur = kubectl.server_version(kubeconfig)
     if not cur:
         # the api server is briefly unreachable after a machine-config apply,

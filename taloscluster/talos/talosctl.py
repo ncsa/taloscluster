@@ -357,19 +357,53 @@ def server_version(talosconfig: Path, endpoint: str, node: str) -> str:
     return _server_tag(_run(_talos(talosconfig, endpoint, node, "version"), capture=True))
 
 
-def node_image(talosconfig: Path, endpoint: str, node: str) -> str:
-    """The installer image currently applied to a node (to detect schematic
-    changes, so editing the extension list triggers an upgrade)."""
+def running_schematic(talosconfig: Path, endpoint: str, node: str) -> str:
+    """The schematic (extension set) the node is currently RUNNING, or "".
+
+    The Image Factory bakes a virtual `schematic` extension into Every image it
+    builds, and the extension's manifest version IS that image's schematic id.
+    `talosctl get extensions` lists it, so this reads the node's *running*
+    extension state directly.
+
+    That is the right thing to compare for an extension change, unlike the
+    installer reference in the node's machine config: converge applies the new
+    config before the upgrade phase runs, so the config's install.image already
+    points at the target schematic even while the node is still running the old
+    extensions -- comparing it never triggers the reinstall.
+    """
     out = _run(
-        _talos(talosconfig, endpoint, node, "get", "machineconfig", "-o", "yaml"),
+        _talos(talosconfig, endpoint, node, "get", "extensions", "-o", "yaml"),
         capture=True,
     )
-    # cheap extraction; converge.py compares against the resolved installer ref
-    for line in out.splitlines():
-        s = line.strip()
-        if s.startswith("image:") and "installer" in s:
-            return s.split(":", 1)[1].strip()
+    for doc in _resource_docs(out):
+        spec = doc.get("spec") or {}
+        meta = spec.get("metadata") or {}
+        ident = doc.get("metadata") or {}
+        if meta.get("name") == "schematic" or ident.get("id") == "schematic":
+            return str(meta.get("version") or "")
     return ""
+
+
+def _resource_docs(out: str) -> list[dict]:
+    """The resource documents in `talosctl get ... -o yaml` output.
+
+    talosctl interleaves a plain `node: <address>` header line with the
+    `---`-separated YAML resource documents, so a bare `yaml.safe_load_all`
+    cannot read it; drop the header lines and split on document markers.
+    """
+    docs: list[dict] = []
+    for chunk in out.split("---"):
+        text = "\n".join(
+            line for line in chunk.splitlines()
+            if not line.strip().startswith("node:")
+        )
+        try:
+            doc = yaml.safe_load(text)
+        except yaml.YAMLError:
+            continue
+        if isinstance(doc, dict):
+            docs.append(doc)
+    return docs
 
 
 def upgrade(talosconfig: Path, endpoint: str, node: str, image: str) -> None:

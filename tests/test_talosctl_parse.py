@@ -1,7 +1,8 @@
 """Tests for the output parsers in taloscluster.talos.talosctl.
 
-``server_version`` and ``node_image`` shell out via ``_run``; we monkeypatch
-``_run`` so no ``talosctl`` binary is needed and assert the parsing logic.
+``server_version`` and ``running_schematic`` shell out via ``_run``; we
+monkeypatch ``_run`` so no ``talosctl`` binary is needed and assert the parsing
+logic.
 """
 
 from __future__ import annotations
@@ -50,37 +51,69 @@ def test_server_version_client_only_no_server_returns_empty(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# node_image
+# running_schematic
 # ---------------------------------------------------------------------------
 
-def test_node_image_returns_full_ref_with_tag(monkeypatch):
+SCHEMATIC = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"
+
+# A realistic `get extensions -o yaml` stream: `node:` header lines interleaved
+# with `---`-separated resource documents, one per extension. The Image Factory
+# bakes a `schematic` extension whose manifest version is the running schematic.
+EXTENSIONS_OUTPUT = (
+    f"node: 192.0.2.10\n"
+    "metadata:\n"
+    "    namespace: runtime\n"
+    "    type: ExtensionStatuses.runtime.talos.dev\n"
+    "    id: schematic\n"
+    "    version: 3\n"
+    "    owner: runtime.ExtensionStatusController\n"
+    "    phase: running\n"
+    "spec:\n"
+    "    image: ghcr.io/siderolabs/schematic:v1.0.0\n"
+    "    metadata:\n"
+    "        name: schematic\n"
+    f"        version: {SCHEMATIC}\n"
+    "        author: siderolabs\n"
+    "---\n"
+    f"node: 192.0.2.10\n"
+    "metadata:\n"
+    "    namespace: runtime\n"
+    "    type: ExtensionStatuses.runtime.talos.dev\n"
+    "    id: qemu-guest-agent\n"
+    "    version: 2\n"
+    "spec:\n"
+    "    image: ghcr.io/siderolabs/qemu-guest-agent:1.0.0\n"
+    "    metadata:\n"
+    "        name: qemu-guest-agent\n"
+    f"        version: {SCHEMATIC}\n"
+)
+
+
+def test_running_schematic_reads_the_factory_schematic_extension(monkeypatch):
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: EXTENSIONS_OUTPUT)
+    got = talosctl.running_schematic(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    assert got == SCHEMATIC
+
+
+def test_running_schematic_empty_when_no_factory_schematic(monkeypatch):
     out = (
+        "node: 192.0.2.10\n"
         "metadata:\n"
-        "  namespace: config\n"
+        "    namespace: runtime\n"
+        "    type: ExtensionStatuses.runtime.talos.dev\n"
+        "    id: qemu-guest-agent\n"
         "spec:\n"
-        "  machine:\n"
-        "    install:\n"
-        "      image: factory.talos.dev/openstack-installer/abc123:v1.8.3\n"
+        "    metadata:\n"
+        "        name: qemu-guest-agent\n"
+        "        version: 1.2"
     )
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: out)
-    ref = talosctl.node_image(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
-    assert ref == "factory.talos.dev/openstack-installer/abc123:v1.8.3"
+    assert talosctl.running_schematic(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
 
 
-def test_node_image_unrelated_image_line_ignored(monkeypatch):
-    """An image: line without 'installer' is not the install image."""
-    out = (
-        "spec:\n"
-        "  some:\n"
-        "    image: registry.example.com/nginx:latest\n"
-    )
-    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: out)
-    assert talosctl.node_image(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
-
-
-def test_node_image_empty_output_returns_empty(monkeypatch):
+def test_running_schematic_empty_on_empty_output(monkeypatch):
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: "")
-    assert talosctl.node_image(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
+    assert talosctl.running_schematic(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
 
 
 # A realistic `get members -o json` stream: separate JSON objects, NOT an array.
