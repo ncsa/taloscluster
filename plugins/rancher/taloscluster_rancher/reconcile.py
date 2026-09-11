@@ -16,9 +16,10 @@ to it and abort — it is an unrelated cluster with the same name. Safe to re-ru
 an existing cluster matching the downstream agent id is reused, and member
 reconciliation is idempotent.
 
-`destroy` removes every member that this config declares (admins + users). It
-does NOT delete the cluster from Rancher. The owner (the user behind the token)
-is preserved because only bindings matching the configured netids are removed.
+`destroy` deletes the cluster from Rancher and uninstalls the Rancher agent
+from the downstream cluster. Like `converge`, it refuses to touch a Rancher
+cluster whose id does not match the downstream cluster's cattle-cluster-agent,
+so an unrelated cluster bearing the same name is never deleted.
 """
 
 from __future__ import annotations
@@ -228,6 +229,18 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
     if cluster is None:
         info(f"cluster {cfg.name} not registered in Rancher; nothing to remove")
         return
+
+    downstream_id = downstream_rancher_id(ctx.root)
+    if not downstream_id:
+        raise RancherError(
+            f"Rancher cluster {cfg.name!r} ({cluster.id}) has no cattle-cluster-agent "
+            "on the downstream cluster, so it is not this cluster; refuse to delete it"
+        )
+    if downstream_id != cluster.id:
+        raise RancherError(
+            f"Rancher cluster {cfg.name!r} ({cluster.id}) does not match the "
+            f"downstream cluster ({downstream_id}); refuse to delete it"
+        )
 
     log("delete cluster from Rancher")
     client.delete_cluster(cluster.id)

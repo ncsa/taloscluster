@@ -33,7 +33,7 @@ Plugins run in a defined order and can pass information forward. A plugin declar
 
 ## Rancher
 
-The rancher plugin takes usernames from [`rancher.admins` and `rancher.users`](../configuration/rancher.md) and reconciles them to Rancher's `cluster-owner` and `cluster-member` roles, adding missing bindings and removing bindings for anyone no longer listed. Stale individual user bindings are removed, while the creator-owner binding and group bindings are preserved. Access inherited through those retained bindings may remain. Destroy deletes the Rancher cluster registration and removes the downstream `cattle-system` namespace.
+The rancher plugin takes usernames from [`rancher.admins` and `rancher.users`](../configuration/rancher.md) and reconciles them to Rancher's `cluster-owner` and `cluster-member` roles, adding missing bindings and removing bindings for anyone no longer listed. Stale individual user bindings are removed, while the creator-owner binding and group bindings are preserved. Access inherited through those retained bindings may remain. Destroy refuses to delete a Rancher cluster whose id does not match the downstream cluster's `cattle-cluster-agent`, so an unrelated cluster sharing the name is never removed; otherwise it deletes the Rancher cluster registration and removes the downstream `cattle-system` namespace.
 
 ## ArgoCD
 

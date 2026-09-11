@@ -53,8 +53,10 @@ taloscluster plugin rancher [converge|plan|destroy|status|check] [-C DIR]
   state).
 - **destroy** — **delete the cluster from Rancher** (not just members) and remove
   the Rancher agent (`cattle-system` namespace) from the downstream cluster via
-  kubectl. Runs before the OpenStack teardown, while the cluster is still
-  reachable.
+  kubectl. Like `converge`, it refuses to delete unless the Rancher cluster's id
+  matches the downstream cluster's `cattle-cluster-agent`, so an unrelated
+  cluster sharing the name is never removed. Runs before the OpenStack teardown,
+  while the cluster is still reachable.
 - **status** — whether the cluster is registered, its Rancher id, whether the
   agent is installed, and the current member bindings.
 - **check** — whether converge would change anything: not ok when the cluster is
