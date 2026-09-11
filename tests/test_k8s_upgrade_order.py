@@ -388,6 +388,10 @@ def test_converge_scales_up_nodes_at_the_upgraded_version(
         )
     )
     state = _ExistingSecretsState(tmp_path)
+    # an up cluster already bootstrapped and wrote its kubeconfig; without it
+    # `_kube_up` would short-circuit on the missing file and read the cluster as
+    # never-bootstrapped (down), skipping the scale-up wiring under test
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
 
     calls: list[str] = []
 

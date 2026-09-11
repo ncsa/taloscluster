@@ -146,12 +146,24 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # ---- 4. DISCOVER: is the cluster reachable? --------------------------
     # The only robust "needs bootstrap" signal is that the kube-api does not
     # answer. We don't trust a persisted marker (survives destroy) or "servers
-    # exist" (servers can exist un-bootstrapped, e.g. a create that didn't reach
-    # bootstrap). bootstrap itself is idempotent -- on an already-bootstrapped
+    # exist" (servers can exist un-bootstrapped: a create that didn't reach
+    # bootstrap drops machines into the inventory before the cluster ever
+    # bootstrapped). bootstrap itself is idempotent -- on an already-bootstrapped
     # cluster it reports "already bootstrapped" and we treat that as success --
-    # so attempting it whenever the cluster is down is safe.
-    up = kubectl.cluster_up(kubeconfig_path)
-    info(f"cluster {'UP' if up else 'not up (will bootstrap if needed)'}")
+    # so a never-bootstrapped cluster is safe to bootstrap even when its API
+    # does not answer. The signal that a cluster WAS bootstrapped is the
+    # kubeconfig a prior converge wrote only after bootstrap completed: the
+    # probe is retried so one transient failure is never read as fresh, and when
+    # that kubeconfig exists yet the API still does not answer, converge warns
+    # loudly and refuses to recreate nodes or re-bootstrap (an interrupted first
+    # run -- machines but no kubeconfig -- still bootstraps).
+    up = _kube_up(kubeconfig_path, inv)
+    bootstrapped_before = kubeconfig_path.is_file() and kubeconfig_path.stat().st_size > 0
+    existing_but_down = not up and bool(inv.machines) and bootstrapped_before
+    if existing_but_down:
+        info("cluster not up: existing but unreachable -- not bootstrapping")
+    else:
+        info(f"cluster {'UP' if up else 'not up (will bootstrap if needed)'}")
 
     # ---- machine configs (need the fip/vip from the network phase) -------
     default_tags = backend.default_node_tags()
@@ -201,7 +213,10 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # ---- 7. COMPUTE (create / scale up) ----------------------------------
     log("compute")
     needs_restart: set[str] = set()
-    if configs or dry_run():
+    if existing_but_down and not dry_run():
+        warn("skipping compute: machines exist but the kube-api is unreachable -- "
+             "refusing to recreate nodes for an existing cluster")
+    elif configs or dry_run():
         # `configs` baked the running version so `talosctl upgrade-k8s` steps the
         # EXISTING cluster through every minor. A node scaled up in the same run
         # as an upgrade boots at the target version the upgrade phase established.
@@ -242,7 +257,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             _write_talosconfig(talosconfig_path, cfg, refs, secrets_path, cp1)
 
     # ---- 8. BOOTSTRAP (if the cluster isn't up) --------------------------
-    if not up and not dry_run():
+    if not up and not existing_but_down and not dry_run():
         log("bootstrap")
         # a freshly created node must boot, start tailscale, and register with
         # headscale before its name resolves -- wait for it (pre-VIP: node=cp1)
@@ -251,7 +266,10 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         talosctl.bootstrap(talosconfig_path, endpoint=cp1, node=cp1)
 
     # ---- 9. KUBECONFIG ---------------------------------------------------
-    if not up and state.secrets_exist() and refs.kubernetes.vip and not dry_run():
+    if (
+        not up and not existing_but_down
+        and state.secrets_exist() and refs.kubernetes.vip and not dry_run()
+    ):
         log("kubeconfig")
         # wait for cp-01 (already confirmed reachable above during bootstrap);
         # don't use the VIP as the node -- it may have moved to another CP
@@ -260,7 +278,10 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         talosctl.kubeconfig(talosconfig_path, cp1, cp1, kubeconfig_path)
 
     # ---- 10. HEALTH + STATUS ---------------------------------------------
-    if not dry_run() and refs.kubernetes.vip:
+    # Health checks are meaningless on a cluster already known unreachable, and
+    # would fail or hang (talosctl retries, node_summary returning [] against a
+    # dead API), so skip them for an existing-but-unreachable cluster.
+    if not dry_run() and not existing_but_down and refs.kubernetes.vip:
         log("health")
         _require_final_health(talosconfig_path, cp1, refs.kubernetes.vip, kubeconfig_path)
         _wait_nodes_ready(kubeconfig_path, machines)
@@ -373,6 +394,43 @@ def _cluster_vips(cfg: Config, refs: NetworkResult, kubeconfig: Path) -> set[str
     during an endpoint move, the one the cluster was last converged to.
     Discovery lists them among the owner's addresses; none of them is a node."""
     return {refs.kubernetes.vip, _recorded_endpoint(kubeconfig, cfg.name)} - {""}
+
+
+def _kube_up(kubeconfig: Path, inv: InfrastructureInventory, attempts: int = 3,
+             interval_s: int = 10) -> bool:
+    """Probe whether the kube-api answers, retrying, so one transient failure
+    is never read as a fresh cluster.
+
+    A single ten-second `kubectl get nodes` failure on a live cluster must not
+    cascade into scale-down, apply and upgrade being skipped and missing nodes
+    being recreated at the target version. So the probe is retried.
+
+    When there is no kubeconfig from an earlier converge the cluster was never
+    bootstrapped -- a probe cannot succeed (kubectl short-circuits on the
+    missing file), so no time is wasted retrying and it is reported straight
+    down for the caller to bootstrap an interrupted first run. And when a
+    kubeconfig DOES exist yet the API still does not answer after every
+    attempt, the operator is warned loudly that this is an existing but
+    unreachable cluster -- not a fresh one -- so `converge` will not recreate
+    nodes or re-bootstrap it.
+    """
+    if not kubeconfig.is_file() or kubeconfig.stat().st_size == 0:
+        # never bootstrapped (no kubeconfig); a probe cannot succeed
+        return False
+    for attempt in range(1, attempts + 1):
+        if kubectl.cluster_up(kubeconfig):
+            return True
+        if attempt < attempts:
+            info(f"kube-api did not answer (attempt {attempt}/{attempts}); retrying...")
+            time.sleep(interval_s)
+    if inv.machines:
+        warn(
+            f"{len(inv.machines)} machine(s) already exist and a kubeconfig was "
+            "written by an earlier converge, but the kube-api does not answer. "
+            "This is NOT a fresh cluster: refusing to recreate nodes or "
+            "bootstrap. Investigate the cluster before re-running converge."
+        )
+    return False
 
 
 def _endpoint_move(kubeconfig: Path, cluster: str, advertised: str) -> str:

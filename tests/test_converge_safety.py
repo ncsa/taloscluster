@@ -371,6 +371,81 @@ def test_final_health_failure_is_fatal(monkeypatch):
         )
 
 
+# ---- kube-api probe: never read a single failure as a fresh cluster ---------
+
+def test_kube_up_retries_on_a_transient_failure_then_succeeds(monkeypatch, tmp_path):
+    """A single failed probe must not be read as a fresh cluster: _kube_up
+    retries, and when a later attempt answers the cluster is treated as UP."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        converge.kubectl, "cluster_up", lambda _kc: (calls.__setitem__("n", calls["n"] + 1)
+                                                     or calls["n"] >= 2)
+    )
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert converge._kube_up(kubeconfig, _cp_inventory("cp-01")) is True
+    assert calls["n"] == 2  # first probe failed, the retry answered
+    assert warns == []  # no loud warning for a cluster that came back
+
+
+def test_kube_up_warns_and_reports_down_when_infra_exists_but_api_never_answers(
+    monkeypatch, tmp_path
+):
+    """When machines already exist (with a kubeconfig written earlier) yet the
+    API does not answer after every retry, _kube_up reports down and warns
+    loudly that this is NOT a fresh cluster -- so no nodes are recreated or
+    bootstrap attempted."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert converge._kube_up(kubeconfig, _cp_inventory("phoenix-controlplane-01")) is False
+
+    joined = " ".join(warns)
+    assert "machine(s) already exist" in joined
+    assert "NOT a fresh cluster" in joined
+
+
+def test_kube_up_skips_retry_when_there_is_no_prior_kubeconfig(monkeypatch, tmp_path):
+    """An interrupted first run has machines but NO kubeconfig, so the cluster
+    was never bootstrapped. There is nothing to probe against (kubectl
+    short-circuits on the missing file), so _kube_up returns straight down
+    without wasting retry sleeps or warning that the cluster is not fresh -- the
+    caller will bootstrap it."""
+    kubeconfig = tmp_path / "kubeconfig"  # never created
+    monkeypatch.setattr(
+        converge.kubectl, "cluster_up",
+        lambda _kc: pytest.fail("a probe cannot succeed without a kubeconfig"),
+    )
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: pytest.fail("must not sleep"))
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert converge._kube_up(kubeconfig, _cp_inventory("phoenix-controlplane-01")) is False
+    assert warns == []
+
+
+def test_kube_up_does_not_warn_for_a_genuinely_fresh_cluster(monkeypatch, tmp_path):
+    """No machines means no existing infrastructure, so silence is fine -- this
+    is the legitimate bootstrap case."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert converge._kube_up(kubeconfig, InfrastructureInventory()) is False
+    assert warns == []
+
+
 def test_resolve_cp1_address_prefers_network_result_then_inventory():
     cfg = SimpleNamespace(name="phoenix")
     host = "phoenix-controlplane-01"
@@ -844,6 +919,150 @@ class _SecretsBackend:
         if self.stop_after_state:
             raise _StatePhaseDone
         return NetworkResult()
+
+
+# converge() must not recreate nodes for an existing-but-unreachable cluster
+
+class _ExistingDownBackend(_SecretsBackend):
+    """Runs converge through the compute phase and records whether it would
+    recreate existing nodes."""
+
+    def __init__(self, inventory):
+        super().__init__(inventory)
+        self.mutations: list[str] = []
+
+    def default_node_tags(self):
+        return {}
+
+    def talos_contribution(self, _m, _refs):
+        return {}
+
+    def reconcile_network(self, _machines, _inventory):
+        return NetworkResult(
+            kubernetes=SimpleNamespace(advertised_address="192.0.2.5", vip="192.0.2.5"),
+            ingress=SimpleNamespace(advertised_address="192.0.2.6", vip="192.0.2.6"),
+        )
+
+    def reconcile_machines(self, _machines, _inventory, _boot_image, _configs):
+        self.mutations.append("reconcile")
+        return set()
+
+    def provider_status(self):
+        return {}
+
+    def finalize_machines(self, _inventory):
+        return None
+
+
+def _stub_converge_full(monkeypatch, tmp_path, state, backend, machine_cfg,
+                        *, stub_health=False):
+    """Wire converge() to run through the compute phase against fakes.
+
+    `stub_health` replaces the health phase with no-ops -- used only for a path
+    where the cluster is EXPECTED to come up (e.g. an interrupted first run that
+    bootstraps); callers that want to observe that the health phase is skipped
+    on an unreachable cluster leave it False and patch the phase themselves.
+    """
+    cfg = SimpleNamespace(
+        name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+        extension_sets=lambda: [()],
+        machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+        tailscale_enabled=True,
+    )
+    secrets = SimpleNamespace(tailscale_auth_key=None)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "load_secrets", lambda _root: secrets)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge.talosctl, "gen_talosconfig", lambda *a, **k: "talosconfig")
+    monkeypatch.setattr(converge.machineconfig, "build_configs", lambda *a, **k: machine_cfg)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *a, **kw: 0)
+    if stub_health:
+        monkeypatch.setattr(converge, "_require_final_health", lambda *a, **k: None)
+        monkeypatch.setattr(converge, "_wait_nodes_ready", lambda *a, **k: None)
+        monkeypatch.setattr(
+            converge, "_reconcile_joined", lambda *a, **k: FakeBackend().load_inventory()
+        )
+        monkeypatch.setattr(converge.kubectl, "get_nodes_wide", lambda _kc: "")
+    return converge.converge(tmp_path)
+
+
+def test_converge_does_not_recreate_existing_nodes_when_api_is_down(monkeypatch, tmp_path):
+    """When machines already exist and a kubeconfig was written earlier but the
+    kube-api does not answer after every retry, converge treats the cluster as
+    existing (not fresh): it warns loudly, does NOT reconcile/create nodes as if
+    they were missing, and -- because health checks are meaningless on a cluster
+    known unreachable -- skips the health phase and returns cleanly instead of
+    hanging."""
+    inventory = _cp_inventory("phoenix-controlplane-01")
+    state = _FakeState(True, tmp_path / "talossecrets.yaml")
+    backend = _ExistingDownBackend(inventory)
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")  # bootstrapped earlier
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+    # the health phase must not run on an unreachable cluster -- it would hang
+    # on talosctl retries or a 15m node_summary no-op -- so fail if reached
+    monkeypatch.setattr(
+        converge, "_require_final_health",
+        lambda *a, **k: pytest.fail("health phase must be skipped when existing_but_down"),
+    )
+    monkeypatch.setattr(
+        converge, "_wait_nodes_ready",
+        lambda *a, **k: pytest.fail("node-wait must be skipped when existing_but_down"),
+    )
+    monkeypatch.setattr(
+        converge, "_reconcile_joined",
+        lambda *a, **k: pytest.fail("post-join reconcile must be skipped"),
+    )
+    monkeypatch.setattr(converge.kubectl, "get_nodes_wide",
+                        lambda _kc: pytest.fail("status must be skipped"))
+
+    assert _stub_converge_full(
+        monkeypatch, tmp_path, state, backend,
+        {"phoenix-controlplane-01": "config"},
+    ) == 0  # clean exit -- the health phase really is skipped, not stubbed away
+
+    assert backend.mutations == []  # reconcile_machines never ran -> no recreate
+    joined = " ".join(warns)
+    assert "machine(s) already exist" in joined
+    assert "refusing to recreate nodes" in joined
+
+
+def test_converge_rebootstraps_an_interrupted_first_run(monkeypatch, tmp_path):
+    """Machines existing in the inventory with NO kubeconfig means a first run
+    that was interrupted before it reached bootstrap -- the cluster was never
+    bootstrapped. Such a cluster is still fresh, so converge must attempt
+    bootstrap (and write the kubeconfig) rather than refuse it as an
+    'existing but down' cluster that can never come back."""
+    inventory = _cp_inventory("phoenix-controlplane-01")
+    state = _FakeState(True, tmp_path / "talossecrets.yaml")
+    backend = _ExistingDownBackend(inventory)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    events: list[str] = []
+    monkeypatch.setattr(converge, "_wait_reachable", lambda *a, **k: events.append("reachable"))
+    monkeypatch.setattr(converge.talosctl, "bootstrap", lambda *a, **k: events.append("bootstrap"))
+    monkeypatch.setattr(
+        converge.talosctl, "kubeconfig", lambda *a, **k: events.append("kubeconfig")
+    )
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert _stub_converge_full(
+        monkeypatch, tmp_path, state, backend,
+        {"phoenix-controlplane-01": "config"}, stub_health=True,
+    ) == 0
+
+    # bootstrap and the phase-9 kubeconfig both ran despite machines existing,
+    # because there was no kubeconfig to prove an earlier bootstrap
+    assert "reachable" in events and "bootstrap" in events and "kubeconfig" in events
+    joined = " ".join(warns)
+    assert "NOT a fresh cluster" not in joined
 
 
 def _stub_converge(monkeypatch, tmp_path, state, backend):

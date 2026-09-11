@@ -69,6 +69,10 @@ Converge builds the boot image, creates the network and firewall rules, creates 
 
 Before it mints a new `talossecrets.yaml`, converge checks whether any of the cluster's machines already exist. If they do, the file is missing and converge aborts instead of creating a fresh identity for a live cluster; restore `talossecrets.yaml` from backup. A brand-new cluster with no machines still generates the file on its first converge.
 
+Whether the cluster needs bootstrapping is decided only by probing the Kubernetes API, and the probe is retried so one transient `kubectl get nodes` failure is never read as a fresh cluster. The signal that a cluster was ever bootstrapped is the `kubeconfig` an earlier converge wrote only after bootstrap completed. When that kubeconfig exists yet the API does not answer after every retry, converge warns loudly that this is an existing but unreachable cluster: it will not recreate the "missing" nodes at the target version, attempt a bootstrap, or run the health phase (all of which need the API), and it skips scale-down, machine-config apply and upgrade. Investigate the cluster and re-run once it answers again.
+
+A create that is interrupted before it reaches bootstrap leaves its machines in the inventory but no `kubeconfig`, so the cluster was never bootstrapped at all. Such an interrupted first run is still a fresh cluster: converge sees an absent kubeconfig and attempts bootstrap anyway, even though machines already exist, so it can always self-heal.
+
 Converge runs a validation phase before its first mutation. On Proxmox it compares each existing VM against `cluster.yaml` and refuses changes it cannot reconcile in place — shrinking a disk or moving a NIC to another bridge or VLAN — so a rejected `cluster.yaml` edit leaves the cluster, its boot image and its Talos configuration untouched. Valid changes, such as growing a disk or resizing cores and memory, still pass through and are applied as before.
 
 ## Day 2: operate

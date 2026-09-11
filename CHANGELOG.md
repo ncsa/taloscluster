@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Do not treat a single failed kube-api probe as a fresh cluster: converge retries the probe, and when machines already exist and a kubeconfig was written earlier yet the API does not answer it warns loudly that the cluster is unreachable instead of recreating the "missing" nodes at the target version, attempting a bootstrap or running the health phase. An interrupted first run (machines exist but no kubeconfig was ever written) still bootstraps, so it can self-heal.
+
 - Settle machine-config applies on control planes by default, waiting each node out of the cluster and back in before the next, so a reboot-requiring patch no longer restarts every control plane at once; a no-op pass now waits the settle grace window per control plane.
 - Recommend at least two workers and spare capacity for node maintenance.
 - Shorten the README and organize the documentation around installation, quickstart, usage, commands, configuration, plugins, and troubleshooting.
