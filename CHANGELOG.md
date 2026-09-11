@@ -8,10 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - `plan` no longer leaks registry `password:`, `machine.files`/`cluster.inlineManifests` contents, or `PASSWORD=`-style environment entries in the machine-config diff; redaction now covers those alongside `key`/`secret`/`token`.
-
-- Do not treat a single failed kube-api probe as a fresh cluster: converge retries the probe, and when machines already exist and a kubeconfig was written earlier yet the API does not answer it warns loudly that the cluster is unreachable instead of recreating the "missing" nodes at the target version, attempting a bootstrap or running the health phase. An interrupted first run (machines exist but no kubeconfig was ever written) still bootstraps, so it can self-heal.
-
-- Settle machine-config applies on control planes by default, waiting each node out of the cluster and back in before the next, so a reboot-requiring patch no longer restarts every control plane at once; a no-op pass now waits the settle grace window per control plane.
+- Do not treat a single failed kube-api probe as a fresh cluster: converge retries the probe and warns loudly when an existing cluster is unreachable, instead of recreating its nodes or attempting a bootstrap.
+- Settle machine-config applies on control planes by default, waiting each node out of the cluster and back in before the next, so a reboot-requiring patch no longer restarts every control plane at once.
+- Align the AppProject `user` role's policy subject with its role name (`read-only` → `user`) so a configured read-only member actually gets `get` access on the project's applications.
+- Abort a control-plane scale-down instead of deleting the VM when the graceful `talosctl reset` fails or times out, so a half-reset etcd member is never left behind; also health-check between successive control-plane removals so quorum is never lost.
+- Do not accept kube-api readiness as healthy after a control-plane upgrade or reboot: an upgraded control plane must pass `talosctl health` (and so rejoin etcd) before the rollout advances.
+- Refuse to resume pending SDN `deleted` or `changed` state on the cluster's own zone, VNet, subnet, or the shared controller; only `new` is a leftover of an interrupted create, so a staged deletion can no longer be committed by converge under running VMs.
+- Guard Rancher `destroy` with the same downstream-id check as `converge`, so it no longer deletes whichever Rancher cluster shares the configured name.
+- Resolve Rancher members on an exact principal id match, so a short or misspelled netid no longer grants `cluster-owner` to whoever a prefix search returns first; reject a netid listed under both `rancher.admins` and `rancher.users`.
+- Build machine configs for nodes scaled up in the same run as a Kubernetes upgrade at the upgraded version, instead of the pre-upgrade running version they would otherwise boot.
 - Recommend at least two workers and spare capacity for node maintenance.
 - Shorten the README and organize the documentation around installation, quickstart, usage, commands, configuration, plugins, and troubleshooting.
 - Clarify that users must connect the management machine to the cluster's tailnet themselves.
@@ -24,13 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Treat an incomplete `check` (unreachable upstream releases, an unknown node version, or a cluster that should exist but answered nothing) as not up to date: the report gains `incomplete` and `incomplete_reasons`, and it exits nonzero instead of silently passing an unverified cluster.
 - Refuse unsupported Proxmox changes (disk shrink, NIC bridge/VLAN move, external-NIC detach) in a validation phase at the very start of converge, ahead of the image, network and Talos phases, so a rejected `cluster.yaml` edit no longer leaves a half-applied cluster.
 - Deliver the OpenStack Cinder cloud.conf to the downstream cluster as a Secret instead of embedding the provider credential in ArgoCD Application values.
-- Align the AppProject `user` role's policy subject with its role name (`read-only` → `user`) so a configured read-only member actually gets `get` access on the project's applications.
-- Abort a control-plane scale-down instead of deleting the VM when the graceful `talosctl reset` fails or times out, so a half-reset etcd member is never left behind; also health-check between successive control-plane removals so quorum is never lost.
-- Do not accept kube-api readiness as healthy after a control-plane upgrade or reboot: an upgraded control plane must pass `talosctl health` (and so rejoin etcd) before the rollout advances, so a node that never comes back can no longer be hidden by a kube-api VIP still served by the surviving control planes.
-- Refuse to resume pending SDN `deleted` or `changed` state on the cluster's own zone, VNet, subnet, or the shared controller; only `new` is a leftover of an interrupted create, so a staged deletion can no longer be committed by converge under running VMs.
-- Guard Rancher `destroy` with the same downstream-id check as `converge`, so it no longer deletes whichever Rancher cluster shares the configured name.
-- Resolve Rancher members on an exact principal id match, so a short or misspelled netid no longer grants `cluster-owner` to whoever a prefix search returns first; reject a netid listed under both `rancher.admins` and `rancher.users`.
-- Build machine configs for nodes scaled up in the same run as a Kubernetes upgrade at the upgraded version, instead of the pre-upgrade running version they would otherwise boot.
 
 ## [0.7.0] - 2026-09-06
 
