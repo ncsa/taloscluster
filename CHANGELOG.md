@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse to generate a fresh `talossecrets.yaml` when infrastructure already exists; converge checks for existing machines before minting a new cluster identity and demands restoration from backup instead.
 - Treat an incomplete `check` (unreachable upstream releases, an unknown node version, or a cluster that should exist but answered nothing) as not up to date: the report gains `incomplete` and `incomplete_reasons`, and it exits nonzero instead of silently passing an unverified cluster.
 - Refuse unsupported Proxmox changes (disk shrink, NIC bridge/VLAN move, external-NIC detach) in a validation phase at the very start of converge, ahead of the image, network and Talos phases, so a rejected `cluster.yaml` edit no longer leaves a half-applied cluster.
+- Deliver the OpenStack Cinder cloud.conf to the downstream cluster as a Secret instead of embedding the provider credential in ArgoCD Application values.
 
 ## [0.7.0] - 2026-09-06
 

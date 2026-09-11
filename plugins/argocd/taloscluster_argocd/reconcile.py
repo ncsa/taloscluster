@@ -9,19 +9,30 @@ that let ArgoCD manage this cluster:
   5. the `<cluster>-cluster` Application with per-cluster (all-disabled by default)
      values.
 
+When Cinder is enabled it also delivers the OpenStack cloud.conf Secret to this
+cluster itself (its own kubeconfig, the `cinder-csi` namespace, whose Namespace
+it ensures first), so the provider credential never flows through ArgoCD. When
+cinder is disabled it removes any previously delivered Secret.
+
 `destroy` removes them (apps, project, then secret, repo, cluster-apps).
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from taloscluster.context import Context
 from taloscluster.output import info, log
 
 from . import kube
-from .config import ApplyTarget, Config
-from .manifests import render
+from .config import ApplyTarget, Config, enabled
+from .manifests import (
+    CINDER_NAMESPACE,
+    CINDER_SECRET_NAME,
+    cinder_namespace,
+    render,
+)
 
 
 def _load(root: Path):
@@ -57,6 +68,14 @@ def converge(ctx: Context, assume_yes: bool = False) -> dict:
     log("render manifests")
     m = render(cfg, ctx, git=_git(target), ost=_ost(target))
 
+    if "cinder-secret" in m:
+        log("apply cinder namespace and cloud-config secret to the cluster")
+        kube.apply_downstream(ctx.root, cinder_namespace())
+        kube.apply_downstream(ctx.root, m["cinder-secret"])
+    elif cfg.openstack is not None and not enabled(cfg.cinder):
+        log("remove orphaned cinder cloud-config secret (cinder disabled)")
+        kube.delete_secret_downstream(ctx.root, CINDER_NAMESPACE, CINDER_SECRET_NAME)
+
     log("apply cluster secret to ArgoCD")
     kube.apply(target, ctx.root, m["secret"])
 
@@ -84,6 +103,10 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
 
     log("render manifests")
     m = render(cfg, ctx, git=_git(target), ost=_ost(target))
+
+    if "cinder-secret" in m:
+        log("delete cinder cloud-config secret from the cluster")
+        kube.delete_downstream(ctx.root, m["cinder-secret"])
 
     if "apps" in m:
         log("delete root application from ArgoCD")
@@ -114,7 +137,10 @@ def _present(ctx: Context) -> dict[str, bool]:
     cfg, target = _load(ctx.root)
     _validate(target)
     m = render(cfg, ctx, git=_git(target), ost=_ost(target))
-    return {name: kube.exists(target, ctx.root, doc) for name, doc in m.items()}
+    return {
+        name: _probe(kube.exists, kube.exists_downstream, target, ctx.root, doc, name)
+        for name, doc in m.items()
+    }
 
 
 def _matching(ctx: Context) -> dict[str, bool]:
@@ -122,7 +148,24 @@ def _matching(ctx: Context) -> dict[str, bool]:
     cfg, target = _load(ctx.root)
     _validate(target)
     m = render(cfg, ctx, git=_git(target), ost=_ost(target))
-    return {name: kube.matches(target, ctx.root, doc) for name, doc in m.items()}
+    return {
+        name: _probe(kube.matches, kube.matches_downstream, target, ctx.root, doc, name)
+        for name, doc in m.items()
+    }
+
+
+def _probe(
+    argocd_fn: Callable[[ApplyTarget, Path, str], bool],
+    downstream_fn: Callable[[Path, str], bool],
+    target: ApplyTarget,
+    root: Path,
+    doc: str,
+    name: str,
+) -> bool:
+    """Run a resource probe against ArgoCD or this cluster, whichever owns it."""
+    if name == "cinder-secret":
+        return downstream_fn(root, doc)
+    return argocd_fn(target, root, doc)
 
 
 def status(ctx: Context) -> dict:

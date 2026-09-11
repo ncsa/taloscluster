@@ -39,6 +39,8 @@ The rancher plugin takes usernames from [`rancher.admins` and `rancher.users`](.
 
 The argocd plugin is highly specialised. It does more than register the cluster: it renders an ArgoCD cluster Secret from this cluster's kubeconfig, an AppProject whose roles come from [`argocd.admins` and `argocd.users`](../configuration/argocd.md), and an app-of-apps Application whose values carry the per-cluster settings from `cluster.yaml`. That Application points at the Helm chart in [ncsa/radiant-cluster `charts/apps`](https://github.com/ncsa/radiant-cluster/tree/main/charts/apps), which installs and configures the platform applications (MetalLB, the ingress controller, cert-manager, sealed-secrets, storage, monitoring) according to the per-app sections you enable. The repository holding that chart is set with [`argocd.infra.url`](../configuration/argocd.md#argocdinfraurl). Unless you run that chart or one with the same values layout, expect to fork the plugin rather than reuse it as is.
 
+Provider credentials are never placed in an ArgoCD Application. When Cinder is enabled, the plugin delivers the OpenStack cloud.conf as a Secret to the downstream cluster itself (the `cinder-csi` namespace, via this cluster's own kubeconfig) and expects the infra chart to consume it with the upstream cinder-csi chart's `secret.create=false` reference — see [ArgoCD configuration](../configuration/argocd.md#per-app-sections) for the required chart change and permissions. The delivered Secret is created by converge, reported by status, compared by check, and removed by destroy, all against the downstream cluster.
+
 ## Writing a plugin
 
 Add a folder under `plugins/` with its own `pyproject.toml` declaring an entry point — that is the whole registration, no core change:

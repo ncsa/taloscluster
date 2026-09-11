@@ -19,6 +19,12 @@ from taloscluster.errors import ConfigError
 
 from .config import Config, enabled
 
+#: Name of the downstream Secret that carries the Cinder cloud.conf. radiant-cluster's
+#: cinder template references this name; keep in sync with any chart you point
+#: ``argocd.infra.url`` at.
+CINDER_SECRET_NAME = "cinder-csi-cloud-config"
+CINDER_NAMESPACE = "cinder-csi"
+
 
 def downstream_kubeconfig(root: Path) -> dict:
     """Load this cluster's own (gitignored) kubeconfig."""
@@ -227,9 +233,7 @@ def _version_line(section: dict, indent: str = "          ") -> str:
     return f'{indent}version: "{v}"\n'
 
 
-def _cluster_apps(
-    cfg: Config, ctx: Context, ost: tuple[str, str] | None = None
-) -> str:
+def _cluster_apps(cfg: Config, ctx: Context) -> str:
     """The cluster apps Application (`<cluster>-cluster`) embedding per-cluster values.
 
     Mirrors ncsa/radiant-cluster `charts/apps/values.yaml` with **everything
@@ -245,7 +249,6 @@ def _cluster_apps(
     rancher_id = _rancher_id(ctx)
     openstack_url = cfg.openstack.url if cfg.openstack else ""
     openstack_project = ctx.openstack.get("project", "")
-    ost_id, ost_secret = (ost or ("", ""))
     metallb_enabled = enabled(cfg.metallb)
     metallb_addr = ctx.ingress.get("vip", "")
     metallb_addresses = ""
@@ -300,8 +303,6 @@ spec:
           project: {openstack_project}
           auth_url: {openstack_url}
           region: RegionOne
-          credential_id: "{ost_id}"
-          credential_secret: "{ost_secret}"
 
         notifications: {{}}
 
@@ -376,6 +377,67 @@ spec:
 """
 
 
+def cinder_namespace() -> str:
+    """The ``cinder-csi`` Namespace the cloud.conf Secret lives in.
+
+    Delivered separately from the Secret on converge so the Secret can be applied
+    on a cluster where the namespace does not exist yet (first converge) without
+    the Namespace being part of the Secret manifest that `check` compares or
+    `destroy` removes. ArgoCD's app-of-apps syncs the Namespace itself
+    (CreateNamespace=true / selfHeal), so it is not owned by the plugin beyond
+    creation and kubectl apply is idempotent.
+    """
+    return f"""\
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {CINDER_NAMESPACE}
+"""
+
+
+def _cinder_secret(cfg: Config, ctx: Context, ost: tuple[str, str]) -> str:
+    """A Secret holding the Cinder cloud.conf, delivered to the downstream cluster.
+
+    The (updated) infra chart's cinder application references this Secret through
+    the upstream cinder-csi chart's ``secret.enabled=true, secret.create=false,
+    secret.name=<name>, secret.filename=cloud.conf``; with ``create=false`` the
+    chart mounts the existing Secret instead of embedding the credential in its
+    own values, so the application credential never appears in any ArgoCD
+    Application. Called only when credentials are present (the caller raises a
+    ConfigError otherwise); the caller (converge) delivers the Secret's
+    ``cinder-csi`` Namespace first.
+    """
+    cred_id, cred_secret = ost
+    auth_url = (
+        cfg.openstack.url
+        if cfg.openstack and cfg.openstack.url
+        else ctx.openstack.get("url", "")
+    )
+    region = (
+        cfg.openstack.region
+        if cfg.openstack and cfg.openstack.region
+        else ctx.openstack.get("region") or "RegionOne"
+    )
+    cloud_conf = (
+        f"[Global]\n"
+        f"auth-url={auth_url}\n"
+        f"region={region}\n"
+        f"application-credential-id={cred_id}\n"
+        f"application-credential-secret={cred_secret}\n"
+    )
+    return f"""\
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {CINDER_SECRET_NAME}
+  namespace: {CINDER_NAMESPACE}
+type: Opaque
+stringData:
+  cloud.conf: |-
+{textwrap.indent(cloud_conf, "    ")}
+"""
+
+
 def render(
     cfg: Config,
     ctx: Context,
@@ -398,5 +460,13 @@ def render(
         out["repo"] = _repo_secret(cfg, git)
     if cfg.git_url:
         out["apps"] = _root_app(cfg)
-        out["cluster-apps"] = _cluster_apps(cfg, ctx, ost)
+        out["cluster-apps"] = _cluster_apps(cfg, ctx)
+        if enabled(cfg.cinder):
+            if ost is None:
+                raise ConfigError(
+                    "argocd.cinder.enabled requires an OpenStack application "
+                    "credential; set openstack.credential_id and "
+                    "openstack.credential_secret in secrets.yaml"
+                )
+            out["cinder-secret"] = _cinder_secret(cfg, ctx, ost)
     return out

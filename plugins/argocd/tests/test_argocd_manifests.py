@@ -159,3 +159,56 @@ def test_cluster_apps_carries_the_rancher_id(kubeconfig, cfg, results, expected)
 def test_render_without_git_url_emits_only_secret_and_project(kubeconfig, cfg):
     cfg.git_url = None
     assert sorted(manifests.render(cfg, ctx_for(kubeconfig))) == ["project", "secret"]
+
+
+# ---------------------------------------------------------------------------
+# Cinder: the provider credential must never land in an ArgoCD Application.
+# It is delivered to the downstream cluster as a Secret instead.
+# ---------------------------------------------------------------------------
+
+
+def _values(doc) -> dict:
+    return yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+
+
+def test_openstack_credentials_never_appear_in_parent_app(kubeconfig, cfg):
+    """The credential is deliberately not read into the parent Application."""
+    cfg.cinder = {"enabled": True}
+    out = manifests.render(cfg, ctx_for(kubeconfig), ost=("cred-id", "cred-secret"))
+    doc = yaml.safe_load(out["cluster-apps"])
+    values = _values(doc)
+    assert "credential_id" not in values["openstack"]
+    assert "credential_secret" not in values["openstack"]
+    # and the secret value itself must not appear anywhere in the rendered manifest
+    assert "cred-secret" not in out["cluster-apps"]
+
+
+def test_cinder_secret_renders_when_enabled_with_credentials(kubeconfig, cfg):
+    cfg.cinder = {"enabled": True}
+    out = manifests.render(cfg, ctx_for(kubeconfig), ost=("cred-id", "cred-secret"))
+    secret = yaml.safe_load(out["cinder-secret"])
+    assert secret["kind"] == "Secret"
+    assert secret["metadata"]["name"] == "cinder-csi-cloud-config"
+    assert secret["metadata"]["namespace"] == "cinder-csi"
+    conf = secret["stringData"]["cloud.conf"]
+    assert "application-credential-id=cred-id" in conf
+    assert "application-credential-secret=cred-secret" in conf
+    assert "auth-url=" in conf
+
+
+def test_cinder_namespace_renders_separately():
+    """The Namespace is its own manifest so check/destroy never touch it as drift."""
+    ns = yaml.safe_load(manifests.cinder_namespace())
+    assert ns["kind"] == "Namespace"
+    assert ns["metadata"]["name"] == "cinder-csi"
+
+
+def test_no_cinder_secret_when_disabled(kubeconfig, cfg):
+    cfg.cinder = {"enabled": False}
+    assert "cinder-secret" not in manifests.render(cfg, ctx_for(kubeconfig), ost=("id", "secret"))
+
+
+def test_enabled_cinder_without_credentials_is_a_config_error(kubeconfig, cfg):
+    cfg.cinder = {"enabled": True}
+    with pytest.raises(ConfigError, match="application credential"):
+        manifests.render(cfg, ctx_for(kubeconfig), ost=None)
