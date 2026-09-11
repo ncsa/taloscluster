@@ -1081,14 +1081,43 @@ def _component_check(name: str, configured: str, latest: str,
     }
 
 
+def _incomplete_reasons(report: dict[str, Any], root: Path) -> list[str]:
+    """Why the check could not fully verify the cluster, or [] if it did.
+
+    Covers both directions of missing data: an upstream release lookup that did
+    not answer (empty newest fields) and a running node whose version is unknown
+    (empty talos/kubernetes in the report). A cluster that should exist but
+    answered nothing at all is also unverified; either client config file --
+    talosconfig or kubeconfig -- records that a cluster has been set up before.
+    """
+    reasons: list[str] = []
+    for c in report["components"]:
+        if not c["latest"]:
+            reasons.append(f"{c['component']}: newest release unknown")
+        elif not c["latest_patch"]:
+            minor = versions.minor(c["configured"])
+            reasons.append(f"{c['component']}: newest patch of {minor} unknown")
+    for n in report["nodes"]:
+        if not n["talos"]:
+            reasons.append(f"node {n['name']}: talos version unknown")
+        if not n["kubernetes"]:
+            reasons.append(f"node {n['name']}: kubernetes version unknown")
+    never_answered = not report["nodes"]
+    setup_happened = (root / "talosconfig").is_file() or (root / "kubeconfig").is_file()
+    if never_answered and setup_happened:
+        reasons.append("cluster unreachable; no node versions known")
+    return reasons
+
+
 def check(root: Path, output: str = "text") -> int:
     """Compare cluster.yaml's pinned versions against the newest upstream
     releases (and against what the cluster actually runs).
 
     Read-only and cloud-free: it asks factory.talos.dev / dl.k8s.io what exists,
     talos discovery + the local kubeconfig what is running, and changes nothing.
-    Returns 1 if an update or a drift was found, 0 if everything is current, so
-    it can gate a CI job.
+    Returns 1 if an update, a drift, or an incomplete check (something could not
+    be verified) was found, 0 only if everything is current and verified, so it
+    can gate a CI job without passing an unverified cluster.
     """
     cfg = load_config(root)
     report: dict[str, Any] = {"cluster": cfg.name, "components": [], "nodes": []}
@@ -1125,11 +1154,20 @@ def check(root: Path, output: str = "text") -> int:
     cordoned = [n["name"] for n in report["nodes"] if n.get("cordoned")]
     report["cordoned"] = cordoned
     outdated = [c for c in report["components"] if c["patch_available"] or c["minor_available"]]
+    # an incomplete check is not a clean bill of health: a missing upstream answer
+    # or an unknown node version means we did not verify everything, so it must not
+    # pass a CI gate as if it were up to date.
+    incomplete_reasons = _incomplete_reasons(report, root)
+    report["incomplete"] = bool(incomplete_reasons)
+    report["incomplete_reasons"] = incomplete_reasons
     # a plugin that reports not-ok is a reason to exit 1, exactly like a drifted
     # node: converge would change something.
     report["plugins"] = plugin_reports
     plugins_ok = all(bool(r.get("ok")) for r in plugin_reports.values())
-    report["up_to_date"] = not outdated and not drift and not cordoned and plugins_ok
+    report["up_to_date"] = (
+        not outdated and not drift and not cordoned and plugins_ok
+        and not report["incomplete"]
+    )
 
     if output == "yaml":
         print(yaml.safe_dump(report, sort_keys=False).rstrip())
@@ -1168,8 +1206,12 @@ def check(root: Path, output: str = "text") -> int:
     for name, data in plugin_reports.items():
         log(f"plugin: {name}")
         print_report(data)
+    for reason in report["incomplete_reasons"]:
+        warn(f"check incomplete: {reason}")
     if report["up_to_date"]:
         info("cluster.yaml pins the newest releases and every node is on them")
+    elif report["incomplete"]:
+        info("version check did not complete; nothing is assumed current")
     return 0 if report["up_to_date"] else 1
 
 

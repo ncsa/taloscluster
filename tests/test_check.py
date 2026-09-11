@@ -84,6 +84,8 @@ def test_up_to_date_exit_0(cluster_dir, upstream, nodes, capsys):
     report = _report(capsys)
     assert report["up_to_date"] is True
     assert report["drift"] == []
+    assert report["incomplete"] is False
+    assert report["incomplete_reasons"] == []
     assert rc == 0
 
 
@@ -100,14 +102,63 @@ def test_node_behind_configured_is_drift(cluster_dir, upstream, nodes, capsys):
     assert rc == 1
 
 
-def test_unreachable_node_is_not_drift(cluster_dir, upstream, nodes, capsys):
-    """An empty version means "did not answer", not "wrong version"."""
+def test_unreachable_node_is_incomplete_not_drift(cluster_dir, upstream, nodes, capsys):
+    """An empty version means "did not answer", not "wrong version": it is not
+    drift, but it IS an incomplete check, so the command must not pass as clean."""
     upstream["talos"] = ["v1.13.8"]
     upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
     nodes["nodes"] = [{"name": "cp-01", "talos": "", "kubernetes": ""}]
     rc = converge.check(cluster_dir, output="yaml")
-    assert _report(capsys)["drift"] == []
-    assert rc == 0
+    report = _report(capsys)
+    assert report["drift"] == []
+    assert report["incomplete"] is True
+    assert report["incomplete_reasons"] == [
+        "node cp-01: talos version unknown",
+        "node cp-01: kubernetes version unknown",
+    ]
+    assert report["up_to_date"] is False
+    assert rc == 1
+
+
+def test_node_with_unknown_kubelet_is_incomplete(cluster_dir, upstream, nodes, capsys):
+    """Talos answered but the kubelet did not join: kubernetes is unknown, so
+    the check is incomplete even though talos is fine."""
+    upstream["talos"] = ["v1.13.8"]
+    upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
+    nodes["nodes"] = [{"name": "cp-01", "talos": "v1.13.8", "kubernetes": ""}]
+    rc = converge.check(cluster_dir, output="yaml")
+    report = _report(capsys)
+    assert report["drift"] == []
+    assert report["incomplete_reasons"] == ["node cp-01: kubernetes version unknown"]
+    assert rc == 1
+
+
+def test_cluster_unreachable_when_expected_is_incomplete(cluster_dir, upstream, nodes, capsys):
+    """A cluster that should exist (talosconfig present) but reports no node at
+    all is unverified and must not pass as clean."""
+    upstream["talos"] = ["v1.13.8"]
+    upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
+    (cluster_dir / "talosconfig").write_text("dummy")
+    rc = converge.check(cluster_dir, output="yaml")
+    report = _report(capsys)
+    assert report["incomplete"] is True
+    assert report["incomplete_reasons"] == ["cluster unreachable; no node versions known"]
+    assert rc == 1
+
+
+def test_unreachable_cluster_with_only_kubeconfig_is_incomplete(
+        cluster_dir, upstream, nodes, capsys):
+    """kubeconfig alone records that a cluster was set up, so when the Kubernetes
+    API does not answer and no node versions come back the check must not pass
+    as clean -- even without a talosconfig."""
+    upstream["talos"] = ["v1.13.8"]
+    upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
+    (cluster_dir / "kubeconfig").write_text("dummy")
+    rc = converge.check(cluster_dir, output="yaml")
+    report = _report(capsys)
+    assert report["incomplete"] is True
+    assert report["incomplete_reasons"] == ["cluster unreachable; no node versions known"]
+    assert rc == 1
 
 
 def test_kubelet_build_suffix_is_not_drift(cluster_dir, upstream, nodes, capsys):
@@ -120,7 +171,8 @@ def test_kubelet_build_suffix_is_not_drift(cluster_dir, upstream, nodes, capsys)
 
 
 def test_upstream_unreachable_reports_config_only(cluster_dir, nodes, monkeypatch, capsys):
-    """A lookup failure must warn and still print, not raise."""
+    """A lookup failure must warn and still print, not raise, and must not pass
+    as a clean check: we never confirmed what the newest releases are."""
     def boom(*a, **k):
         raise converge.requests.RequestException("no route to host")
 
@@ -130,8 +182,14 @@ def test_upstream_unreachable_reports_config_only(cluster_dir, nodes, monkeypatc
     report = _report(capsys)
     for c in report["components"]:
         assert c["latest"] == "" and not c["patch_available"] and not c["minor_available"]
-    # nothing is known to be outdated, so the command does not fail the build
-    assert rc == 0
+    assert report["incomplete"] is True
+    assert report["incomplete_reasons"] == [
+        "talos: newest release unknown",
+        "kubernetes: newest release unknown",
+    ]
+    # nothing could be verified, so the command fails the build rather than
+    # silently passing an unverified cluster
+    assert rc == 1
 
 
 def test_cordoned_node_is_reported(cluster_dir, upstream, nodes, capsys):
