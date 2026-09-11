@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `plan` no longer leaks registry `password:`, `machine.files`/`cluster.inlineManifests` contents, or `PASSWORD=`-style environment entries in the machine-config diff; redaction now covers those alongside `key`/`secret`/`token`.
+
 - Do not treat a single failed kube-api probe as a fresh cluster: converge retries the probe, and when machines already exist and a kubeconfig was written earlier yet the API does not answer it warns loudly that the cluster is unreachable instead of recreating the "missing" nodes at the target version, attempting a bootstrap or running the health phase. An interrupted first run (machines exist but no kubeconfig was ever written) still bootstraps, so it can self-heal.
 
 - Settle machine-config applies on control planes by default, waiting each node out of the cluster and back in before the next, so a reboot-requiring patch no longer restarts every control plane at once; a no-op pass now waits the settle grace window per control plane.

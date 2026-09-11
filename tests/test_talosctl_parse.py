@@ -306,6 +306,179 @@ def test_plan_apply_config_redacts_secret_values(tmp_path, monkeypatch, capsys):
     assert "+    - TS_HOSTNAME=quad-worker-01" in out
 
 
+def test_plan_apply_config_redacts_files_and_inline_manifests(tmp_path, monkeypatch, capsys):
+    from taloscluster.output import set_dry_run
+
+    diff = (
+        "Dry run summary:\nConfig diff:\n--- a\n+++ b\n"
+        "+        password: verysecretregistrypw\n"
+        "+        username: registry-user\n"
+        "+            files:\n"
+        "+                - content: LS0tLS1CRUdJTiBQUklWQVRFIEtFWQotLS0tLQo=\n"
+        "+                  op: create\n"
+        "+                  path: /etc/secret/config\n"
+        "+            inlineManifests:\n"
+        "+                - name: credentials\n"
+        "+                  contents: |\n"
+        "+                      apiVersion: v1\n"
+        "+                      kind: Secret\n"
+        "+                      stringData:\n"
+        "+                          password: manifestsecret\n"
+        "+        environment:\n"
+        "+            - REGISTRY_PASSWORD=envsecret\n"
+        "+            - KUBELET_HOSTNAME=worker-01\n"
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (0, "", diff))
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+    out = capsys.readouterr().out
+    for leaked in ("verysecretregistrypw", "LS0tLS1CRUdJTiBQUklWQVRFIEtFWQotLS0tLQo=",
+                   "manifestsecret", "envsecret", "apiVersion: v1", "stringData"):
+        assert leaked not in out
+    assert "password: <redacted>" in out
+    assert "+            - REGISTRY_PASSWORD=<redacted>" in out
+    assert "username: registry-user" in out
+    assert "KUBELET_HOSTNAME=worker-01" in out
+    assert "path: /etc/secret/config" in out
+
+
+def test_plan_apply_config_redacts_blank_lines_in_block_body(tmp_path, monkeypatch, capsys):
+    from taloscluster.output import set_dry_run
+
+    # Blank lines (bare `+`/`-`) are common between `---` documents/sections of a
+    # Kubernetes inline manifest; they are part of the open block, not its end.
+    diff = (
+        "Dry run summary:\nConfig diff:\n--- a\n+++ b\n"
+        "+        inlineManifests:\n"
+        "+            - contents: |\n"
+        "+\n"
+        "+                  apiVersion: v1\n"
+        "+\n"
+        "+                  kind: Secret\n"
+        "+                  stringData:\n"
+        "+                      password: blankline-secret\n"
+        "+        environment:\n"
+        "+            - KUBELET_HOSTNAME=worker-01\n"
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (0, "", diff))
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+    out = capsys.readouterr().out
+    for leaked in ("apiVersion: v1", "kind: Secret", "blankline-secret"):
+        assert leaked not in out
+    assert "environment:" in out
+    assert "KUBELET_HOSTNAME=worker-01" in out
+
+
+def test_plan_apply_config_redacts_folded_content(tmp_path, monkeypatch, capsys):
+    from taloscluster.output import set_dry_run
+
+    # `contents: >` (folded) scalars must be tracked just like `|` literals.
+    diff = (
+        "Dry run summary:\nConfig diff:\n--- a\n+++ b\n"
+        "+        inlineManifests:\n"
+        "+            - contents: >\n"
+        "+                  apiVersion: v1\n"
+        "+                  kind: Secret\n"
+        "+                  stringData:\n"
+        "+                      password: folded-secret\n"
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (0, "", diff))
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+    out = capsys.readouterr().out
+    for leaked in ("apiVersion: v1", "kind: Secret", "folded-secret"):
+        assert leaked not in out
+
+
+def test_plan_apply_config_tracks_block_with_trailing_comment(tmp_path, monkeypatch, capsys):
+    from taloscluster.output import set_dry_run
+
+    # A block scalar with a comment after the `|` indicator is still valid YAML;
+    # the scalar's body lines must be redacted as a region regardless.
+    diff = (
+        "Dry run summary:\nConfig diff:\n--- a\n+++ b\n"
+        "+        inlineManifests:\n"
+        "+            - contents: | # apiVersion v1\n"
+        "+                  kind: Secret\n"
+        "+                  stringData:\n"
+        "+                      password: comment-secret\n"
+        "+        environment:\n"
+        "+            - KUBELET_HOSTNAME=worker-01\n"
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (0, "", diff))
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+    out = capsys.readouterr().out
+    for leaked in ("kind: Secret", "stringData", "comment-secret"):
+        assert leaked not in out
+    assert "environment:" in out
+    assert "KUBELET_HOSTNAME=worker-01" in out
+
+
+def test_plan_redacts_sequence_content_keeps_siblings(tmp_path, monkeypatch, capsys):
+    from taloscluster.output import set_dry_run
+
+    # machine.files uses `- content: |` sequence items; the value body is redacted
+    # but the sibling keys at the same column (`op:`, `path:`) stay visible.
+    diff = (
+        "Dry run summary:\nConfig diff:\n--- a\n+++ b\n"
+        "+            files:\n"
+        "+                - content: |\n"
+        "+                      LS0tLS1CRUdJTiBQUklWQVRFIEtFWQo=\n"
+        "+                  op: create\n"
+        "+                  path: /etc/secret/config\n"
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (0, "", diff))
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+    out = capsys.readouterr().out
+    assert "LS0tLS1CRUdJTiBQUklWQVRFIEtFWQo=" not in out
+    assert "path: /etc/secret/config" in out
+    assert "op: create" in out
+
+
+def test_plan_apply_config_redacts_block_split_across_hunks(tmp_path, monkeypatch, capsys):
+    from taloscluster.output import set_dry_run
+
+    # A long block scalar body split across two hunks must keep redacting after
+    # the second `@@` instead of treating the hunk header as the block's end.
+    diff = (
+        "Dry run summary:\nConfig diff:\n--- a\n+++ b\n"
+        "+        inlineManifests:\n"
+        "+            - contents: |\n"
+        "+                  apiVersion: v1\n"
+        "@@ -5,6 +5,7 @@\n"
+        "+                  kind: Secret\n"
+        "+                  stringData:\n"
+        "+                      password: crosshunk-secret\n"
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (0, "", diff))
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+    out = capsys.readouterr().out
+    for leaked in ("apiVersion: v1", "kind: Secret", "crosshunk-secret"):
+        assert leaked not in out
+
+
 def test_bootstrap_retries_until_etcd_accepts_it(tmp_path, monkeypatch):
     not_ready = "rpc error: code = FailedPrecondition desc = bootstrap is not available yet"
     results = iter([(1, "", not_ready), (1, "", not_ready), (0, "", "")])

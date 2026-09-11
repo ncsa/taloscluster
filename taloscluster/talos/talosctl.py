@@ -271,23 +271,79 @@ def _dry_run_summary(out: str) -> list[str]:
     lines = [line for line in lines if line and line != "Dry run summary:"]
     if any(line.startswith("No changes") for line in lines):
         return ["no changes"]
-    return [_redact(line) for line in lines]
+    return _redact(lines)
 
 
-_SECRET_KEY = re.compile(r"^([-+ ]?\s*)([A-Za-z]*(?:key|secret|token)[A-Za-z]*):\s*\S.*$", re.I)
+_SECRET_KEY = re.compile(
+    r"^([-+ ]?\s*)([A-Za-z]*(?:key|secret|token|password)[A-Za-z]*):\s*\S.*$", re.I
+)
 # `- TS_AUTHKEY=...` style environment entries (extension service configs).
-_SECRET_ENV = re.compile(r"^([-+ ]?\s*-\s*)([A-Za-z_]*(?:key|secret|token)[A-Za-z_]*)=\S.*$", re.I)
+_SECRET_ENV = re.compile(
+    r"^([-+ ]?\s*-\s*)([A-Za-z_]*(?:key|secret|token|password)[A-Za-z_]*)=\S.*$", re.I
+)
+# `content:`/`contents:` fields: machine.files file data and cluster.inlineManifests
+# bodies, either of which may be a `|` literal spanning many lines.
+_SECRET_CONTENT = re.compile(r"^([-+ ]?\s*(?:-\s*)?)(content|contents):\s*(\S.*)?$", re.I)
 
 
-def _redact(line: str) -> str:
-    """Hide secret values in a machine-config diff line (keys, tokens, secrets)."""
-    match = _SECRET_KEY.match(line)
-    if match is not None:
-        return f"{match.group(1)}{match.group(2)}: <redacted>"
-    match = _SECRET_ENV.match(line)
-    if match is not None:
-        return f"{match.group(1)}{match.group(2)}=<redacted>"
-    return line
+def _redact(lines: Iterable[str]) -> list[str]:
+    """Hide secret values in a machine-config diff.
+
+    Redacts the value of any key whose name mentions key/secret/token/password
+    (so a registry `password:`, a `machine.files`/`inlineManifests` field, ...),
+    of any `VAR=...` environment entry whose name mentions key/secret/token/
+    password, and — as a whole region — the body of a `content:`/`contents:`
+    block literal (machine.files data, cluster.inlineManifests), redacting every
+    deeper-indented line until the block closes, whether the scalar is a `|`
+    literal or a `>` folded block.
+    """
+    out: list[str] = []
+    block: int | None = None  # key indentation of an open content/contents block
+    for line in lines:
+        # Diff framing lines (file/hunk headers) must not disturb an open block:
+        # a long block body split across two hunks keeps redacting past the second `@@`.
+        if line.startswith(("@@", "--- ", "+++ ")):
+            out.append(line)
+            continue
+        marker = line[0] if line[:1] in ("+", "-", " ") else ""
+        content = line[1:] if marker else line
+        stripped = content.lstrip(" ")
+        indent = len(content) - len(stripped)
+        # A marker-only line (bare `+`/`-`, i.e. a blank line inside the block body)
+        # is part of the open block, never closes it; anything shallower than the
+        # block's key column (sibling key, top-level field) closes the block.
+        if content and block is not None and indent <= block:
+            block = None
+        if block is not None:
+            out.append(f"{marker}    <redacted>")
+            continue
+        match = _SECRET_KEY.match(line)
+        if match is not None:
+            out.append(f"{match.group(1)}{match.group(2)}: <redacted>")
+            continue
+        match = _SECRET_ENV.match(line)
+        if match is not None:
+            out.append(f"{match.group(1)}{match.group(2)}=<redacted>")
+            continue
+        match = _SECRET_CONTENT.match(line)
+        if match is not None:
+            # Compare against the `content`/`contents` key's own column, not the
+            # dash column: sequence items (`- content: |`) have sibling keys
+            # (`op:`, `path:`) at the key column, which must close the block.
+            key_col = indent + (2 if stripped.startswith("- ") else 0)
+            value = (match.group(3) or "").lstrip(" ")
+            rest = value[1:]
+            # `|`/`>` may carry an explicit indentation indicator (`|2`) or a trailing
+            # comment; either way the scalar body starts on the following lines.
+            if value[:1] in ("|", ">") and (
+                not rest.strip() or not rest.strip("-+0123456789")
+                or rest.lstrip().startswith("#")
+            ):
+                block = key_col
+            out.append(f"{match.group(1)}{match.group(2)}: <redacted>")
+            continue
+        out.append(line)
+    return out
 
 
 def bootstrap(talosconfig: Path, endpoint: str, node: str,
