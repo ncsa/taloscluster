@@ -1223,6 +1223,78 @@ def test_sdn_own_pending_changes_resume_with_a_single_apply(sdn_cfg):
     ]
 
 
+@pytest.mark.parametrize("kind_key,attr,state", [
+    ("zones", "zone", "deleted"),
+    ("zones", "zone", "changed"),
+    ("vnets", "vnet", "deleted"),
+    ("vnets", "vnet", "changed"),
+    ("controllers", "controller", "deleted"),
+    ("controllers", "controller", "changed"),
+])
+def test_sdn_refuses_pending_destructive_state_on_own_object(sdn_cfg, kind_key, attr, state):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    target = {
+        "zones": ZONE_ID,
+        "vnets": VNET_ID,
+        "controllers": data["cluster/sdn/controllers"][0]["controller"],
+    }[kind_key]
+    item = next(
+        item for item in data[f"cluster/sdn/{kind_key}"] if str(item[attr]) == target
+    )
+    item["state"] = state
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="refusing to resume pending SDN state"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+    assert client.mutations == []
+
+
+@pytest.mark.parametrize("state", ["deleted", "changed"])
+def test_sdn_refuses_pending_destructive_state_on_own_subnet(sdn_cfg, state):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data[f"cluster/sdn/vnets/{VNET_ID}/subnets"][0]["state"] = state
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="refusing to resume pending SDN state"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+    assert client.mutations == []
+
+
+def test_sdn_refuses_own_subnet_with_pending_dict_but_no_state(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    subnet = data[f"cluster/sdn/vnets/{VNET_ID}/subnets"][0]
+    subnet["pending"] = {"snat": 0}
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="refusing to resume pending SDN state"):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+    assert client.mutations == []
+
+
+def test_sdn_resumes_own_subnet_with_pending_new(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data[f"cluster/sdn/vnets/{VNET_ID}/subnets"][0]["state"] = "new"
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert [(method, path) for method, path, _payload in client.mutations] == [
+        ("PUT", "cluster/sdn")
+    ]
+
+
 def test_sdn_refuses_zone_containing_foreign_vnet(sdn_cfg):
     backend_probe = _backend(sdn_cfg, FakeClient({}))
     data = _sdn_converged_data(backend_probe.sdn)

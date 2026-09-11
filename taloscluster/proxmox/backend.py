@@ -415,6 +415,56 @@ class ProxmoxBackend:
                 + "); applying SDN is cluster-wide, so apply or revert them first"
             )
 
+    def _refuse_own_destructive_pending(
+        self, state: dict[str, list[dict[str, Any]]]
+    ) -> None:
+        """A pending `new` is the only safe leftover of an interrupted create.
+
+        Our own ids are skipped by the foreign-pending scan as resumable, but
+        that only holds for pending `new` state. A staged `deleted` or
+        `changed` on our zone, VNet, subnet, or the shared controller would
+        otherwise be committed by the apply, tearing down a network that
+        running VMs depend on.
+        """
+        assert self.sdn is not None
+
+        def _pending_state(item: dict[str, Any]) -> str:
+            return str(item.get("state") or "") if item.get("state") else ""
+
+        dangerous: list[str] = []
+
+        def _scan(kind: str, id_key: str, identifier: str) -> None:
+            for item in state[kind]:
+                if str(item.get(id_key)) != identifier:
+                    continue
+                pending = _pending_state(item)
+                if pending and pending != "new":
+                    dangerous.append(f"{id_key} {identifier} ({pending})")
+
+        _scan("zones", "zone", self.sdn.name)
+        _scan("vnets", "vnet", self.sdn.name)
+        _scan("controllers", "controller", self.sdn.controller)
+
+        for item in state["vnets"]:
+            if str(item.get("vnet")) != self.sdn.name:
+                continue
+            for subnet in self._sdn_subnets_of(item):
+                if str(self._sdn_effective(subnet).get("cidr") or "") != self.cfg.cidr:
+                    continue
+                pending = _pending_state(subnet)
+                if not pending and isinstance(subnet.get("pending"), dict):
+                    pending = "changed"
+                if pending and pending != "new":
+                    dangerous.append(f"subnet {self.cfg.cidr} ({pending})")
+
+        if dangerous:
+            raise ReconcileError(
+                "refusing to resume pending SDN state on the cluster's own "
+                "resources ("
+                + ", ".join(sorted(dangerous))
+                + "); only `new` can be a leftover of an interrupted create"
+            )
+
     def _refuse_vni_collisions(self, state: dict[str, list[dict[str, Any]]]) -> None:
         assert self.sdn is not None
         ours = {str(self.sdn.vrf_tag), str(self.sdn.tag)}
@@ -748,6 +798,7 @@ class ProxmoxBackend:
         state = self._sdn_state(refresh=True)
         self._check_zone_placement(state)
         self._refuse_foreign_pending(state)
+        self._refuse_own_destructive_pending(state)
         self._refuse_vni_collisions(state)
         self._refuse_foreign_ownership(state)
         staged = self._ensure_controller(state)
