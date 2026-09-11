@@ -72,9 +72,18 @@ class Config:
         d = read_yaml(root / CLUSTER_FILE)
         where = CLUSTER_FILE
         rancher = d.get("rancher", {}) or {}
+        admins = tuple(rancher.get("admins", []) or [])
+        users = tuple(rancher.get("users", []) or [])
+        overlap = sorted(set(admins) & set(users))
+        if overlap:
+            raise ConfigError(
+                f"{where} (rancher): member(s) listed under both 'admins' and "
+                f"'users': {', '.join(overlap)}; a membership tier is ambiguous, "
+                "list each member under exactly one of the two"
+            )
         members = Members(
-            admins=tuple(rancher.get("admins", []) or []),
-            users=tuple(rancher.get("users", []) or []),
+            admins=admins,
+            users=users,
         )
         return cls(
             name=require(d, "name", where=where),

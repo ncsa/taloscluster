@@ -16,7 +16,7 @@ rancher:
 
 Optional · list of usernames · default empty
 
-Members granted the Rancher `cluster-owner` role. Usernames are resolved through Rancher's configured auth providers; one that cannot be resolved is skipped with a warning. Removing a name removes stale individual user bindings on the next converge. The creator-owner binding and group bindings are preserved, so access through those bindings remains.
+Members granted the Rancher `cluster-owner` role. Usernames are resolved through Rancher's configured auth providers on an exact id match only; a short or misspelled netid cannot be resolved and is skipped with a warning. A name listed under both `admins` and `users` is ambiguous and rejected. Removing a name removes stale individual user bindings on the next converge. The creator-owner binding and group bindings are preserved, so access through those bindings remains.
 
 ### `rancher.users`
 

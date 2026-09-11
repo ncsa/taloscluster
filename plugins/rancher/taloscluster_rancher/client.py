@@ -240,8 +240,10 @@ class Client:
         Uses the Rancher principal-search action (`POST /v3/principals?action=search`
         with `{"name": ...}`), which matches against the configured auth providers
         without hardcoding any LDAP DN layout. An email suffix is stripped so
-        `alice@example.com` resolves like `alice`. Returns the first user
-        principal whose id matches, or None if none is found.
+        `alice@example.com` resolves like `alice`. Returns the user principal whose
+        id matches `name` exactly, or None if none does -- a short or misspelled
+        netid must not fall back to the first prefix match, or it would grant the
+        id to the wrong person.
         """
         stem = name.split("@", 1)[0]
         data = self._post("/v3/principals?action=search", {"name": stem})
@@ -251,8 +253,6 @@ class Client:
                 id_stem = pid.rsplit("//", 1)[-1].split(",")[0].split("=")[-1]
                 if id_stem == stem:
                     return p
-                info(f"principal {pid!r} matches search, using as {name!r}")
-                return p
         return None
 
     # ------------------------------------------------- role template bindings

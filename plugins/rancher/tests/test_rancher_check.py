@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 import yaml
+from taloscluster.config import ConfigError
 from taloscluster.context import Context
 
 from taloscluster_rancher import reconcile as _converge
@@ -142,3 +143,13 @@ def test_unresolvable_netid_shows_up_as_missing(cluster_dir, wire):
     wire(FakeClient(bindings=[], principals={"alice": ALICE}))
     report = _converge.check(Context(root=cluster_dir, cfg=None))
     assert report["missing_members"] == [f"{ALICE} (cluster-owner)"]
+
+
+def test_netid_listed_as_both_admin_and_user_is_rejected(cluster_dir, wire):
+    """Membership under two tiers is ambiguous and would flap; refuse to load."""
+    (cluster_dir / "cluster.yaml").write_text(yaml.safe_dump({
+        "name": "testcluster",
+        "rancher": {"admins": ["alice", "bob"], "users": ["carol", "bob"]},
+    }))
+    with pytest.raises(ConfigError, match="'admins' and 'users'"):
+        _converge.check(Context(root=cluster_dir, cfg=None))
