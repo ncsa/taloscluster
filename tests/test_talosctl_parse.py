@@ -7,10 +7,12 @@ logic.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from taloscluster.errors import ReconcileError
 from taloscluster.talos import talosctl
 
 # Realistic `talosctl version` output: a Client block and a Server block, each
@@ -332,3 +334,27 @@ def test_bootstrap_treats_already_bootstrapped_as_success(tmp_path, monkeypatch)
     monkeypatch.setattr(talosctl, "_run_nocheck",
                         lambda args, timeout=None: (1, "", "etcd data directory is not empty"))
     talosctl.bootstrap(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.1")
+
+
+# ---------------------------------------------------------------------------
+# reset: a failed / timed-out graceful reset is fatal for a control plane
+# ---------------------------------------------------------------------------
+
+def test_reset_worker_failure_is_only_a_warning(tmp_path, monkeypatch):
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (1, "", "boom"))
+    talosctl.reset(tmp_path / "talosconfig", "endpoint", "worker-01")  # must not raise
+
+
+def test_reset_control_plane_failure_raises(tmp_path, monkeypatch):
+    """A failed graceful reset leaves a dead etcd member; refuse the removal."""
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (1, "", "boom"))
+    with pytest.raises(ReconcileError, match="control plane cp-03 failed"):
+        talosctl.reset(tmp_path / "talosconfig", "endpoint", "cp-03", control_plane=True)
+
+
+def test_reset_control_plane_timeout_raises(tmp_path, monkeypatch):
+    def boom(args, timeout=None):
+        raise subprocess.TimeoutExpired("talosctl reset", timeout)
+    monkeypatch.setattr(talosctl, "_run_nocheck", boom)
+    with pytest.raises(ReconcileError, match="control plane cp-03 timed out"):
+        talosctl.reset(tmp_path / "talosconfig", "endpoint", "cp-03", control_plane=True)

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import yaml
 
+from ..errors import ReconcileError
 from ..output import action, dry_run, info, warn
 
 BIN = "talosctl"
@@ -453,7 +454,16 @@ def upgrade_k8s(talosconfig: Path, endpoint: str, node: str, version: str) -> No
     _run(_talos(talosconfig, endpoint, node, "upgrade-k8s", "--to", version.lstrip("v")))
 
 
-def reset(talosconfig: Path, endpoint: str, node: str) -> None:
+def reset(talosconfig: Path, endpoint: str, node: str,
+          control_plane: bool = False) -> None:
+    """Gracefully reset a node so it cleanly leaves the cluster.
+
+    `control_plane` marks an etcd member. A failed or timed-out reset leaves a
+    dead etcd member behind: the next control-plane removal loses quorum. For a
+    control plane we therefore refuse (raise) so the caller aborts the scale-down
+    and keeps the VM. Workers are not etcd members, so a failed worker reset is
+    only a warning and the VM can be deleted.
+    """
     action(f"talosctl reset --graceful {node}")
     if dry_run():
         return
@@ -463,8 +473,20 @@ def reset(talosconfig: Path, endpoint: str, node: str) -> None:
                    "--graceful", "--reboot=false", "--timeout", "10m"),
             timeout=660,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
+        if control_plane:
+            raise ReconcileError(
+                f"graceful reset of control plane {node} timed out after 10m; "
+                "refusing to delete it -- a half-reset control plane is a dead "
+                "etcd member that would cost quorum on the next removal"
+            ) from e
         warn(f"reset of {node} timed out after 10m; continuing with deletion")
         return
     if rc != 0:
+        if control_plane:
+            raise ReconcileError(
+                f"graceful reset of control plane {node} failed (rc={rc}): "
+                f"{(err or out).strip()}; refusing to delete it -- a half-reset "
+                "control plane is a dead etcd member"
+            )
         warn(f"reset of {node} failed (rc={rc}): {(err or out).strip()}; continuing with deletion")

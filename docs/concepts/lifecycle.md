@@ -74,3 +74,5 @@ Converge runs a validation phase before its first mutation. On Proxmox it compar
 ## Day 2: operate
 
 See [Usage](../usage.md) for checking versions, planning changes, upgrading, scaling, inspecting and destroying a cluster.
+
+Scaling control planes down is quorum-safe: converge resets each control plane gracefully and, between successive control-plane removals, health-checks the cluster before touching the next. A failed or timed-out graceful reset is fatal for a control plane — converge refuses to delete a half-reset etcd member, so a dead member can never cost quorum on a later removal.

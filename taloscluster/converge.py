@@ -748,7 +748,11 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
         if talosconfig.is_file()
         else {}
     )
+    # how many control planes still have to go, so we health-check (etcd quorum
+    # must survive) after each one before removing the next
+    remaining_cp = sum(1 for n in removals if "-controlplane-" in n)
     for node in removals:
+        is_cp = "-controlplane-" in node
         address = resolve_node_address(node, discovered, inv, refs)
         if address:
             info(f"removing {node} ({address})")
@@ -762,7 +766,7 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
                         "aborting to protect a potentially live node"
                     ) from None
                 warn(f"drain of {node} failed (node already NotReady); continuing")
-            talosctl.reset(talosconfig, endpoint, address)
+            talosctl.reset(talosconfig, endpoint, address, control_plane=is_cp)
         else:
             ready = kubectl.node_ready(kubeconfig, node)
             if ready is not False:
@@ -774,6 +778,16 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
         kubectl.delete_node(kubeconfig, node)
         backend.delete_machine(node, inv)
         removed += 1
+        if is_cp:
+            remaining_cp -= 1
+            if remaining_cp > 0:
+                info(f"control plane {node} removed; health-checking before the next")
+                if not _health_or_kube_fallback(talosconfig, endpoint, refs.kubernetes.vip,
+                                                kubeconfig, timeout="10m"):
+                    raise ReconcileError(
+                        f"cluster unhealthy after removing control plane {node}; "
+                        "refusing to remove another control plane (etcd quorum at risk)"
+                    )
     if removed == 0:
         info("nothing to remove")
 

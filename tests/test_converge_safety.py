@@ -42,7 +42,7 @@ def test_scale_down_decline_happens_before_mutation(monkeypatch):
     mutations: list[str] = []
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
-    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
     monkeypatch.setattr("builtins.input", lambda _prompt: "no")
 
@@ -61,7 +61,7 @@ def test_scale_down_yes_skips_prompt_and_deletes(monkeypatch):
     mutations: list[str] = []
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
-    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
     monkeypatch.setattr(
         "builtins.input", lambda _prompt: pytest.fail("--yes must not prompt")
@@ -95,7 +95,7 @@ def test_scale_down_continues_when_drain_fails_on_notready_node(monkeypatch):
         "drain",
         lambda *_a: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "drain")),
     )
-    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
 
     inventory = InfrastructureInventory(
@@ -125,7 +125,7 @@ def test_scale_down_aborts_when_drain_fails_on_ready_node(monkeypatch):
         "drain",
         lambda *_a: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "drain")),
     )
-    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
 
     inventory = InfrastructureInventory(
@@ -153,7 +153,7 @@ def test_scale_down_deletes_notready_node_with_no_address(monkeypatch):
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
     monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: False)
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
-    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
 
     converge._scale_down(
@@ -171,7 +171,7 @@ def test_scale_down_aborts_when_no_address_but_node_ready(monkeypatch):
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
     monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: True)
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
-    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
 
     with pytest.raises(ReconcileError, match="no address for old-worker but node is Ready"):
@@ -194,7 +194,7 @@ def test_scale_down_aborts_when_drain_fails_and_status_unknown(monkeypatch):
         "drain",
         lambda *_a: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "drain")),
     )
-    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
 
     inventory = InfrastructureInventory(
@@ -221,7 +221,7 @@ def test_scale_down_aborts_when_no_address_and_status_unknown(monkeypatch):
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
     monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: None)
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
-    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
 
     with pytest.raises(ReconcileError, match="no address for old-worker but node is unknown"):
@@ -231,6 +231,97 @@ def test_scale_down_aborts_when_no_address_and_status_unknown(monkeypatch):
         )
 
     assert mutations == []
+
+
+def _cp_inventory(*names):
+    return InfrastructureInventory(
+        machines={
+            n: InfrastructureMachine(
+                n, attachments=(NetworkAttachment("cluster", f"192.0.2.{i % 250 + 1}"),)
+            )
+            for i, n in enumerate(names)
+        }
+    )
+
+
+def test_scale_down_aborts_without_deleting_when_control_plane_reset_fails(monkeypatch):
+    """A failed graceful reset must not delete the control-plane VM."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    monkeypatch.setattr(
+        converge.kubectl, "node_names", lambda _kc: ["testcluster-controlplane-03"]
+    )
+    monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
+
+    def fail_reset(*_a, **_k):
+        raise ReconcileError(
+            "graceful reset of control plane testcluster-controlplane-03 failed"
+        )
+    monkeypatch.setattr(converge.talosctl, "reset", fail_reset)
+    monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
+
+    with pytest.raises(ReconcileError, match="control plane"):
+        converge._scale_down(
+            FakeBackend(mutations), cfg, {}, _cp_inventory("testcluster-controlplane-03"),
+            NetworkResult(), Path("talosconfig"), Path("kubeconfig"), assume_yes=True,
+        )
+
+    # drained but the VM is NOT deleted once the reset failed
+    assert mutations == ["drain"]
+
+
+def test_scale_down_health_checks_between_successive_control_plane_removals(monkeypatch):
+    """Removing one control plane at a time must health-check before the next."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    monkeypatch.setattr(
+        converge.kubectl, "node_names",
+        lambda _kc: ["testcluster-controlplane-02", "testcluster-controlplane-03"],
+    )
+    monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
+    checks: list[bool] = []
+    monkeypatch.setattr(
+        converge, "_health_or_kube_fallback",
+        lambda *a, **k: checks.append(True) or True,
+    )
+
+    converge._scale_down(
+        FakeBackend(mutations), cfg, {},
+        _cp_inventory("testcluster-controlplane-02", "testcluster-controlplane-03"),
+        NetworkResult(), Path("talosconfig"), Path("kubeconfig"), assume_yes=True,
+    )
+
+    assert mutations == [
+        "drain", "reset", "delete", "compute",
+        "drain", "reset", "delete", "compute",
+    ]
+    assert len(checks) == 1  # only between the two control-plane removals
+
+
+def test_scale_down_stops_before_second_control_plane_when_unhealthy(monkeypatch):
+    """An unhealthy cluster between control-plane removals must abort the rollout."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    monkeypatch.setattr(
+        converge.kubectl, "node_names",
+        lambda _kc: ["testcluster-controlplane-02", "testcluster-controlplane-03"],
+    )
+    monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *a, **k: False)
+
+    with pytest.raises(ReconcileError, match="unhealthy after removing control plane"):
+        converge._scale_down(
+            FakeBackend(mutations), cfg, {},
+            _cp_inventory("testcluster-controlplane-02", "testcluster-controlplane-03"),
+            NetworkResult(), Path("talosconfig"), Path("kubeconfig"), assume_yes=True,
+        )
+
+    # first control plane removed, the second one left untouched
+    assert mutations == ["drain", "reset", "delete", "compute"]
 
 
 def test_destroy_decline_happens_before_plugin_teardown(monkeypatch, tmp_path):
