@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from taloscluster import naming
+from taloscluster import converge, naming
 from taloscluster.config import ProxmoxSecrets, Secrets
 from taloscluster.errors import ReconcileError
 from taloscluster.infrastructure import Endpoint
@@ -1800,6 +1801,114 @@ def test_removing_external_section_is_refused(make_config):
     with pytest.raises(ReconcileError, match="refusing to detach the external NIC"):
         _reconcile_cp1(_resized_cfg(make_config), client)
     assert client.mutations == []
+
+
+# validate_machines: the preflight that refuses unsupported changes before the
+# image/network/Talos phases mutate anything.
+
+def test_validate_machines_refuses_disk_shrink(make_config):
+    client = FakeClient(_data())
+    backend = _backend(_resized_cfg(make_config, disk=20), client)
+    inventory = backend.load_inventory()
+    cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+
+    with pytest.raises(ReconcileError, match="refusing to shrink the disk"):
+        backend.validate_machines({cp1.name: cp1}, inventory)
+    assert client.mutations == []
+
+
+def test_validate_machines_refuses_nic_move(make_config):
+    data = _data()
+    data["nodes/pve001/qemu/800/config"]["net0"] = (
+        "virtio=02:00:00:00:00:00,bridge=vmbr9,firewall=1"
+    )
+    client = FakeClient(data)
+    backend = _backend(_resized_cfg(make_config), client)
+    inventory = backend.load_inventory()
+    cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+
+    with pytest.raises(ReconcileError, match="refusing to move .* net0 from bridge=vmbr9"):
+        backend.validate_machines({cp1.name: cp1}, inventory)
+    assert client.mutations == []
+
+
+def test_validate_machines_refuses_external_nic_detach(make_config):
+    client = FakeClient(_external_data())
+    backend = _backend(_resized_cfg(make_config), client)
+    inventory = backend.load_inventory()
+    cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+
+    with pytest.raises(ReconcileError, match="refusing to detach the external NIC"):
+        backend.validate_machines({cp1.name: cp1}, inventory)
+    assert client.mutations == []
+
+
+def test_validate_machines_refuses_unowned_vm(make_config):
+    data = _data()
+    data["cluster/resources"][0]["tags"] = "unmanaged"  # cp-01 is no longer ours
+    client = FakeClient(data)
+    backend = _backend(_resized_cfg(make_config), client)
+    inventory = backend.load_inventory()
+    cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+
+    with pytest.raises(ReconcileError, match="refusing to adopt unowned"):
+        backend.validate_machines({cp1.name: cp1}, inventory)
+    assert client.mutations == []
+
+
+@pytest.mark.parametrize("scenario", ["disk_shrink", "nic_move"])
+def test_converge_rejects_unsupported_change_before_any_mutation(
+    make_config, monkeypatch, tmp_path, scenario
+):
+    """A full converge() refuses a disk shrink / NIC bridge change in the validate
+    phase, before the image, network, Talos or state phases run."""
+    if scenario == "disk_shrink":
+        client = FakeClient(_data())
+        cfg = _resized_cfg(make_config, disk=20)
+        match = "refusing to shrink the disk"
+    else:
+        data = _data()
+        data["nodes/pve001/qemu/800/config"]["net0"] = (
+            "virtio=02:00:00:00:00:00,bridge=vmbr9,firewall=1"
+        )
+        client = FakeClient(data)
+        cfg = _resized_cfg(make_config)
+        match = "refusing to move .* net0 from bridge=vmbr9"
+
+    backend = _backend(cfg, client)
+    secrets = Secrets(provider=ProxmoxSecrets("user@pve!provider", "secret"))
+    state = SimpleNamespace(
+        secrets_exist=lambda: True, secrets_path=tmp_path / "talossecrets.yaml"
+    )
+    moved: list[str] = []
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "load_secrets", lambda _root: secrets)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+    monkeypatch.setattr(
+        converge.factory, "installer_image", lambda _sid, _v, **kw: "talos:v1.13.0"
+    )
+    # the phases after validate mutate the cluster; none may be reached
+    monkeypatch.setattr(backend, "ensure_boot_artifact", lambda: moved.append("image"))
+    monkeypatch.setattr(backend, "reconcile_network", lambda *_a, **_k: moved.append("network"))
+
+    with pytest.raises(ReconcileError, match=match):
+        converge.converge(tmp_path)
+
+    assert moved == []
+    assert client.mutations == []
+
+
+def test_validate_machines_accepts_reconcilable_changes(make_config):
+    # cores/memory/disk-grow are reconcilable in place, so the preflight passes
+    backend = _backend(_resized_cfg(make_config, cores=8, memory=16, disk=100), FakeClient(_data()))
+    inventory = backend.load_inventory()
+    cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+
+    backend.validate_machines({cp1.name: cp1}, inventory)  # must not raise
 
 
 def test_memory_property_string_is_not_drift(make_config):

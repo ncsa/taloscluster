@@ -120,6 +120,13 @@ class OpenStackBackend:
             ingress=endpoint(naming.ingress_name(self.cfg.name)),
         )
 
+    def validate_machines(
+        self,
+        machines: dict[str, Machine],
+        inventory: InfrastructureInventory,
+    ) -> None:
+        return None
+
     def reconcile_machines(
         self,
         machines: dict[str, Machine],

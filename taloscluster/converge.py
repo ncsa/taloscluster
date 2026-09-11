@@ -4,8 +4,12 @@ Enforces the phase order the shell script established, the crux being that
 existing nodes are upgraded to the target versions BEFORE new ones are added, so
 a new node never joins newer than the rest:
 
-  image -> secrets -> network/SG -> discover -> scale-down -> upgrade ->
-  compute -> bootstrap -> kubeconfig -> health -> plugins
+  validate -> image -> secrets -> network/SG -> discover -> scale-down ->
+  upgrade -> compute -> bootstrap -> kubeconfig -> health -> plugins
+
+`validate` refuses provider changes that cannot be reconciled in place (a
+Proxmox disk shrink or NIC attachment move) before any phase mutates, so a
+rejected change never leaves a half-applied cluster.
 
 Plugins run last because they need a reachable cluster and the kubeconfig this
 run just wrote; on destroy they run first, for the same reason inverted.
@@ -84,17 +88,25 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         for s, sid in installer_schematics.items()
     }
 
-    # ---- 1. IMAGE --------------------------------------------------------
+    # ---- 1. INVENTORY + SUPPORTED-CHANGE PREFLIGHT ------------------------
+    # Load what exists before anything mutates so a provider change that cannot
+    # be reconciled in place (a Proxmox disk shrink, a NIC attachment move) is
+    # refused while the cluster is still untouched -- not after the image,
+    # network or Talos phases already ran. The state and network phases reuse
+    # this load. Providers without such a preflight (OpenStack) may no-op here.
+    log("validate")
+    inv = backend.load_inventory()
+    backend.validate_machines(machines, inv)
+
+    # ---- 2. IMAGE --------------------------------------------------------
     log("image")
     boot_image = backend.ensure_boot_artifact()
 
-    # ---- 2. STATE (talos machine secrets) --------------------------------
-    # Load existing infrastructure before deciding whether to mint a new
-    # identity: the secrets are the cluster's irreplaceable CA + tokens, so if
-    # machines already exist we must refuse to generate a fresh file and demand
-    # restoration from backup instead. The network phase reuses this inventory.
+    # ---- 3. STATE (talos machine secrets) --------------------------------
+    # Loaded above: machines already exist, so we must refuse to mint a new
+    # identity -- the secrets are the cluster's irreplaceable CA + tokens and
+    # must be restored from backup instead. The network phase reuses this too.
     log("secrets")
-    inv = backend.load_inventory()
     secrets_path = state.secrets_path
     if not state.secrets_exist():
         if inv.machines:

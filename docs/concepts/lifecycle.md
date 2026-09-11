@@ -69,6 +69,8 @@ Converge builds the boot image, creates the network and firewall rules, creates 
 
 Before it mints a new `talossecrets.yaml`, converge checks whether any of the cluster's machines already exist. If they do, the file is missing and converge aborts instead of creating a fresh identity for a live cluster; restore `talossecrets.yaml` from backup. A brand-new cluster with no machines still generates the file on its first converge.
 
+Converge runs a validation phase before its first mutation. On Proxmox it compares each existing VM against `cluster.yaml` and refuses changes it cannot reconcile in place — shrinking a disk or moving a NIC to another bridge or VLAN — so a rejected `cluster.yaml` edit leaves the cluster, its boot image and its Talos configuration untouched. Valid changes, such as growing a disk or resizing cores and memory, still pass through and are applied as before.
+
 ## Day 2: operate
 
 See [Usage](../usage.md) for checking versions, planning changes, upgrading, scaling, inspecting and destroying a cluster.

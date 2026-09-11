@@ -124,6 +124,19 @@ class InfrastructureBackend(Protocol):
 
     def current_network(self, inventory: InfrastructureInventory) -> NetworkResult: ...
 
+    def validate_machines(
+        self,
+        machines: dict[str, Machine],
+        inventory: InfrastructureInventory,
+    ) -> None:
+        """Refuse unsupported machine changes before any converge mutation.
+
+        Providers that cannot reconcile every change in place (e.g. Proxmox disk
+        shrink, NIC attachment moves) reject them here, ahead of the image,
+        network and Talos phases. Providers without such a preflight may no-op.
+        """
+        ...
+
     def reconcile_machines(
         self,
         machines: dict[str, Machine],

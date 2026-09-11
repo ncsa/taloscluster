@@ -490,6 +490,9 @@ class _SecretsBackend:
     def ensure_boot_artifact(self):
         return "image"
 
+    def validate_machines(self, _machines, _inventory):
+        return None
+
     def reconcile_network(self, _machines, _inventory):
         if self.stop_after_state:
             raise _StatePhaseDone
@@ -547,3 +550,56 @@ def test_converge_generates_secrets_on_first_run_when_no_machines(monkeypatch, t
         )
 
     assert state.generated is True
+
+
+# ---- unsupported machine-change preflight runs before any mutation -----------
+
+class _RecordingBackend(_SecretsBackend):
+    """Records every cluster mutation converge would perform."""
+
+    def __init__(self, inventory=None, *, fail_validate=False, **kw):
+        super().__init__(inventory if inventory is not None else InfrastructureInventory(), **kw)
+        self.mutations: list[str] = []
+        self.fail_validate = fail_validate
+
+    def validate_machines(self, _machines, _inventory):
+        if self.fail_validate:
+            raise ReconcileError(
+                "refusing to shrink the disk of testcluster-controlplane-01 "
+                "from 40GB to 20GB"
+            )
+
+    def ensure_boot_artifact(self):
+        self.mutations.append("image")
+        return "image"
+
+    def reconcile_network(self, _machines, _inventory):
+        self.mutations.append("network")
+        raise _StatePhaseDone  # stop converge after the mutable phases
+
+
+def test_converge_disk_shrink_rejection_leaves_resources_unchanged(monkeypatch, tmp_path):
+    """A Proxmox disk-shrink refusal in the validate phase fires before the
+    image or network phases mutate anything -- not after converge already
+    changed infrastructure or Talos configuration."""
+    state = _FakeState(True, tmp_path / "talossecrets.yaml")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    backend = _RecordingBackend(fail_validate=True)
+
+    with pytest.raises(ReconcileError, match="refusing to shrink the disk"):
+        _stub_converge(monkeypatch, tmp_path, state, backend)
+
+    assert backend.mutations == []
+
+
+def test_converge_valid_changes_pass_the_preflight_and_mutate(monkeypatch, tmp_path):
+    """When validate_machines accepts the changes, the image and network phases
+    still run -- the preflight only refuses unsupported changes, never valid ones."""
+    state = _FakeState(True, tmp_path / "talossecrets.yaml")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    backend = _RecordingBackend(fail_validate=False)
+
+    with pytest.raises(_StatePhaseDone):
+        _stub_converge(monkeypatch, tmp_path, state, backend)
+
+    assert backend.mutations == ["image", "network"]

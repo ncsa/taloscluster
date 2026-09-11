@@ -959,27 +959,43 @@ class ProxmoxBackend:
             )
         return needs_restart
 
-    def _vm_drift(self, vm: ProxmoxVM, machine: Machine) -> dict[str, Any]:
-        """Compare a VM's Proxmox config with cluster.yaml.
+    def validate_machines(
+        self,
+        machines: dict[str, Machine],
+        inventory: InfrastructureInventory,
+    ) -> None:
+        """Refuse unsupported Proxmox changes to existing VMs before any mutation.
 
-        Refuses (before any mutation) when the private or external NIC would
-        move to another bridge/VLAN or when the disk would shrink: neither can
-        be reconciled in place, and silently ignoring them would leave
-        cluster.yaml lying about the cluster. Returns the reconcilable drift:
-        `cores`, `memory` (MiB) and `disk` (GiB, grow only), plus `stale` when
-        the *running* VM differs from the desired sizing -- a change written
-        on an earlier run that still waits for a restart.
+        Runs as the first converge phase, ahead of the image/network/Talos
+        phases, so a disk shrink or NIC attachment change is rejected while the
+        cluster is still untouched. Unrecognized or unowned VMs are handled here
+        exactly as ``reconcile_machines`` would handle them later, so the preflight
+        and the compute phase agree on what is valid.
+        """
+        raw = self._raw(inventory)
+        for name, machine in machines.items():
+            existing = raw.vms.get(name)
+            if existing is None:
+                continue
+            if not self._owns_vm(raw, existing):
+                raise ReconcileError(
+                    f"refusing to adopt unowned Proxmox VM named {name!r}"
+                )
+            self._assert_supported_changes(existing, machine)
+
+    def _assert_supported_changes(self, vm: ProxmoxVM, machine: Machine) -> dict[str, Any]:
+        """Refuse unsupported changes to an existing VM, returning its config.
+
+        Raises when the private or external NIC would move to another bridge/VLAN
+        or when the disk would shrink: neither can be reconciled in place, and
+        silently ignoring them would leave cluster.yaml lying about the cluster.
+        Shared by the compute phase (``_vm_drift``) and the pre-mutation
+        ``validate_machines`` preflight, so a rejected change is caught while
+        every earlier converge phase is still unmutated.
         """
         config = self.client.get(f"nodes/{vm.node}/qemu/{vm.vmid}/config")
         if not isinstance(config, dict):
             raise ReconcileError(f"Proxmox returned no config for {vm.name}: {config!r}")
-        # what the VM actually runs with; `config` alone shows pending values
-        running = self.client.get(
-            f"nodes/{vm.node}/qemu/{vm.vmid}/config", params={"current": 1}
-        )
-        if not isinstance(running, dict):
-            running = config
-
         want_nics = {"net0": (self.cluster_link, self.cluster_network.get("vlan"))}
         ext = self.external_network
         if ext:
@@ -1001,6 +1017,32 @@ class ProxmoxBackend:
                 "proxmox.network.external from a running cluster is not supported; "
                 "revert the change in cluster.yaml or recreate the cluster"
             )
+        have_disk = _size_gib(_kv(config.get("scsi0")).get("size"))
+        if have_disk is not None and have_disk > machine.disk:
+            raise ReconcileError(
+                f"refusing to shrink the disk of {vm.name} from {have_disk}GB to "
+                f"{machine.disk}GB: Proxmox cannot shrink a disk; revert `disk` in "
+                "cluster.yaml, or replace the machine (scale its pool down past it "
+                "and back up)"
+            )
+        return config
+
+    def _vm_drift(self, vm: ProxmoxVM, machine: Machine) -> dict[str, Any]:
+        """Compare a VM's Proxmox config with cluster.yaml.
+
+        Returns the reconcilable drift: `cores`, `memory` (MiB) and `disk`
+        (GiB, grow only), plus `stale` when the *running* VM differs from the
+        desired sizing -- a change written on an earlier run that still waits
+        for a restart. Unsupported changes (a NIC moving bridge/VLAN, a disk
+        shrinking) are refused up front by ``_assert_supported_changes``.
+        """
+        config = self._assert_supported_changes(vm, machine)
+        # what the VM actually runs with; `config` alone shows pending values
+        running = self.client.get(
+            f"nodes/{vm.node}/qemu/{vm.vmid}/config", params={"current": 1}
+        )
+        if not isinstance(running, dict):
+            running = config
 
         drift: dict[str, Any] = {}
         have_cores = int(config.get("cores") or 1)
@@ -1011,13 +1053,7 @@ class ProxmoxBackend:
             drift["memory"] = (have_memory, _memory_mib(machine.memory))
         have_disk = _size_gib(_kv(config.get("scsi0")).get("size"))
         if have_disk is not None and have_disk != machine.disk:
-            if have_disk > machine.disk:
-                raise ReconcileError(
-                    f"refusing to shrink the disk of {vm.name} from {have_disk}GB to "
-                    f"{machine.disk}GB: Proxmox cannot shrink a disk; revert `disk` in "
-                    "cluster.yaml, or replace the machine (scale its pool down past it "
-                    "and back up)"
-                )
+            # not a shrink: _assert_supported_changes refused that already
             drift["disk"] = (have_disk, machine.disk)
         if (
             int(running.get("cores") or 1) != machine.cores
