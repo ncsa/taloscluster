@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from taloscluster import converge
-from taloscluster.errors import ReconcileError
+from taloscluster.errors import ReconcileError, StateError
 from taloscluster.infrastructure import (
     InfrastructureInventory,
     InfrastructureMachine,
@@ -451,3 +451,99 @@ def test_reboot_rollout_stops_when_the_cluster_is_unhealthy(monkeypatch, tmp_pat
             tmp_path / "talosconfig", tmp_path / "kubeconfig",
         )
     assert restarted == ["phoenix-controlplane-01"]
+
+
+# ---- secrets: refused on an existing cluster, generated on first run -------
+
+class _FakeState:
+    """Minimal stand-in for taloscluster.state.State used by converge()."""
+
+    def __init__(self, secrets_exist, secrets_path):
+        self._exist = secrets_exist
+        self.secrets_path = secrets_path
+        self.generated = False
+
+    def secrets_exist(self):
+        return self._exist
+
+    def write_secrets(self, _contents):
+        self.generated = True
+
+
+# raised by reconcile_network below to stop a first-run converge just past the
+# state phase, proving the refusal did not trip and secrets were written
+class _StatePhaseDone(Exception):
+    pass
+
+
+class _SecretsBackend:
+    name = "openstack"
+    installer_platform = "openstack"
+
+    def __init__(self, inventory, stop_after_state=False):
+        self.inventory = inventory
+        self.stop_after_state = stop_after_state
+
+    def load_inventory(self):
+        return self.inventory
+
+    def ensure_boot_artifact(self):
+        return "image"
+
+    def reconcile_network(self, _machines, _inventory):
+        if self.stop_after_state:
+            raise _StatePhaseDone
+        return NetworkResult()
+
+
+def _stub_converge(monkeypatch, tmp_path, state, backend):
+    """Wire converge() so the state phase runs against fakes."""
+    cfg = SimpleNamespace(
+        name="phoenix", talos_version="v1.13.0",
+        extension_sets=lambda: [()], machines={},
+        kubernetes_version="v1.31.0", tailscale_enabled=True,
+    )
+    secrets = SimpleNamespace(tailscale_auth_key=None)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "load_secrets", lambda _root: secrets)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    # image-factory and talosctl side effects are out of scope for these tests
+    # and talosctl is not installed in CI
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+    monkeypatch.setattr(converge.talosctl, "gen_secrets", lambda _v: "dummy secrets")
+    return converge.converge(tmp_path)
+
+
+def test_converge_refuses_to_generate_secrets_when_machines_exist(monkeypatch, tmp_path):
+    inventory = InfrastructureInventory(
+        machines={
+            "phoenix-controlplane-01": InfrastructureMachine(
+                "phoenix-controlplane-01",
+                attachments=(NetworkAttachment("cluster", "10.0.0.1"),),
+            )
+        }
+    )
+    state = _FakeState(False, tmp_path / "talossecrets.yaml")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+
+    with pytest.raises(StateError, match="irreplaceable identity"):
+        _stub_converge(monkeypatch, tmp_path, state, _SecretsBackend(inventory))
+
+    assert state.generated is False
+
+
+def test_converge_generates_secrets_on_first_run_when_no_machines(monkeypatch, tmp_path):
+    state = _FakeState(False, tmp_path / "talossecrets.yaml")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+
+    # empty inventory -> no refusal; secrets written, then the network phase runs
+    with pytest.raises(_StatePhaseDone):
+        _stub_converge(
+            monkeypatch, tmp_path, state,
+            _SecretsBackend(InfrastructureInventory(), stop_after_state=True),
+        )
+
+    assert state.generated is True

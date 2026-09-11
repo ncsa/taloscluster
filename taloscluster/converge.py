@@ -37,7 +37,7 @@ from .config import (
     validate_warnings,
 )
 from .context import Context
-from .errors import ReconcileError, preflight_tools
+from .errors import ReconcileError, StateError, preflight_tools
 from .infrastructure import (
     InfrastructureBackend,
     InfrastructureInventory,
@@ -89,18 +89,29 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     boot_image = backend.ensure_boot_artifact()
 
     # ---- 2. STATE (talos machine secrets) --------------------------------
+    # Load existing infrastructure before deciding whether to mint a new
+    # identity: the secrets are the cluster's irreplaceable CA + tokens, so if
+    # machines already exist we must refuse to generate a fresh file and demand
+    # restoration from backup instead. The network phase reuses this inventory.
     log("secrets")
+    inv = backend.load_inventory()
+    secrets_path = state.secrets_path
     if not state.secrets_exist():
+        if inv.machines:
+            raise StateError(
+                f"{secrets_path} is missing but {len(inv.machines)} machine(s) "
+                f"exist ({', '.join(sorted(inv.machines))}). This file is the "
+                "cluster's irreplaceable identity (CA + tokens) and cannot be "
+                "regenerated for an existing cluster -- restore it from backup."
+            )
         action("generate talos machine secrets (first run)")
         if not dry_run():
             state.write_secrets(talosctl.gen_secrets(cfg.talos_version))
-    secrets_path = state.secrets_path
-    if state.secrets_exist():
+    else:
         info(f"machine secrets: {secrets_path} (CRITICAL -- back this up)")
 
     # ---- 3. NETWORK + SECURITY -------------------------------------------
     log("network + security group")
-    inv = backend.load_inventory()
     refs = backend.reconcile_network(machines, inv)
     info(
         "kubeapi advertised "
