@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse to resume pending SDN `deleted` or `changed` state on the cluster's own zone, VNet, subnet, or the shared controller; only `new` is a leftover of an interrupted create, so a staged deletion can no longer be committed by converge under running VMs.
 - Guard Rancher `destroy` with the same downstream-id check as `converge`, so it no longer deletes whichever Rancher cluster shares the configured name.
 - Resolve Rancher members on an exact principal id match, so a short or misspelled netid no longer grants `cluster-owner` to whoever a prefix search returns first; reject a netid listed under both `rancher.admins` and `rancher.users`.
+- Build machine configs for nodes scaled up in the same run as a Kubernetes upgrade at the upgraded version, instead of the pre-upgrade running version they would otherwise boot.
 
 ## [0.7.0] - 2026-09-06
 

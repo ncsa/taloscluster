@@ -13,8 +13,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from taloscluster import converge
+from taloscluster import converge, versions
 from taloscluster.errors import ReconcileError
+from taloscluster.infrastructure import (
+    Endpoint,
+    InfrastructureInventory,
+    InfrastructureMachine,
+    NetworkResult,
+    TalosContribution,
+)
 from taloscluster.talos import machineconfig
 
 CFG = SimpleNamespace(kubernetes_version="v1.36.4")
@@ -74,3 +81,352 @@ def test_build_configs_passes_the_override_to_talosctl(make_config, monkeypatch,
     machineconfig.build_configs(cfg, secrets, cfg.machines, endpoint, tmp_path / "s",
                                 images, contributions)
     assert set(seen) == {cfg.kubernetes_version}
+
+
+# ---- scale-up during the same run as a kubernetes upgrade -----------------
+
+def _new_node_fixtures(make_config):
+    cfg = make_config({
+        "controlplane": {"count": 2, "flavor": "f", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
+        "kubernetes": {"version": "v1.36.4"},
+    })
+    secrets = SimpleNamespace(tailscale_auth_key=None)
+    contributions = {h: TalosContribution(install_disk="/dev/vda") for h in cfg.machines}
+    endpoint = Endpoint(vip="192.0.2.10", advertised_address="203.0.113.10")
+    images = {m.extensions: "installer" for m in cfg.machines.values()}
+    return cfg, secrets, contributions, endpoint, images
+
+
+def test_scale_up_configs_carry_the_target_version_after_an_upgrade(
+    make_config, monkeypatch, tmp_path
+):
+    """A node scaled up in the same run as a kubernetes upgrade must boot at the
+    upgraded (target) version. The pre-upgrade configs -- the ones applied to the
+    existing cluster so `talosctl upgrade-k8s` steps minors -- carry the running
+    version; a new node has no prior minor to step, so its config must be rebuilt
+    with the target the upgrade phase just established."""
+    cfg, secrets, contributions, endpoint, images = _new_node_fixtures(make_config)
+    running = "v1.34.4"  # a minor behind cluster.yaml (the upgrade target)
+    assert cfg.kubernetes_version != running
+
+    seen: list[str] = []
+
+    def fake_gen_config(**kwargs):
+        seen.append(kwargs["kubernetes_version"])
+        return "machine: {}"
+
+    monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
+
+    # only one control plane exists; the other control plane and the worker are
+    # new in this run
+    existing = {"testcluster-controlplane-01"}
+    inv = InfrastructureInventory(
+        machines={h: InfrastructureMachine(h) for h in existing}
+    )
+    refs = NetworkResult(kubernetes=endpoint)
+
+    fresh = converge._new_node_configs(
+        cfg, secrets, cfg.machines, inv, refs, tmp_path / "secrets",
+        images, contributions, default_tags=None,
+    )
+
+    assert set(fresh) == set(cfg.machines) - existing
+    assert set(seen) == {cfg.kubernetes_version}  # the target, not the running version
+
+
+def test_scale_up_configs_are_regenerated_only_for_missing_nodes(
+    make_config, monkeypatch, tmp_path
+):
+    """No-scale-up runs must not regenerate anything -- `_apply_configs` already
+    pushed the running-version configs to the existing nodes, so rebuilds with
+    the target version would be both wasted work and a config-push upgrade."""
+    cfg, secrets, contributions, endpoint, images = _new_node_fixtures(make_config)
+    monkeypatch.setattr(
+        machineconfig.talosctl, "gen_config",
+        lambda **kwargs: pytest.fail("must not regenerate a fully-existing cluster"),
+    )
+    inv = InfrastructureInventory(machines={h: InfrastructureMachine(h) for h in cfg.machines})
+    refs = NetworkResult(kubernetes=endpoint)
+
+    fresh = converge._new_node_configs(
+        cfg, secrets, cfg.machines, inv, refs, tmp_path / "secrets",
+        images, contributions, default_tags=None,
+    )
+    assert fresh == {}
+
+
+# ---- converge(): the compute phase must not crash when configs are empty ----
+
+class _DryRunState:
+    """A state where talossecrets.yaml does not exist (fresh cluster)."""
+
+    def __init__(self, root):
+        self.secrets_path = root / "talossecrets.yaml"
+
+    def secrets_exist(self):
+        return False
+
+    def write_secrets(self, _contents):
+        raise AssertionError("dry run must not write secrets")
+
+
+class _DryRunNoFipBackend:
+    """Reconciles to an empty network result (no fip/vip) and an empty inventory,
+    so the config block never runs and the compute phase runs on empty configs."""
+
+    name = "openstack"
+    installer_platform = "openstack"
+    computed = False
+
+    def load_inventory(self):
+        return InfrastructureInventory()
+
+    def ensure_boot_artifact(self):
+        return "image"
+
+    def validate_machines(self, _machines, _inventory):
+        return None
+
+    def reconcile_network(self, _machines, _inventory):
+        return NetworkResult()
+
+    def default_node_tags(self):
+        return {}
+
+    def reconcile_machines(self, _machines, _inventory, _boot_image, configs):
+        self.computed = True
+        return set()
+
+    def provider_status(self):
+        return {}
+
+
+def test_converge_plan_dry_run_reaches_compute_without_secrets(monkeypatch, tmp_path):
+    """The `plan` command drives converge with dry_run=True; on a fresh cluster
+    no secrets exist and no fip is allocated, so `configs` stays empty and the
+    config block (which binds `contributions`) is skipped. The compute phase must
+    still run without crashing -- this regressed into an UnboundLocalError on
+    `contributions` at the scale-up rebuild call site."""
+    backend = _DryRunNoFipBackend()
+    cfg = SimpleNamespace(
+        name="phoenix", talos_version="v1.13.0",
+        extension_sets=lambda: [()], machines={},
+        kubernetes_version="v1.31.0", tailscale_enabled=True,
+    )
+    secrets = SimpleNamespace(tailscale_auth_key=None)
+    state = _DryRunState(tmp_path)
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "load_secrets", lambda _root: secrets)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    converge.converge(tmp_path)
+
+    assert backend.computed is True
+
+
+class _FreshBootstrapBackend:
+    """Fresh-cluster backend: secrets exist and a fip is allocated, but no
+    machines are up yet, so the configs are built once at the target version."""
+
+    name = "openstack"
+    installer_platform = "openstack"
+
+    def __init__(self, inventory):
+        self.inventory = inventory
+
+    def load_inventory(self):
+        return self.inventory
+
+    def ensure_boot_artifact(self):
+        return "image"
+
+    def validate_machines(self, _machines, _inventory):
+        return None
+
+    def reconcile_network(self, _machines, _inventory):
+        return NetworkResult(
+            kubernetes=Endpoint(vip="192.0.2.10", advertised_address="203.0.113.10")
+        )
+
+    def default_node_tags(self):
+        return {}
+
+    def reconcile_machines(self, _machines, _inventory, _boot_image, _configs):
+        return set()
+
+    def talos_contribution(self, _machine, _refs):
+        return TalosContribution(install_disk="/dev/vda")
+
+    def provider_status(self):
+        return {}
+
+
+class _ExistingSecretsState(_DryRunState):
+    def secrets_exist(self):
+        return True
+
+    def write_secrets(self, _contents):
+        raise AssertionError("secrets already exist")
+
+
+def test_converge_fresh_bootstrap_regenerates_configs_once(make_config, monkeypatch, tmp_path):
+    """A fresh-cluster bootstrap builds configs at the target version (up=False,
+    `_config_kubernetes_version` returns cfg.kubernetes_version), so the compute
+    phase must not regenerate the same configs a second time. This was a waste
+    that ran `talosctl gen_config` once per node twice for identical output."""
+    cfg = make_config({
+        "controlplane": {"count": 1, "flavor": "f", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
+    })
+    backend = _FreshBootstrapBackend(InfrastructureInventory())
+    state = _ExistingSecretsState(tmp_path)
+    calls = {"n": 0}
+
+    def counting_gen_config(**kwargs):
+        calls["n"] += 1
+        return "machine: {}"
+
+    monkeypatch.setattr(machineconfig.talosctl, "gen_config", counting_gen_config)
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(
+        converge, "load_secrets", lambda _root: SimpleNamespace(tailscale_auth_key=None)
+    )
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    converge.converge(tmp_path)
+
+    expected_nodes = len(cfg.machines)
+    assert calls["n"] == expected_nodes  # once per node for the bootstrap, never a second time
+
+
+class _ScaleUpAfterUpgradeBackend:
+    """An up cluster scaled up in the same run as a kubernetes upgrade: one
+    control plane already exists, the other control plane and the worker are new
+    and must boot at the upgraded (target) version. `reconcile_machines` records
+    the configs it is handed so the test can assert the fresh node got the target
+    version while the existing node kept its running-version config."""
+
+    name = "openstack"
+    installer_platform = "openstack"
+
+    def __init__(self, inventory):
+        self.inventory = inventory
+        self.applied: dict[str, str] = {}
+        self.probed = False
+
+    def load_inventory(self):
+        return self.inventory
+
+    def ensure_boot_artifact(self):
+        return "image"
+
+    def validate_machines(self, _machines, _inventory):
+        return None
+
+    def reconcile_network(self, _machines, _inventory):
+        return NetworkResult(
+            kubernetes=Endpoint(vip="192.0.2.10", advertised_address="203.0.113.10")
+        )
+
+    def default_node_tags(self):
+        return {}
+
+    def reconcile_machines(self, _machines, _inventory, _boot_image, configs):
+        self.applied = dict(configs)
+        return set()
+
+    def talos_contribution(self, _machine, _refs):
+        return TalosContribution(install_disk="/dev/vda")
+
+    def provider_status(self):
+        return {}
+
+
+def test_converge_scales_up_nodes_at_the_upgraded_version(
+    make_config, monkeypatch, tmp_path
+):
+    """End-to-end wiring of the scale-up fix: with the cluster up and running a
+    minor behind cluster.yaml (the upgrade target), a node that does not exist
+    yet must be handed to `reconcile_machines` with a config baked at the target
+    version -- not the running version baked into the existing nodes' configs.
+    This is the converging behaviour the unit tests above only assert in
+    isolation."""
+    cfg = make_config({
+        "controlplane": {"count": 2, "flavor": "f", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
+        "kubernetes": {"version": "v1.36.4"},
+    })
+    running = "v1.34.4"  # a minor behind cfg.kubernetes_version (the upgrade target)
+    assert versions.is_older(running, cfg.kubernetes_version)  # genuinely an upgrade
+
+    # one control plane exists; the other control plane and the worker are new
+    missing_h = {h for h in cfg.machines if h != "testcluster-controlplane-01"}
+    backend = _ScaleUpAfterUpgradeBackend(
+        InfrastructureInventory(
+            machines={
+                "testcluster-controlplane-01": InfrastructureMachine(
+                    "testcluster-controlplane-01"
+                )
+            }
+        )
+    )
+    state = _ExistingSecretsState(tmp_path)
+
+    calls: list[str] = []
+
+    def fake_build_configs(
+        _cfg, _secrets, machines, _endpoint, _secrets_path, _images,
+        _contributions, default_tags=None, kubernetes_version=None,
+    ):
+        calls.append(kubernetes_version)
+        return {h: f"config/{h}" for h in machines}
+
+    monkeypatch.setattr(machineconfig, "build_configs", fake_build_configs)
+    # the real `_config_kubernetes_version` runs so the downgrade guard is
+    # exercised: running (v1.34.4) is below the target (v1.36.4), a genuine upgrade
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: running)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_apply_configs", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(
+        converge, "load_secrets", lambda _root: SimpleNamespace(tailscale_auth_key=None)
+    )
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    converge.converge(tmp_path)
+
+    # configs baked twice: the existing cluster at the running version, then the
+    # missing nodes regenerated at the target version
+    assert calls == [running, cfg.kubernetes_version]
+    # the fresh nodes' target-version configs reach reconcile_machines
+    for h in missing_h:
+        assert backend.applied.get(h) == f"config/{h}"
+    # the existing node keeps its running-version config, not a rebuild
+    existing = "testcluster-controlplane-01"
+    assert backend.applied.get(existing) == f"config/{existing}"

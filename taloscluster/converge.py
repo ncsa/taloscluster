@@ -36,6 +36,7 @@ from . import plugins, versions
 from .config import (
     Config,
     Machine,
+    Secrets,
     load_config,
     load_secrets,
     validate_warnings,
@@ -156,15 +157,17 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     default_tags = backend.default_node_tags()
 
     configs: dict[str, str] = {}
+    config_kubernetes_version: str | None = None
     if state.secrets_exist() and refs.kubernetes.advertised_address:
         contributions = {
             host: backend.talos_contribution(m, refs.kubernetes)
             for host, m in machines.items()
         }
+        config_kubernetes_version = _config_kubernetes_version(cfg, kubeconfig_path, up)
         configs = machineconfig.build_configs(
             cfg, secrets, machines, refs.kubernetes, secrets_path, installer_images,
             contributions, default_tags=default_tags,
-            kubernetes_version=_config_kubernetes_version(cfg, kubeconfig_path, up),
+            kubernetes_version=config_kubernetes_version,
         )
 
     # ---- 5. SCALE-DOWN ---------------------------------------------------
@@ -199,6 +202,15 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     log("compute")
     needs_restart: set[str] = set()
     if configs or dry_run():
+        # `configs` baked the running version so `talosctl upgrade-k8s` steps the
+        # EXISTING cluster through every minor. A node scaled up in the same run
+        # as an upgrade boots at the target version the upgrade phase established.
+        # Fresh clusters already baked the target (config_kubernetes_version ==
+        # cfg.kubernetes_version), so skip the rebuild -- only scale-ups against a
+        # cluster being stepped through minors need regenerating for new nodes.
+        if configs and config_kubernetes_version != cfg.kubernetes_version:
+            configs.update(_new_node_configs(cfg, secrets, machines, inv, refs, secrets_path,
+                                             installer_images, contributions, default_tags))
         needs_restart = backend.reconcile_machines(machines, inv, boot_image, configs) or set()
     else:
         warn("skipping compute: no machine configs (network fip not ready)")
@@ -600,6 +612,28 @@ def _config_kubernetes_version(cfg: Config, kubeconfig: Path, up: bool) -> str:
         )
     info(f"machine configs keep kubernetes {cur}; upgrade-k8s moves the cluster to {want}")
     return cur
+
+
+def _new_node_configs(cfg: Config, secrets: Secrets, machines: dict[str, Machine],
+                      inv: InfrastructureInventory, refs: NetworkResult, secrets_path: Path,
+                      installer_images, contributions, default_tags) -> dict[str, str]:
+    """Machine configs for the nodes that do not exist yet, at the target version.
+
+    `build_configs` above bakes the RUNNING version into the configs so
+    `talosctl upgrade-k8s` steps the existing cluster through every minor. A node
+    scaled up in the same run as an upgrade has no prior minor to step -- so once
+    the upgrade phase has moved the cluster to the target, regenerate the configs
+    for the nodes that still do not exist with that target version. Without this
+    they would boot one or two minors behind the rest of the cluster.
+    """
+    fresh = {h for h in machines if h not in inv.machines}
+    if not fresh:
+        return {}
+    return machineconfig.build_configs(
+        cfg, secrets, {h: machines[h] for h in fresh}, refs.kubernetes,
+        secrets_path, installer_images, contributions, default_tags=default_tags,
+        kubernetes_version=cfg.kubernetes_version,
+    )
 
 
 def _k8s_upgrade_path(cur: str, want: str) -> list[str]:
