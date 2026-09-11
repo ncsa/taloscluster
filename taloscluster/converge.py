@@ -350,7 +350,8 @@ def _reboot_nodes(backend: InfrastructureBackend, cfg: Config, machines: dict[st
             continue
         _wait_reachable(talosconfig, address, address)
         if not _health_or_kube_fallback(talosconfig, endpoint, refs.kubernetes.vip,
-                                        kubeconfig, timeout="10m"):
+                                        kubeconfig, timeout="10m",
+                                        fallback=machines[host].role != "controlplane"):
             raise ReconcileError(f"cluster unhealthy after rebooting {host}; stopping the rollout")
         info(f"{host} rebooted")
 
@@ -664,7 +665,8 @@ def _uncordon_stale(kubeconfig: Path, host: str) -> None:
 
 
 def _health_or_kube_fallback(talosconfig: Path, endpoint: str, vip: str,
-                             kubeconfig: Path, timeout: str = "5m") -> bool:
+                             kubeconfig: Path, timeout: str = "5m",
+                             fallback: bool = True) -> bool:
     """talosctl health, falling back to kube-api readiness on failure.
 
     The talos side of the check targets the endpoint control plane itself; the
@@ -676,7 +678,18 @@ def _health_or_kube_fallback(talosconfig: Path, endpoint: str, vip: str,
 
     That is the reboot, not a sick cluster; by the retry the node is back.
 
-    Returns True if either signal says the cluster is usable.
+    After a control-plane upgrade or reboot the running node must pass
+    `talosctl health` itself -- it is the only signal that the node rejoined
+    etcd. The kube-api VIP is still served by the surviving control planes, so
+    a responding VIP says nothing about the node being upgraded; accepting it
+    would let the rollout advance past a control plane that never came back and
+    cost quorum on the next one. So for control planes callers pass
+    `fallback=False` and a twice-failed talos health aborts the rollout;
+    `fallback=True` (the default) accepts kube-api readiness as a usable
+    cluster for non-control planes and the final health check.
+
+    Returns True if the talos signal passes, or -- only when `fallback` is
+    True -- the kube-api readiness signal passes.
     """
     for attempt in (1, 2):
         try:
@@ -693,7 +706,13 @@ def _health_or_kube_fallback(talosconfig: Path, endpoint: str, vip: str,
 
     # talosctl health probes every node's apid via cluster discovery; it can
     # still fail on a transient tailnet/discovery hiccup even when the cluster
-    # is fine. Fall back to the kubernetes readiness signal.
+    # is fine. For a control plane we refuse to substitute the kube-api signal
+    # (see above); the fallback is only for the rest of the cluster and final
+    # health.
+    if not fallback:
+        warn("talosctl health did not pass twice for a control plane; "
+             "refusing the kube-api fallback")
+        return False
     warn("talosctl health did not pass twice; checking kubernetes readiness instead")
     if kubectl.cluster_up(kubeconfig):
         info("kube-api is up and answering -- cluster is usable")
@@ -883,7 +902,8 @@ def _reconcile_talos(cfg: Config, machines: dict[str, Machine], inv: Infrastruct
         _wait_version(talosconfig, endpoint, address, cfg.talos_version, want_schematic)
         _uncordon_stale(kubeconfig, host)
         if not _health_or_kube_fallback(talosconfig, endpoint, refs.kubernetes.vip,
-                                        kubeconfig, timeout="10m"):
+                                        kubeconfig, timeout="10m",
+                                        fallback=m.role != "controlplane"):
             raise ReconcileError(f"cluster unhealthy after upgrading {host}; aborting rollout")
 
 

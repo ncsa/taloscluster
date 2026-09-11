@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deliver the OpenStack Cinder cloud.conf to the downstream cluster as a Secret instead of embedding the provider credential in ArgoCD Application values.
 - Align the AppProject `user` role's policy subject with its role name (`read-only` → `user`) so a configured read-only member actually gets `get` access on the project's applications.
 - Abort a control-plane scale-down instead of deleting the VM when the graceful `talosctl reset` fails or times out, so a half-reset etcd member is never left behind; also health-check between successive control-plane removals so quorum is never lost.
+- Do not accept kube-api readiness as healthy after a control-plane upgrade or reboot: an upgraded control plane must pass `talosctl health` (and so rejoin etcd) before the rollout advances, so a node that never comes back can no longer be hidden by a kube-api VIP still served by the surviving control planes.
 
 ## [0.7.0] - 2026-09-06
 

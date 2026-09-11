@@ -544,6 +544,138 @@ def test_reboot_rollout_stops_when_the_cluster_is_unhealthy(monkeypatch, tmp_pat
     assert restarted == ["phoenix-controlplane-01"]
 
 
+def test_reboot_rollout_aborts_on_control_plane_when_health_fails_and_vip_responds(
+    monkeypatch, tmp_path
+):
+    """A control-plane reboot with twice-failed `talosctl health` must abort the
+    rollout even when the kube-api VIP answers -- the surviving control planes
+    answer the VIP whether or not the rebooted node rejoined etcd, and the call
+    site passes `fallback=role != "controlplane"` so the fallback is refused."""
+    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=False)
+    machines = {
+        "phoenix-controlplane-01": SimpleNamespace(role="controlplane"),
+        "phoenix-controlplane-02": SimpleNamespace(role="controlplane"),
+    }
+    addresses = {"phoenix-controlplane-01": "10.0.0.1", "phoenix-controlplane-02": "10.0.0.2"}
+    inv = InfrastructureInventory(
+        machines={
+            h: InfrastructureMachine(name=h, attachments=(NetworkAttachment("cluster", a),))
+            for h, a in addresses.items()
+        }
+    )
+    restarted = []
+    backend = SimpleNamespace(restart_machine=lambda name, _inv: restarted.append(name))
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *a, **k: {})
+    monkeypatch.setattr(converge, "_wait_reachable", lambda tc, e, n: None)
+    # talosctl health fails twice, but the kube-api VIP keeps answering -- this
+    # is exactly the false healthy signal: the rollout must not advance to cp-02.
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        converge.talosctl, "health",
+        lambda *_a, **_k: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "health")),
+    )
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+
+    with pytest.raises(
+        ReconcileError, match="unhealthy after rebooting phoenix-controlplane-01"
+    ):
+        converge._reboot_nodes(
+            backend, cfg, machines, inv, NetworkResult(), set(machines),
+            tmp_path / "talosconfig", tmp_path / "kubeconfig",
+        )
+    assert restarted == ["phoenix-controlplane-01"]
+
+def test_health_or_kube_fallback_allows_kube_api_for_a_worker(monkeypatch):
+    """A worker upgrade still falls back to kube-api readiness when talosctl
+    health fails twice -- the worker is not an etcd member, so a responding
+    kube-api on the surviving control planes is a fine signal."""
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        converge.talosctl, "health",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, "health")
+        ),
+    )
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+
+    assert converge._health_or_kube_fallback(
+        Path("talosconfig"), "cp-01", "192.0.2.10", Path("kubeconfig")
+    )
+
+
+def test_health_or_kube_fallback_refuses_fallback_for_a_control_plane(monkeypatch):
+    """After a control-plane upgrade or reboot, a twice-failed `talosctl health`
+    must NOT be papered over by a responding kube-api VIP: the surviving
+    control planes answer the VIP even if the upgraded node never rejoined
+    etcd, so accepting it would advance the rollout past a missing member."""
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        converge.talosctl, "health",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, "health")
+        ),
+    )
+    # the VIP responds -- this is exactly the false healthy signal from the bug
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+
+    assert not converge._health_or_kube_fallback(
+        Path("talosconfig"), "cp-01", "192.0.2.10", Path("kubeconfig"),
+        fallback=False,
+    )
+
+
+def test_controlplane_upgrade_rollout_aborts_when_health_fails_and_vip_responds(
+    monkeypatch, tmp_path
+):
+    """The health phase must not advance the rollout to the next control plane
+    when the previous one never rejoined etcd, even if the kube-api VIP answers.
+    Callers pass `fallback=role != "controlplane"`, so a control-plane upgrade
+    aborts while a worker upgrade would still fall back to kube-api readiness."""
+    cfg = SimpleNamespace(name="phoenix", talos_version="v1.13.9")
+    machines = {
+        "phoenix-controlplane-01": SimpleNamespace(role="controlplane", extensions=("base",)),
+        "phoenix-controlplane-02": SimpleNamespace(role="controlplane", extensions=("base",)),
+    }
+    inventory = InfrastructureInventory(
+        machines={h: InfrastructureMachine(h) for h in machines}
+    )
+    upgraded = []
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses",
+        lambda *_a, **_kw: {h: f"192.0.2.{i}" for i, h in enumerate(machines, 1)},
+    )
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.6")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "old-sch")
+    monkeypatch.setattr(
+        converge.talosctl, "upgrade",
+        lambda *_a, **_kw: upgraded.append("upgrade"),
+    )
+    monkeypatch.setattr(converge, "_wait_version", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
+
+    # talosctl health fails twice for the first control plane, and the kube-api
+    # VIP answers; the call site passes fallback=role != "controlplane", so the
+    # real _health_or_kube_fallback refuses the fallback and the rollout aborts.
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        converge.talosctl, "health",
+        lambda *_a, **_k: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "health")),
+    )
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+
+    with pytest.raises(
+        ReconcileError, match="unhealthy after upgrading phoenix-controlplane-01"
+    ):
+        converge._reconcile_talos(
+            cfg, machines, inventory, NetworkResult(),
+            {("base",): "installer:v1.13.9"}, {("base",): "want-sch"},
+            tmp_path / "talosconfig", tmp_path / "kubeconfig",
+        )
+
+    assert upgraded == ["upgrade"]
+
+
 # ---- secrets: refused on an existing cluster, generated on first run -------
 
 class _FakeState:
