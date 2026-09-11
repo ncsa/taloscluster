@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Settle machine-config applies on control planes by default, waiting each node out of the cluster and back in before the next, so a reboot-requiring patch no longer restarts every control plane at once; a no-op pass now waits the settle grace window per control plane.
 - Recommend at least two workers and spare capacity for node maintenance.
 - Shorten the README and organize the documentation around installation, quickstart, usage, commands, configuration, plugins, and troubleshooting.
 - Clarify that users must connect the management machine to the cluster's tailnet themselves.

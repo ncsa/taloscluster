@@ -811,24 +811,36 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
         info("nothing to remove")
 
 
+_SETTLE_GRACE_S = 120
+
+
 def _apply_configs(cfg: Config, machines: dict[str, Machine],
                    inv: InfrastructureInventory, refs: NetworkResult,
                    configs: dict[str, str],
-                   talosconfig: Path, kubeconfig: Path, settle: bool = False,
+                   talosconfig: Path, kubeconfig: Path, settle: bool = True,
                    roles: tuple[str, ...] = ("controlplane", "worker")) -> None:
     """Push the freshly generated machine config to every existing node.
 
-    `settle` waits for each control plane's apid to answer again before the
-    next one is touched, for changes (an endpoint move) where a reboot of two
-    control planes at once would cost etcd quorum.
+    `settle` runs control planes one at a time so a reboot-requiring patch never
+    restarts every control plane at once: after each control plane's config is
+    applied, its node is waited out of the cluster and back in (`_wait_down`
+    then `_wait_reachable`) before the next one is touched. This is on by
+    default because a reboot of two control planes together costs etcd quorum;
+    the endpoint-move path relies on the same serialisation.
 
     Closes the gap where editing anything in the machine config (extra
     manifests, kubelet args, network) only reached NEW nodes, so a running
     cluster silently drifted from cluster.yaml.
 
-    Applying an identical config is a no-op on the node, so this stays cheap
-    and idempotent on a converged cluster. mode=auto means talos reboots a node
-    only for a change that genuinely requires it.
+    mode=auto means talos reboots a node only for a change that genuinely
+    requires it; a silent live apply never takes the node down. Because `settle`
+    is the default, even a no-op apply waits for the node's apid to drop for up
+    to one `_SETTLE_GRACE_S` window on every control plane (`_wait_down` polls
+    the whole window and the node stays up), so on a converged cluster a config
+    pass costs up to `len(controlplanes) * _SETTLE_GRACE_S` before the workers
+    are configured. The wait is what buys quorum safety: when the window expires
+    without an observed drop the node is still waited back in (a slow reboot
+    cannot be told apart from a live apply), so this is safe but not free.
     """
     log("machine config")
     endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
@@ -849,10 +861,40 @@ def _apply_configs(cfg: Config, machines: dict[str, Machine],
         talosctl.apply_config(talosconfig, endpoint, address, configs[host])
         applied += 1
         if settle and _m.role == "controlplane" and not dry_run():
-            time.sleep(5)  # let a reboot, if any, actually start
-            _wait_reachable(talosconfig, address, address)
+            # wait for the node to actually go down (a reboot started), then for
+            # apid to answer again -- so a reboot-requiring patch is fully
+            # settled before the next control plane is touched
+            if _wait_down(talosconfig, address, address):
+                _wait_reachable(talosconfig, address, address)
+            else:
+                warn(f"{host}: apid never dropped within the {_SETTLE_GRACE_S}s "
+                     "settle grace window -- a slow reboot cannot be told apart "
+                     "from a live apply -- so it is still waited back in before "
+                     "the next control plane is touched")
+                _wait_reachable(talosconfig, address, address)
     if not applied:
         info("no existing nodes to configure")
+
+
+def _wait_down(talosconfig: Path, endpoint: str, node: str,
+               grace_s: int = _SETTLE_GRACE_S, interval_s: int = 5) -> bool:
+    """Wait for `node`'s apid to stop answering -- the signal a reboot-requiring
+    config apply actually took the node down.
+
+    apid keeps answering while Talos drains, so waiting for it to answer again
+    (as `_wait_reachable` does on its own) can return before the node ever
+    rebooted. Only a config change that genuinely needs a restart takes the node
+    down; a silent live apply never does, so after `grace_s` without the node
+    dropping this returns False. The caller treats a down as a reboot and waits
+    for the node to come back; on False it cannot rule out a slow reboot and
+    still waits the node back in before touching the next control plane.
+    """
+    deadline = time.monotonic() + grace_s
+    while time.monotonic() < deadline:
+        if not talosctl.reachable(talosconfig, endpoint=endpoint, node=node):
+            return True
+        time.sleep(interval_s)
+    return False
 
 
 def _reconcile_talos(cfg: Config, machines: dict[str, Machine], inv: InfrastructureInventory,

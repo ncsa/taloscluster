@@ -585,6 +585,130 @@ def test_reboot_rollout_aborts_on_control_plane_when_health_fails_and_vip_respon
         )
     assert restarted == ["phoenix-controlplane-01"]
 
+# ---- _apply_configs: control planes settle by default, waiting out reboots --
+
+def _apply_configs_fixtures():
+    machines = {
+        "phoenix-controlplane-01": SimpleNamespace(role="controlplane"),
+        "phoenix-controlplane-02": SimpleNamespace(role="controlplane"),
+        "phoenix-worker-01": SimpleNamespace(role="worker"),
+    }
+    inv = _cp_inventory(*machines)
+    configs = {h: f"config:{h}" for h in machines}
+    return machines, inv, configs
+
+
+def _no_op_reachable(monkeypatch):
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *a, **k: {})
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+
+
+_APPLY_MACHINES = ["phoenix-controlplane-01", "phoenix-controlplane-02", "phoenix-worker-01"]
+# _cp_inventory numbers these 192.0.2.1, .2, .3 in name order
+_APPLY_ADDR = {h: f"192.0.2.{i + 1}" for i, h in enumerate(_APPLY_MACHINES)}
+
+
+def test_apply_configs_settles_control_planes_by_default(monkeypatch):
+    """`settle` defaults to True: a config apply waits for each control plane to
+    actually go down (a reboot started) and come back before the next one is
+    touched, so a reboot-requiring patch never restarts every control plane at
+    once. Workers are applied last in a single pass and never settled."""
+    machines, inv, configs = _apply_configs_fixtures()
+    _no_op_reachable(monkeypatch)
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        converge.talosctl, "apply_config",
+        lambda _tc, _e, node, _cfg: events.append(("apply", node)),
+    )
+    monkeypatch.setattr(
+        converge, "_wait_down",
+        lambda _tc, _e, node: events.append(("down", node)) or True,
+    )
+    monkeypatch.setattr(
+        converge, "_wait_reachable",
+        lambda _tc, _e, node: events.append(("up", node)),
+    )
+
+    # note: settle is left at its default -- the caller at the normal-path call
+    # site (converge, endpoint unchanged) passes no settle argument
+    converge._apply_configs(
+        SimpleNamespace(name="phoenix", tailscale_enabled=True),
+        machines, inv, NetworkResult(), configs,
+        Path("talosconfig"), Path("kubeconfig"),
+    )
+
+    cp1, cp2, worker = (_APPLY_ADDR[h] for h in _APPLY_MACHINES)
+    assert events == [
+        ("apply", cp1), ("down", cp1), ("up", cp1),
+        ("apply", cp2), ("down", cp2), ("up", cp2),
+        ("apply", worker),
+    ]
+
+
+def test_apply_configs_waits_live_apply_back_in_with_a_warning(monkeypatch):
+    """When the settle grace window expires without an observed node drop we
+    cannot tell a live apply from a slow reboot, so converge warns and STILL
+    waits the node back in before touching the next control plane -- the
+    serialisation that buys etcd quorum is never silently skipped."""
+    machines, inv, configs = _apply_configs_fixtures()
+    _no_op_reachable(monkeypatch)
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        converge.talosctl, "apply_config",
+        lambda _tc, _e, node, _cfg: events.append(("apply", node)),
+    )
+    monkeypatch.setattr(
+        converge, "_wait_down", lambda _tc, _e, node: events.append(("down", node)) or False,
+    )
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+    monkeypatch.setattr(
+        converge, "_wait_reachable",
+        lambda _tc, _e, node: events.append(("up", node)),
+    )
+
+    converge._apply_configs(
+        SimpleNamespace(name="phoenix", tailscale_enabled=True),
+        machines, inv, NetworkResult(), configs,
+        Path("talosconfig"), Path("kubeconfig"),
+    )
+
+    cp1, cp2, worker = (_APPLY_ADDR[h] for h in _APPLY_MACHINES)
+    # each control plane is still waited back in after the grace expires, so a
+    # late reboot can never overlap the next control plane
+    assert events == [
+        ("apply", cp1), ("down", cp1), ("up", cp1),
+        ("apply", cp2), ("down", cp2), ("up", cp2),
+        ("apply", worker),
+    ]
+    # and each expired grace window is disclosed to the operator
+    assert len(warns) == 2
+    for i, name in enumerate(_APPLY_MACHINES[:2], start=1):
+        assert "settle grace window" in warns[i - 1] and name in warns[i - 1]
+
+
+def test_wait_down_returns_true_only_after_apid_stops_answering(monkeypatch):
+    """_wait_down returns True the moment the node's apid stops answering, and
+    False if it never drops (a live apply) -- the distinction that makes the
+    settle wait real instead of relying on apid continuing to answer through a
+    drain."""
+    drops: list[bool] = [True, True, False]  # stay up, stay up, then down
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: drops.pop(0))
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+
+    assert converge._wait_down(talosconfig=Path("tc"), endpoint="e", node="n",
+                               grace_s=60, interval_s=5) is True
+
+    # a node that stays up for the whole grace window is a live apply: the poll
+    # loop must run until the deadline before returning False (grace_s=0 alone
+    # would never enter the loop, so the expiration path would be untested)
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: True)
+    expiry_clock = iter([0, 0, 5, 10])  # deadline, then each poll check
+    monkeypatch.setattr(converge.time, "monotonic", lambda: next(expiry_clock))
+    assert converge._wait_down(talosconfig=Path("tc"), endpoint="e", node="n",
+                               grace_s=10, interval_s=5) is False
+
+
 def test_health_or_kube_fallback_allows_kube_api_for_a_worker(monkeypatch):
     """A worker upgrade still falls back to kube-api readiness when talosctl
     health fails twice -- the worker is not an etcd member, so a responding
