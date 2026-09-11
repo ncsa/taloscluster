@@ -133,7 +133,7 @@ def _project(cfg: Config, ctx: Context) -> str:
     user = _role(
         "user",
         f"Read-only privileges to {name}",
-        f"p, proj:{name}:read-only, applications, get, {name}/*, allow",
+        f"p, proj:{name}:user, applications, get, {name}/*, allow",
         cfg.members.users,
     )
     return f"""\

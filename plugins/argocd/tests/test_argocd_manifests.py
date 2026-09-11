@@ -161,6 +161,23 @@ def test_render_without_git_url_emits_only_secret_and_project(kubeconfig, cfg):
     assert sorted(manifests.render(cfg, ctx_for(kubeconfig))) == ["project", "secret"]
 
 
+def test_project_role_names_match_their_policy_subjects(kubeconfig, cfg):
+    """Each AppProject role's policy subject must reference the role it belongs to."""
+    cfg.members = Members(admins=("a@example.com",), users=("d@example.com",))
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["project"])
+    roles = {r["name"]: r for r in doc["spec"]["roles"]}
+    assert set(roles) == {"admin", "user"}
+    name = cfg.name
+    for role_name, role in roles.items():
+        for policy in role["policies"]:
+            subject = policy.split(",")[1].strip().split(":")[2]
+            assert subject == role_name, policy
+    # the read-only user role still only grants get
+    assert roles["user"]["policies"] == [
+        f"p, proj:{name}:user, applications, get, {name}/*, allow"
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Cinder: the provider credential must never land in an ArgoCD Application.
 # It is delivered to the downstream cluster as a Secret instead.
