@@ -10,11 +10,18 @@ The plugin protocol is duck-typed against the entry point's module. Only
 
     AFTER: tuple[str, ...]                      # run after these, if installed
     init(root: Path) -> None                    # add missing scaffold sections
+    validate(root, ctx) -> None                 # reject bad config before mutations
     configured(ctx) -> bool
     converge(ctx, assume_yes=False) -> dict | None
     destroy(ctx, assume_yes=False) -> None
     status(ctx) -> dict
     check(ctx) -> dict                          # carries an "ok": bool
+
+An optional ``validate`` hook lets a plugin reject a malformed or contradictory
+``cluster.yaml`` / ``secrets.yaml`` section. Core calls it in converge's validate
+phase -- ahead of the image, network, machine and compute phases -- so a bad
+plugin configuration stops the run *before* the cluster changes, instead of
+surfacing as a late converge/destroy failure once everything is already built.
 
 Failures are contained: a plugin that cannot be loaded is dropped with a warning,
 and one that raises during a hook does not stop the others -- it only makes the
@@ -30,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from .context import Context
+from .errors import ConfigError
 from .output import warn
 
 ENTRY_POINT_GROUP = "taloscluster.plugins"
@@ -117,6 +125,27 @@ def active(ctx: Context) -> list[Plugin]:
         except Exception as e:
             warn(f"plugin {p.name!r}: could not tell whether it is configured ({e}); skipping")
     return out
+
+
+def validate(ctx: Context) -> None:
+    """Run every configured plugin's optional ``validate`` hook, refusing bad config.
+
+    Used by converge in its validate phase, before any cluster mutation. Each
+    configured plugin that implements ``validate`` is consulted; one that raises
+    aborts with a ``ConfigError`` naming the plugin, so an invalid or
+    contradictory plugin section stops the run while the cluster is still
+    untouched. A plugin without the hook has nothing to check.
+    """
+    for p in active(ctx):
+        fn = getattr(p.module, "validate", None)
+        if not callable(fn):
+            continue
+        try:
+            fn(ctx.root, ctx)
+        except ConfigError as e:
+            raise ConfigError(f"plugin {p.name!r}: {e}") from e
+        except Exception as e:  # a plugin that can't even validate must not mutate later
+            raise ConfigError(f"plugin {p.name!r}: invalid configuration: {e}") from e
 
 
 def run(plugins: list[Plugin], hook: str, ctx: Context, **kw) -> int:

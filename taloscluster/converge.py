@@ -98,6 +98,12 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     log("validate")
     inv = backend.load_inventory()
     backend.validate_machines(machines, inv)
+    # Validate configured plugin sections ahead of any cluster change, so a
+    # malformed or contradictory plugin configuration stops the run here -- not
+    # as a late plugin failure once the image, network and machines mutated.
+    # The plugin activation/validate hooks re-read cluster.yaml and secrets.yaml
+    # locally from disk -- no provider traffic, so nothing needs fetching here.
+    plugins.validate(Context(root=root, cfg=cfg))
 
     # ---- 2. IMAGE --------------------------------------------------------
     log("image")

@@ -13,6 +13,7 @@ import pytest
 
 from taloscluster import plugins
 from taloscluster.context import Context
+from taloscluster.errors import ConfigError
 
 
 class FakeEntryPoint:
@@ -189,6 +190,54 @@ def test_converge_results_reach_the_next_plugin(monkeypatch, ctx):
     plugins.run(plugins.discover(), "converge", ctx, assume_yes=False)
     assert ctx.results["first"] == {"cluster_id": "c-12345"}
     assert seen == {"cluster_id": "c-12345"}
+
+
+# ---- validate --------------------------------------------------------------
+
+def test_validate_skips_plugins_without_the_hook(monkeypatch, ctx):
+    install(monkeypatch, FakeEntryPoint("noop", make_module("noop")))
+    plugins.validate(ctx)  # no configured plugin calls validate -> no error
+
+
+def test_validate_only_consults_configured_plugins(monkeypatch, ctx):
+    seen = []
+    install(
+        monkeypatch,
+        FakeEntryPoint("on", make_module(
+            "on", configured=lambda ctx: True,
+            validate=lambda root, ctx: seen.append(root))),
+        FakeEntryPoint("off", make_module(
+            "off", configured=lambda ctx: False,
+            validate=lambda root, ctx: seen.append(root))),
+    )
+    plugins.validate(ctx)
+    assert seen == [ctx.root]
+
+
+def test_validate_raises_configerror_naming_the_plugin(monkeypatch, ctx):
+    def reject(root, ctx):
+        raise ConfigError("argocd.git.url missing")
+
+    install(
+        monkeypatch,
+        FakeEntryPoint("argocd", make_module(
+            "argocd", configured=lambda ctx: True, validate=reject)),
+    )
+    with pytest.raises(ConfigError, match="plugin 'argocd'|plugin \"argocd\""):
+        plugins.validate(ctx)
+
+
+def test_validate_contains_an_unexpected_exception(monkeypatch, ctx):
+    def boom(root, ctx):
+        raise RuntimeError("exploded")
+
+    install(
+        monkeypatch,
+        FakeEntryPoint("a", make_module("a", configured=lambda ctx: True, validate=boom)),
+    )
+    with pytest.raises(ConfigError, match="plugin 'a'|plugin \"a\"") as exc:
+        plugins.validate(ctx)
+    assert "exploded" in str(exc.value)
 
 
 # ---- collect ---------------------------------------------------------------

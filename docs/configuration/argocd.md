@@ -65,6 +65,8 @@ Required when `argocd.git.url` is set · URL
 
 The repository whose `charts/apps` chart is the app-of-apps the cluster Application points at. NCSA's is [ncsa/radiant-cluster](https://github.com/ncsa/radiant-cluster/tree/main/charts/apps).
 
+Converge validates the `argocd:` section before any cluster change: setting only one of `git.url` / `infra.url`, specifying git credentials without `git.url`, a non-mapping `argocd:` sub-section, or a top-level `argocd:` option the plugin does not understand is refused in the validate phase while the cluster is still untouched. `taloscluster plan` reports the same rejections before anything is attempted.
+
 ### `argocd.sync`
 
 Optional · boolean · default `false`

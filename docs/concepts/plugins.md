@@ -23,6 +23,8 @@ A plugin hooks into the normal commands; there is nothing extra to invoke.
 - **`destroy`** runs them first, in reverse order, while the cluster is still reachable, so a plugin can deregister the cluster before it disappears.
 - **`status`** and **`check`** include a section per plugin. A plugin whose check says converge would change something flips the exit code to 1, like an available upgrade does.
 
+Before any cluster change, converge asks each configured plugin to validate its own configuration. A plugin that declares a `validate` hook runs it during converge's validate phase, ahead of the image, network, machine and compute phases, so a malformed or contradictory plugin section (a repository URL without its pair, credentials without their URL, a non-mapping section, an unsupported option) stops the run while the cluster is still untouched instead of surfacing as a late failure once everything is already built. `plan` runs the same phase, so a bad plugin config is reported before anything is attempted.
+
 A plugin is inert until its own activation check succeeds. Rancher requires a `rancher` mapping in `cluster.yaml` and URL/token keys in `secrets.yaml`. ArgoCD activates only from a kubectl apply target (a `kubeconfig` or `context` in `secrets.yaml`), even without an `argocd` section in `cluster.yaml`; a `url`/`token` pair alone does not activate it because the plugin applies manifests via kubectl only. `taloscluster init` adds starter sections with connection credentials commented out, leaving the bundled plugins inactive. `taloscluster plugin list` shows what is installed, in run order, and whether each is configured. A single plugin can be run on its own, for example `taloscluster plugin rancher converge` to redo a registration without touching the cluster.
 
 A converge or destroy hook failure is reported, the other plugins still run, and the command exits nonzero. Core destroy continues infrastructure teardown after plugin failures. A failing check contributes `ok: false`; status errors appear in the report without changing the exit status. Plugin load, activation, and init failures are warnings and do not necessarily fail the command.
@@ -50,11 +52,13 @@ Add a folder under `plugins/` with its own `pyproject.toml` declaring an entry p
 myplugin = "taloscluster_myplugin"
 ```
 
-The named module implements as much of the protocol as it has. Only `configured` and `converge` are required. An optional `init(root)` hook can scaffold missing configuration sections when `taloscluster init` runs:
+The named module implements as much of the protocol as it has. Only `configured` and `converge` are required. An optional `init(root)` hook can scaffold missing configuration sections when `taloscluster init` runs; an optional `validate(root, ctx)` hook is run during converge's validate phase, before any cluster mutation, to reject a malformed or contradictory `cluster.yaml` / `secrets.yaml` section:
 
 ```python
 AFTER: tuple[str, ...] = ("rancher",)     # run after these, if they are installed
 
+def init(root) -> None: ...               # scaffold missing config sections
+def validate(root, ctx) -> None: ...      # raise ConfigError on bad config
 def configured(ctx) -> bool: ...          # is this plugin set up for this cluster?
 def converge(ctx, assume_yes=False) -> dict | None: ...
 def destroy(ctx, assume_yes=False) -> None: ...

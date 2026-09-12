@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from taloscluster import converge
-from taloscluster.errors import ReconcileError, StateError
+from taloscluster.errors import ConfigError, ReconcileError, StateError
 from taloscluster.infrastructure import (
     InfrastructureInventory,
     InfrastructureMachine,
@@ -1169,3 +1169,26 @@ def test_converge_valid_changes_pass_the_preflight_and_mutate(monkeypatch, tmp_p
         _stub_converge(monkeypatch, tmp_path, state, backend)
 
     assert backend.mutations == ["image", "network"]
+
+
+# ---- plugin configuration is validated before any mutation -----------------
+
+def test_converge_plugin_validation_aborts_before_any_mutation(monkeypatch, tmp_path):
+    """A configured plugin with an invalid `cluster.yaml` / `secrets.yaml`
+    section must stop converge in the validate phase -- before the image or
+    network phases mutate anything -- instead of surfacing only at the end, once
+    the cluster is already built. This is the 'validate plugin configuration
+    before core mutations' guarantee."""
+    state = _FakeState(True, tmp_path / "talossecrets.yaml")
+    backend = _RecordingBackend()
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+
+    def bad_validate(ctx):
+        raise ConfigError("unsupported option(s): gitlab")
+
+    monkeypatch.setattr(converge.plugins, "validate", bad_validate)
+
+    with pytest.raises(ConfigError, match="unsupported option"):
+        _stub_converge(monkeypatch, tmp_path, state, backend)
+
+    assert backend.mutations == []

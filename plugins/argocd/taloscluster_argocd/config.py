@@ -201,6 +201,78 @@ def _uniq(*values: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+#: Top-level keys the `argocd:` section of cluster.yaml understands.
+_KNOWN_KEYS = {
+    "admins", "users", "git", "infra", "metallb", "ingress", "sealedsecrets",
+    "certmanager", "cinder", "nfs", "monitoring", "sync", "automated",
+}
+#: `argocd:` sub-sections that must be YAML mappings (the per-app sections and
+#: the git/infra repository blocks).
+_MAPPING_KEYS = {
+    "git", "infra", "metallb", "ingress", "sealedsecrets", "certmanager",
+    "cinder", "nfs", "monitoring",
+}
+
+
+def validate_argocd(root: Path) -> None:
+    """Refuse a malformed or contradictory `argocd:` configuration.
+
+    Called by core in converge's validate phase, before any cluster mutation, so
+    a broken plugin section stops the run while the cluster is still untouched.
+    Catches:
+      - a non-mapping `argocd:` or sub-section (malformed settings),
+      - a top-level `argocd:` key the plugin does not understand (unsupported
+        options),
+      - only one of `git.url` / `infra.url` set (missing paired repository URLs),
+      - git credentials in secrets.yaml without `git.url` (credentials without a
+        Git URL).
+    Raises ConfigError on the first problem.
+    """
+    dc = read_yaml(root / CLUSTER_FILE)
+    ds = read_yaml(root / SECRETS_FILE)
+    where = CLUSTER_FILE
+    clan_raw = dc.get("argocd")
+    sec_raw = ds.get("argocd")
+    clan: dict[str, Any] = clan_raw if isinstance(clan_raw, dict) else {}
+    sec: dict[str, Any] = sec_raw if isinstance(sec_raw, dict) else {}
+    if clan_raw is not None and not isinstance(clan_raw, dict):
+        raise ConfigError(f"{where}: argocd must be a YAML mapping")
+    if sec_raw is not None and not isinstance(sec_raw, dict):
+        raise ConfigError(f"{SECRETS_FILE}: argocd must be a YAML mapping")
+
+    unknown = sorted(set(clan) - _KNOWN_KEYS)
+    if unknown:
+        raise ConfigError(
+            f"{where} (argocd): unsupported option(s): {', '.join(unknown)}; "
+            "the plugin does not use them"
+        )
+    for key in sorted(_MAPPING_KEYS & set(clan)):
+        if not isinstance(clan[key], dict):
+            raise ConfigError(f"{where} (argocd.{key}) must be a YAML mapping")
+
+    git = clan.get("git") or {}
+    infra = clan.get("infra") or {}
+    git_url = git.get("url")
+    infra_url = infra.get("url")
+    if bool(git_url) != bool(infra_url):
+        missing = "infra.url" if git_url else "git.url"
+        raise ConfigError(
+            f"{where} (argocd): {missing} must be set together with the other "
+            "repository URL; the repository Secret, root Application and cluster "
+            "Application are only rendered together"
+        )
+
+    sgit = sec.get("git")
+    if not isinstance(sgit, dict):
+        sgit = {}
+    if not git_url and (sgit.get("username") or sgit.get("token")):
+        raise ConfigError(
+            f"{SECRETS_FILE} (argocd.git): git credentials are set but "
+            f"argocd.git.url in {where} is not, so no repository Secret can be "
+            "rendered; set argocd.git.url or remove the credentials"
+        )
+
+
 def argocd_configured(root: Path) -> bool:
     """True when secrets.yaml names a supported ArgoCD apply target.
 

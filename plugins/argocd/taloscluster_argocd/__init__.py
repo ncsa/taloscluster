@@ -20,7 +20,7 @@ from taloscluster.config import CLUSTER_FILE, SECRETS_FILE
 from taloscluster.context import Context
 from taloscluster.scaffold import add_yaml_section
 
-from .config import argocd_configured
+from .config import argocd_configured, validate_argocd
 from .reconcile import check, converge, destroy, status
 
 try:
@@ -51,7 +51,7 @@ argocd:
   # context: argocd
 """
 
-__all__ = ["AFTER", "check", "configured", "converge", "destroy", "init", "status"]
+__all__ = ["AFTER", "check", "configured", "converge", "destroy", "init", "status", "validate"]
 
 
 def init(root: Path) -> None:
@@ -65,3 +65,14 @@ def configured(ctx: Context) -> bool:
     kubeconfig or a context). A `url`/`token` pair alone does not activate the
     plugin: the plugin cannot apply through the ArgoCD API."""
     return argocd_configured(ctx.root)
+
+
+def validate(root: Path, ctx: Context) -> None:
+    """Reject a malformed or contradictory `argocd:` configuration.
+
+    Runs in core's converge validate phase, before any cluster mutation, so a
+    broken `argocd:` section (paired repository URLs, git credentials without a
+    Git URL, a non-mapping section, or an unsupported option) stops the run while
+    the cluster is still untouched instead of failing the late plugin hooks.
+    """
+    validate_argocd(root)
