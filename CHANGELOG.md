@@ -7,8 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Validate configured plugin configuration before any cluster mutation: a plugin's `validate` hook runs in converge's validate phase, so the argocd plugin refuses repository URLs that are not a pair, git credentials without a Git URL, malformed sections, and unsupported options with the cluster still untouched; `plan` reports the same.
+- Define consistent plugin deletion and failure behavior: a direct `taloscluster plugin NAME destroy` now asks for the cluster name to confirm before it runs (or `--yes` to skip), matching the top-level `destroy`; plugin cleanup failures still leave the infrastructure torn down with a nonzero exit, and plugin `status` errors stay warning-only. Document a `--dry-run` listing what a plugin `destroy` would delete and cover the `--yes`/`--dry-run` skip paths with tests.
 
+- Validate configured plugin configuration before any cluster mutation: a plugin's `validate` hook runs in converge's validate phase, so the argocd plugin refuses repository URLs that are not a pair, git credentials without a Git URL, malformed sections, and unsupported options with the cluster still untouched; `plan` reports the same.
 - Pass the Proxmox `ingress_pool` through the provider context to ArgoCD, so the plugin renders the MetalLB address pool (ranges verbatim, single OpenStack VIPs as `/32`) for both providers instead of leaving Proxmox load-balancer addresses blank.
 - Split ArgoCD sync semantics: `argocd.sync` now only sets the chart's Helm `sync` value, while a new `argocd.automated` controls automated sync, pruning, and self-healing on the two parent Applications (previously always on).
 - `plan` no longer leaks registry `password:`, `machine.files`/`cluster.inlineManifests` contents, or `PASSWORD=`-style environment entries in the machine-config diff; redaction now covers those alongside `key`/`secret`/`token`.

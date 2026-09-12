@@ -31,7 +31,7 @@ from . import scaffold as _scaffold
 from .config import CLUSTER_FILE
 from .context import Context
 from .errors import ConfigError, PreflightError, ReconcileError, StateError
-from .output import Die, info, log, set_dry_run
+from .output import Die, dry_run, info, log, set_dry_run, warn
 from .output import report as _report
 
 
@@ -115,6 +115,16 @@ def _cmd_plugin(args, root):
             _report(report)
         # check reports a verdict; status is informational
         return 0 if hook == "status" or report.get("ok") else 1
+
+    if hook == "destroy" and not args.yes and not dry_run():
+        # A plugin destroy removes what the plugin manages for this cluster
+        # (external registrations, deployed applications), so it gets the same
+        # explicit approval as any other destructive command; `--yes` skips it.
+        warn(f"this runs the {args.name!r} plugin's destroy, removing the "
+             f"{args.name} resources it manages for cluster {ctx.cfg.name!r}")
+        resp = input("type the cluster name to confirm: ").strip()
+        if resp != ctx.cfg.name:
+            raise SystemExit("aborted")
 
     return _plugins.run([plugin], hook, ctx, assume_yes=args.yes)
 

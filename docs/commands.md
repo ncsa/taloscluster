@@ -9,7 +9,7 @@ Every subcommand accepts `-C DIR` / `--dir DIR` to select the cluster directory,
 | Option | Commands | Meaning |
 | --- | --- | --- |
 | `--dry-run` | `converge`, `image`, `destroy`, `plugin` | Print proposed changes without applying them |
-| `--yes` | `converge`, `image`, `destroy`, `plugin` | Skip deletion prompts where implemented; plugin hooks control their own confirmation behavior |
+| `--yes` | `converge`, `image`, `destroy`, `plugin` | Skip deletion prompts where implemented, including a direct `plugin NAME destroy` |
 | `--reboot` | `converge`, `plan` | Apply or preview reboots needed for changed Proxmox VM sizing |
 | `-o text` / `-o yaml` | `status`, `check`, `plugin` | Select output format; plugin output selection applies to `status` and `check` actions |
 
@@ -113,7 +113,7 @@ taloscluster plugin rancher check -o yaml
 
 `list` shows installed plugins in execution order and, when a cluster configuration is available, whether each is configured. It can run outside a cluster directory.
 
-With a plugin name, run only that plugin. Direct plugin actions do not add the core destroy confirmation prompt; both bundled destroy hooks can delete their external resources without `--yes`. Review `--dry-run` first. The action defaults to `converge`; `plan` runs its converge hook in dry-run mode. `-o text` or `-o yaml` selects output for `status` and `check`. An unconfigured plugin is skipped, while an unknown plugin or an unsupported hook is an error. See [Plugins](concepts/plugins.md) for installation, configuration, and hook behavior.
+With a plugin name, run only that plugin. A direct `destroy` prompts for the cluster name before it runs, exactly like the top-level `destroy`, unless `--yes` is supplied; a `--dry-run` lists what it would delete first. The action defaults to `converge`; `plan` runs its converge hook in dry-run mode. `-o text` or `-o yaml` selects output for `status` and `check`. An unconfigured plugin is skipped, while an unknown plugin or an unsupported hook is an error. See [Plugins](concepts/plugins.md) for installation, configuration, and hook behavior.
 
 ## Exit status
 

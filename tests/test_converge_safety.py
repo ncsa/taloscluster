@@ -361,6 +361,22 @@ def test_destroy_yes_skips_prompt_and_runs_plugin_teardown(monkeypatch, tmp_path
     assert backend.mutations == ["destroy"]
 
 
+def test_destroy_continues_teardown_after_plugin_destroy_failure(monkeypatch, tmp_path):
+    """A plugin whose destroy hook fails must not keep the cluster alive: core
+    still tears the infrastructure down, and the command exits nonzero so the
+    stale external registration is noticed."""
+    cfg = SimpleNamespace(name="testcluster")
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "load_secrets", lambda _root: object())
+    backend = FakeBackend()
+    monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_kw: 1)
+    monkeypatch.setattr("builtins.input", lambda _prompt: cfg.name)
+
+    assert converge.destroy(tmp_path, assume_yes=True) == 1
+    assert backend.mutations == ["destroy"]
+
+
 def test_final_health_failure_is_fatal(monkeypatch):
     monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_kw: False)
 

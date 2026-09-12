@@ -314,3 +314,104 @@ def test_plugin_list_shows_configured_state_with_a_cluster_yaml(
     out = capsys.readouterr().out
     assert "on           configured" in out
     assert "off          not configured" in out
+
+
+# ---- direct `plugin NAME destroy` confirmation -----------------------------
+
+def test_direct_destroy_declines_without_yes(monkeypatch, tmp_path, make_config):
+    """A direct plugin destroy is a deletion, so it needs the same explicit
+    approval as `destroy` and `image remove`: typing the cluster name, or --yes."""
+    from taloscluster import cli
+
+    make_config()
+    seen = []
+    install(monkeypatch, FakeEntryPoint(
+        "a", make_module("a", destroy=lambda ctx, assume_yes=False: seen.append("destroy"))))
+    monkeypatch.setattr("builtins.input", lambda _prompt: "wrong-name")
+
+    with pytest.raises(SystemExit, match="aborted"):
+        cli.main(["plugin", "-C", str(tmp_path), "a", "destroy"])
+    assert seen == []
+
+
+def test_direct_destroy_confirms_by_typing_the_cluster_name(monkeypatch, tmp_path, make_config):
+    from taloscluster import cli
+
+    make_config()
+    seen = []
+    install(monkeypatch, FakeEntryPoint(
+        "a", make_module("a", destroy=lambda ctx, assume_yes=False: seen.append("destroy"))))
+    monkeypatch.setattr("builtins.input", lambda _prompt: "testcluster")
+
+    assert cli.main(["plugin", "-C", str(tmp_path), "a", "destroy"]) == 0
+    assert seen == ["destroy"]
+
+
+def test_direct_destroy_dry_run_skips_prompt_but_runs_hook(
+    monkeypatch, tmp_path, make_config
+):
+    from taloscluster import cli, output
+
+    make_config()
+    seen = []
+    install(monkeypatch, FakeEntryPoint(
+        "a", make_module("a", destroy=lambda ctx, assume_yes=False: seen.append("destroy"))))
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("--dry-run must not prompt"))
+
+    output.set_dry_run(True)
+    try:
+        assert cli.main(["plugin", "-C", str(tmp_path), "a", "destroy", "--dry-run"]) == 0
+    finally:
+        output.set_dry_run(False)
+
+    assert seen == ["destroy"]
+
+
+def test_direct_destroy_yes_skips_the_prompt(monkeypatch, tmp_path, make_config):
+    from taloscluster import cli
+
+    make_config()
+    seen = []
+    install(monkeypatch, FakeEntryPoint(
+        "a", make_module("a", destroy=lambda ctx, assume_yes=False: seen.append("destroy"))))
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("--yes must not prompt"))
+
+    assert cli.main(["plugin", "-C", str(tmp_path), "a", "destroy", "--yes"]) == 0
+    assert seen == ["destroy"]
+
+
+# ---- warning-only status/check errors --------------------------------------
+
+def test_direct_status_plugin_error_is_warning_only(monkeypatch, tmp_path, make_config, capsys):
+    """A plugin whose status hook raises stays informational: the error appears in
+    the report and the command still exits 0, mirroring core status."""
+    from taloscluster import cli
+
+    make_config()
+
+    def boom(ctx):
+        raise RuntimeError("unreachable")
+
+    install(monkeypatch, FakeEntryPoint(
+        "a", make_module("a", status=boom)))
+    assert cli.main(["plugin", "-C", str(tmp_path), "a", "status"]) == 0
+    err = capsys.readouterr().err
+    assert "a" in err
+    assert "unreachable" in err
+
+
+def test_direct_check_plugin_error_exits_nonzero(monkeypatch, tmp_path, make_config):
+    """A plugin whose check hook errors is a report that needs attention, so the
+    direct `plugin NAME check` exits 1, unlike status."""
+    from taloscluster import cli
+
+    make_config()
+
+    def boom(ctx):
+        raise RuntimeError("unreachable")
+
+    install(monkeypatch, FakeEntryPoint(
+        "a", make_module("a", check=boom)))
+    assert cli.main(["plugin", "-C", str(tmp_path), "a", "check"]) == 1
