@@ -29,7 +29,7 @@ Node count alone does not ensure availability. Applications need suitable replic
 Services of type LoadBalancer need addresses that route to the workers. Install and configure MetalLB or another load balancer separately, or through a configured plugin. The provider setup differs:
 
 - **OpenStack**: a second reserved port and floating IP for ingress, floated onto the workers the same way as the API VIP. Point the MetalLB pool at that fixed address.
-- **Proxmox with an external NIC**: [`ingress_pool`](../configuration/proxmox.md#ingress_pool), a range on the routed subnet that you must also configure in MetalLB. It enables taloscluster’s ingress return-path configuration, but the ArgoCD plugin currently receives no Proxmox ingress addresses automatically.
+- **Proxmox with an external NIC**: [`ingress_pool`](../configuration/proxmox.md#ingress_pool), a range on the routed subnet that you must also configure in MetalLB. It enables taloscluster’s ingress return-path configuration and is passed to the ArgoCD plugin, which renders it verbatim as the MetalLB address pool.
 - **Proxmox on a plain bridge**: any free range on the cluster network; reachability is whatever the bridge's network provides.
 
 Keep the API VIP out of the ingress range so MetalLB can never hand the API address to a service; the Proxmox configuration rejects an external API VIP inside `ingress_pool`. Separately managed MetalLB pools must be checked by the operator.

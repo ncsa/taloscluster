@@ -310,7 +310,8 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         root, cfg,
         kubeapi={"floating_ip": advertised, "vip": refs.kubernetes.vip,
                  "endpoint": api_url},
-        ingress={"floating_ip": refs.ingress.advertised_address, "vip": refs.ingress.vip},
+        ingress={"floating_ip": refs.ingress.advertised_address, "vip": refs.ingress.vip,
+                 "metallb": list(refs.metallb)},
         infrastructure={"provider": backend.name, **provider_status},
         openstack=provider_status if backend.name == "openstack" else {},
     )
@@ -1152,6 +1153,7 @@ def status_report(root: Path) -> dict[str, Any]:
     ingress = {
         "floating_ip": refs.ingress.advertised_address,
         "vip": refs.ingress.vip,
+        "metallb": list(refs.metallb),
     }
     up = kubectl.cluster_up(kubeconfig_path)
     provider_status = backend.provider_status()

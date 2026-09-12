@@ -98,6 +98,7 @@ class OpenStackBackend:
                 vip=refs.ingress_vip,
                 advertised_address=refs.ingress_fip,
             ),
+            metallb=(refs.ingress_vip,) if refs.ingress_vip else (),
             machine_attachments=attachments,
         )
 
@@ -115,9 +116,12 @@ class OpenStackBackend:
                 ),
             )
 
+        ingress_name = naming.ingress_name(self.cfg.name)
+        ingress_port = raw.get("ports", ingress_name)
         return NetworkResult(
             kubernetes=endpoint(naming.kubeapi_name(self.cfg.name)),
-            ingress=endpoint(naming.ingress_name(self.cfg.name)),
+            ingress=endpoint(ingress_name),
+            metallb=(_fixed_ip(ingress_port),) if ingress_port else (),
         )
 
     def validate_machines(

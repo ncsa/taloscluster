@@ -51,6 +51,10 @@ class InfrastructureInventory:
 class NetworkResult:
     kubernetes: Endpoint = Endpoint()
     ingress: Endpoint = Endpoint()
+    #: MetalLB address pool handed to ArgoCD: single VIPs (OpenStack) or the
+    #: ``ingress_pool`` range (Proxmox). Empty when the provider does not expose
+    #: addresses to allocate.
+    metallb: tuple[str, ...] = ()
     machine_attachments: dict[str, tuple[NetworkAttachment, ...]] = field(default_factory=dict)
 
     def machine_address(self, name: str) -> str:

@@ -252,10 +252,18 @@ def _cluster_apps(cfg: Config, ctx: Context) -> str:
     openstack_url = cfg.openstack.url if cfg.openstack else ""
     openstack_project = ctx.openstack.get("project", "")
     metallb_enabled = enabled(cfg.metallb)
-    metallb_addr = ctx.ingress.get("vip", "")
+    # MetalLB addresses: a bare single IP (OpenStack VIP) becomes a /32; the
+    # Proxmox ingress_pool range ("start-end") is already a valid MetalLB spec.
+    ingress_vip = ctx.ingress.get("vip", "")
     metallb_addresses = ""
-    if metallb_enabled and metallb_addr:
-        metallb_addresses = f"          - {metallb_addr}/32\n"
+    if metallb_enabled:
+        pool = ctx.ingress.get("metallb") or ([ingress_vip] if ingress_vip else [])
+        for addr in pool:
+            addr = str(addr).strip()
+            if not addr:
+                continue
+            spec = addr if ("-" in addr or "/" in addr) else f"{addr}/32"
+            metallb_addresses += f"          - {spec}\n"
     ingress_enabled = enabled(cfg.ingress)
     ingress_class = cfg.ingress.get("class") or "traefik"
     certmanager_enabled = enabled(cfg.certmanager)
@@ -328,7 +336,7 @@ spec:
           enabled: {"true" if ingress_enabled else "false"}
           class: {ingress_class}
           publicIP: "{ctx.ingress.get("floating_ip", "")}"
-          privateIP: "{metallb_addr}"
+          privateIP: "{ingress_vip}"
           traefik:
 {traefik_version}            storageClass: ""
             ports: {{}}

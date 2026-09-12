@@ -328,8 +328,10 @@ class ProxmoxBackend:
                 )
                 for m in self.cfg.machines.values()
             }
+        ingress_pool = str(ext.get("ingress_pool") or "")
         return NetworkResult(
             kubernetes=Endpoint(vip=vip, advertised_address=vip),
+            metallb=(ingress_pool,) if ingress_pool else (),
             machine_attachments=attachments,
         )
 

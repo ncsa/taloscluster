@@ -497,6 +497,39 @@ def test_current_network_returns_external_vip(make_config):
     assert refs.kubernetes.advertised_address == "203.0.113.10"
 
 
+def test_current_network_exposes_the_ingress_pool_as_metallb(make_config):
+    """The Proxmox ingress range reaches the ArgoCD context through refs."""
+    cfg = _external_cfg(make_config)
+    client = FakeClient(_data())
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+    refs = backend.current_network(inventory)
+    assert refs.metallb == ("203.0.113.20-203.0.113.40",)
+    # no single ingress VIP: the pool is the only thing MetalLB is given
+    assert refs.ingress.vip == ""
+
+
+def test_current_network_metallb_empty_without_external_network(make_config):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "nodes": ["pve001", "pve002"],
+                "network": {"cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}},
+            },
+        },
+        remove=("openstack",),
+    )
+    backend = _backend(cfg, FakeClient(_data()))
+    inventory = backend.load_inventory()
+    refs = backend.current_network(inventory)
+    assert refs.metallb == ()
+
+
 def test_provider_status_includes_ingress_pool(make_config):
     cfg = _external_cfg(make_config)
     client = FakeClient(_data())

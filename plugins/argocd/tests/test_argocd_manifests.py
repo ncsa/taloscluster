@@ -23,7 +23,7 @@ CLUSTER_STATUS = {
     "openstack": {"url": "https://cloud", "region": "RegionOne", "project": "my project"},
     "kubernetes": {"floating_ip": "1.2.3.4", "vip": "10.0.0.1",
                    "endpoint": "https://1.2.3.4:6443"},
-    "ingress": {"floating_ip": "1.2.3.5", "vip": "10.0.0.2"},
+    "ingress": {"floating_ip": "1.2.3.5", "vip": "10.0.0.2", "metallb": ["10.0.0.2"]},
 }
 
 
@@ -61,8 +61,9 @@ def cfg():
     )
 
 
-def ctx_for(root, results=None):
-    return Context(root=root, cfg=None, status=dict(CLUSTER_STATUS), results=results or {})
+def ctx_for(root, results=None, status=None):
+    return Context(root=root, cfg=None, status=dict(CLUSTER_STATUS if status is None else status),
+                   results=results or {})
 
 
 def test_cluster_apps_carries_the_ingress_ips(kubeconfig, cfg):
@@ -77,6 +78,48 @@ def test_cluster_apps_carries_the_openstack_project(kubeconfig, cfg):
     doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"])
     values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
     assert values["openstack"]["project"] == "my project"
+
+
+def test_metallb_single_vip_renders_as_slash32(kubeconfig, cfg):
+    """OpenStack: the single ingress VIP becomes a /32 in the MetalLB pool."""
+    out = manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"]
+    doc = yaml.safe_load(out)
+    addresses = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])["metallb"]["addresses"]
+    assert addresses == ["10.0.0.2/32"]
+
+
+def test_metallb_proxmox_range_renders_verbatim(kubeconfig, cfg):
+    """Proxmox: the ingress_pool range is a valid MetalLB spec, not a /32."""
+    status = dict(CLUSTER_STATUS)
+    status["ingress"] = {
+        "floating_ip": "",
+        "vip": "",
+        "metallb": ["203.0.113.20-203.0.113.40"],
+    }
+    ctx = ctx_for(kubeconfig, status=status)
+    doc = yaml.safe_load(manifests.render(cfg, ctx)["cluster-apps"])
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["metallb"]["addresses"] == ["203.0.113.20-203.0.113.40"]
+    # no single VIP means the ingress controller has no private/public IP
+    assert values["ingresscontroller"]["privateIP"] == ""
+    assert values["ingresscontroller"]["publicIP"] == ""
+
+
+def test_metallb_disabled_emits_no_addresses(kubeconfig, cfg):
+    cfg.metallb = {}
+    out = manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"]
+    doc = yaml.safe_load(out)
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["metallb"]["enabled"] is False
+
+
+def test_metallb_falls_back_to_vip_when_pool_absent(kubeconfig, cfg):
+    """Contexts built before the pool was added still render the single VIP."""
+    status = dict(CLUSTER_STATUS)
+    status["ingress"] = {"floating_ip": "1.2.3.5", "vip": "10.0.0.2"}
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig, status=status))["cluster-apps"])
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["metallb"]["addresses"] == ["10.0.0.2/32"]
 
 
 def test_cluster_apps_uses_nfs_csi(kubeconfig, cfg):

@@ -39,7 +39,7 @@ class Context:
 
     @classmethod
     def from_converge(cls, root: Path, cfg: Config, kubeapi: dict[str, str],
-                      ingress: dict[str, str], openstack: dict[str, str],
+                      ingress: dict[str, Any], openstack: dict[str, str],
                       infrastructure: dict[str, str] | None = None) -> Context:
         """In-converge constructor: the status payload is already known, so no
         plugin can trigger a second round-trip to OpenStack."""
@@ -94,6 +94,6 @@ class Context:
         return dict(self._report().get("kubernetes") or {})
 
     @property
-    def ingress(self) -> dict[str, str]:
-        """floating_ip / vip reserved for the ingress controller."""
+    def ingress(self) -> dict[str, Any]:
+        """floating_ip / vip / metallb reserved for the ingress controller."""
         return dict(self._report().get("ingress") or {})
