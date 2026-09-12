@@ -129,6 +129,70 @@ def test_config_loads_monitoring(tmp_path):
     assert Config.load(tmp_path).monitoring == {"enabled": True}
 
 
+# ---------------------------------------------------------------------------
+# Sync semantics: `argocd.sync` controls only the chart's Helm `sync` value;
+# `argocd.automated` is a separate switch for the two parent Applications'
+# automated sync policy.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("automated", [True, False])
+def test_parent_applications_honour_automated(kubeconfig, cfg, automated):
+    cfg.automated = automated
+    out = manifests.render(cfg, ctx_for(kubeconfig))
+    for name in ("apps", "cluster-apps"):
+        doc = yaml.safe_load(out[name])
+        sync_policy = doc["spec"]["syncPolicy"]
+        automated_block = sync_policy.get("automated")
+        if automated:
+            assert automated_block == {
+                "prune": True,
+                "selfHeal": True,
+                "allowEmpty": False,
+            }
+        else:
+            assert automated_block is None
+        assert sync_policy.get("syncOptions") == ["CreateNamespace=true"]
+
+
+@pytest.mark.parametrize("sync", [True, False])
+def test_chart_sync_value_is_independent_of_automated(kubeconfig, cfg, sync):
+    """`argocd.sync` drives only the Helm `sync:` value, not parent auto-sync."""
+    cfg.sync = sync
+    cfg.automated = True
+    out = manifests.render(cfg, ctx_for(kubeconfig))
+    values = yaml.safe_load(yaml.safe_load(out["cluster-apps"])["spec"]["source"]["helm"]["values"])
+    assert values["sync"] is sync
+    assert yaml.safe_load(out["apps"])["spec"]["syncPolicy"]["automated"]["selfHeal"] is True
+
+
+def test_automated_false_still_renders_sync_false_chart_value(kubeconfig, cfg):
+    """The false case for both knobs: no parent auto-sync and sync:false in values."""
+    cfg.sync = False
+    cfg.automated = False
+    out = manifests.render(cfg, ctx_for(kubeconfig))
+    for name in ("apps", "cluster-apps"):
+        assert "automated" not in yaml.safe_load(out[name])["spec"]["syncPolicy"]
+    values = yaml.safe_load(yaml.safe_load(out["cluster-apps"])["spec"]["source"]["helm"]["values"])
+    assert values["sync"] is False
+
+
+def test_config_sync_and_automated_defaults(tmp_path):
+    (tmp_path / "cluster.yaml").write_text("name: testcluster\n")
+    d = Config.load(tmp_path)
+    assert d.sync is False
+    assert d.automated is True
+
+
+def test_config_loads_automated_false(tmp_path):
+    (tmp_path / "cluster.yaml").write_text(
+        "name: testcluster\nargocd:\n  sync: false\n  automated: false\n"
+    )
+    d = Config.load(tmp_path)
+    assert d.sync is False
+    assert d.automated is False
+
+
 def test_cluster_secret_is_annotated_with_the_rancher_id(kubeconfig, cfg):
     """What AFTER = ("rancher",) buys: the ArgoCD entry points back at Rancher."""
     ctx = ctx_for(kubeconfig, results={"rancher": {"cluster_id": "c-abc12"}})

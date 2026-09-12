@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Split ArgoCD sync semantics: `argocd.sync` now only sets the chart's Helm `sync` value, while a new `argocd.automated` controls automated sync, pruning, and self-healing on the two parent Applications (previously always on).
 - `plan` no longer leaks registry `password:`, `machine.files`/`cluster.inlineManifests` contents, or `PASSWORD=`-style environment entries in the machine-config diff; redaction now covers those alongside `key`/`secret`/`token`.
 - Do not treat a single failed kube-api probe as a fresh cluster: converge retries the probe and warns loudly when an existing cluster is unreachable, instead of recreating its nodes or attempting a bootstrap.
 - Settle machine-config applies on control planes by default, waiting each node out of the cluster and back in before the next, so a reboot-requiring patch no longer restarts every control plane at once.

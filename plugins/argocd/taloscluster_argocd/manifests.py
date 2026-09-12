@@ -188,6 +188,12 @@ def _root_app(cfg: Config) -> str:
     if not cfg.git_url:
         raise ConfigError("argocd.git.url not set in cluster.yaml; cannot render apps.yaml")
     name = cfg.name
+    automated = (
+        "    automated:\n"
+        "      prune: true\n"
+        "      selfHeal: true\n"
+        "      allowEmpty: false\n"
+    ) if cfg.automated else ""
     return f"""\
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -203,11 +209,7 @@ spec:
     server: https://kubernetes.default.svc
     namespace: argocd
   syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-      allowEmpty: false
-    syncOptions:
+{automated}    syncOptions:
       - CreateNamespace=true
   source:
     repoURL: {cfg.git_url}
@@ -269,6 +271,12 @@ def _cluster_apps(cfg: Config, ctx: Context) -> str:
     if isinstance(servers, dict) and servers:
         nfs_servers = textwrap.indent(yaml.safe_dump({"servers": servers}), " " * 10)
     sync_enabled = cfg.sync
+    automated = (
+        "    automated:\n"
+        "      allowEmpty: false\n"
+        "      prune: true\n"
+        "      selfHeal: true\n"
+    ) if cfg.automated else ""
     metallb_version = _version_line(cfg.metallb)
     certmanager_version = _version_line(cfg.certmanager)
     traefik_version = _version_line(cfg.ingress.get("traefik") or {}, indent="            ")
@@ -368,11 +376,7 @@ spec:
     repoURL: {cfg.infra_url}
     targetRevision: HEAD
   syncPolicy:
-    automated:
-      allowEmpty: false
-      prune: true
-      selfHeal: true
-    syncOptions:
+{automated}    syncOptions:
     - CreateNamespace=true
 """
 

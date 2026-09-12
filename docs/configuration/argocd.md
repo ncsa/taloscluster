@@ -15,6 +15,7 @@ argocd:
   infra:
     url: https://git.example.com/kubernetes/infra.git
   sync: true
+  automated: true
   metallb:
     enabled: true
   ingress:
@@ -68,7 +69,13 @@ The repository whose `charts/apps` chart is the app-of-apps the cluster Applicat
 
 Optional · boolean · default `false`
 
-Pass `sync` into the infrastructure chart’s Helm values. Both generated parent Applications always have automated sync, pruning, and self-healing enabled, including when this value is `false`. This setting does not disable their automated sync policies.
+Controls the chart-only sync toggle: pass `sync` into the infrastructure chart’s Helm values. It controls whether the chart applies its own apps when it runs; it does **not** govern the two parent Applications’ automated sync (see `argocd.automated`). The two knobs are independent: you can keep chart-level sync on while turning off parent auto-sync, or vice-versa.
+
+### `argocd.automated`
+
+Optional · boolean · default `true`
+
+Enable automated sync, pruning, and self-healing on the two parent Applications (the root app-of-apps and the `<cluster>-cluster` app). When `false`, those Applications are created without a `syncPolicy.automated` block, so ArgoCD does not continuously apply them and they sync only when triggered manually. This is separate from `argocd.sync`, which only reaches the chart's Helm values.
 
 ### Per-app sections
 

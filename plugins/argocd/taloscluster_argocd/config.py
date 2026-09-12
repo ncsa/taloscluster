@@ -103,6 +103,8 @@ class Config:
     nfs: dict[str, Any] = field(default_factory=dict)
     monitoring: dict[str, Any] = field(default_factory=dict)
     sync: bool = False
+    # automatic sync, pruning, and self-healing on the two parent Applications
+    automated: bool = True
 
     @classmethod
     def load(cls, root: Path) -> Config:
@@ -156,6 +158,7 @@ class Config:
             nfs=nfs,
             monitoring=monitoring,
             sync=bool(clan.get("sync")),
+            automated=clan.get("automated", True),
         )
 
     @classmethod
