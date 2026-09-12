@@ -36,3 +36,6 @@ site/
 htmlcov/
 .DS_Store
 /.stfolder
+
+# local TODO helper logs and verdicts
+/todo-looper/
