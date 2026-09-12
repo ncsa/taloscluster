@@ -39,7 +39,8 @@ argocd:
 `infra.url` is required to render the `<cluster>-cluster` Application; it points at the repository whose `charts/apps` chart is the app-of-apps. `nfs.servers` is optional and copied verbatim under the nfs chart's `servers:`.
 
 `secrets.yaml` (gitignored) — `argocd:` holds how to reach the ArgoCD cluster to
-apply changes. Any one of these is sufficient:
+apply changes. The plugin applies via kubectl, so an apply target is a
+`kubeconfig` path or a `context` (or both):
 
 ```yaml
 argocd:
@@ -47,11 +48,13 @@ argocd:
   #context: argocd                    # optional: passed as kubectl --context
 ```
 
-- **`context`** alone: uses your default kubeconfig (`~/.kube/config`) with
-  `kubectl --context <value>` — no kubeconfig/url/token needed.
 - **`kubeconfig`**: applies with `kubectl --kubeconfig <path> [--context]`.
-- **`url` + `token`**: accepted by config, but apply currently requires the
-  kubectl mode (kubeconfig or context).
+- **`context`** alone: uses your default kubeconfig (`~/.kube/config`) with
+  `kubectl --context <value>` — no kubeconfig needed.
+
+`url` + `token` are accepted by config but do not activate the plugin: the plugin
+applies manifests via kubectl only and does not speak the ArgoCD API. Give either
+`kubeconfig` or `context` instead.
 
 ## What converge does
 
@@ -85,6 +88,6 @@ taloscluster plugin argocd [converge|plan|destroy|status|check] [-C DIR]
 
 ## Not configured
 
-If `secrets.yaml` has no `argocd:` apply target (no kubeconfig, and no url+token),
+If `secrets.yaml` has no `argocd:` apply target (no kubeconfig, and no context),
 the plugin is skipped entirely, and `taloscluster plugin list` shows it as
 `not configured`.

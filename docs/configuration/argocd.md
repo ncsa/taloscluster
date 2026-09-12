@@ -94,7 +94,7 @@ When `cinder.enabled` is true on an OpenStack cluster, the application credentia
 
 ## secrets.yaml
 
-Use `kubeconfig`, `context`, or both for working plugin operations. URL/token alone makes the plugin appear configured, but all reconcile and reporting hooks reject that mode.
+Use `kubeconfig` and `context` for the plugin activation. A `url`/`token` pair alone is not a supported apply target and does not activate the plugin.
 
 ```yaml
 argocd:
@@ -121,9 +121,9 @@ A context in your default kubeconfig, passed as `kubectl --context`. May be comb
 
 ### `argocd.url` and `argocd.token`
 
-Accepted but unsupported for operations · URL and string
+Not a supported apply target · URL and string
 
-ArgoCD API endpoint and token. Accepted by the config, but applying currently requires the kubectl mode above.
+ArgoCD API endpoint and token. The plugin applies manifests via kubectl only, so a `url`/`token` pair without a `kubeconfig` or `context` does not activate the plugin; it is shown as not configured and no hooks run. Use `kubeconfig` or `context` above.
 
 ### `argocd.git.username` and `argocd.git.token`
 

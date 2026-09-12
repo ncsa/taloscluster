@@ -10,15 +10,15 @@ AppProject ends up reflecting both the Rancher access and any extra ArgoCD-only
 access.
 
 secrets.yaml (gitignored) -- how to reach the ArgoCD cluster to apply changes.
-Any one of: a kubeconfig path, a kubectl context (uses the default kubeconfig,
-e.g. ~/.kube/config), or an ArgoCD URL + token:
+The plugin applies via kubectl, so an apply target needs a kubeconfig path or a
+kubectl context (uses the default kubeconfig, e.g. ~/.kube/config):
     argocd:
       kubeconfig: ../some-argocd-kubeconfig
       # or --
       context: argocd                   # kubectl --context (default kubeconfig)
-      # or --
-      url:   https://argocd.example.com
-      token: <argocd-token>
+
+A `url` / `token` pair alone is not a supported apply target: the plugin does not
+speak the ArgoCD API, so it does not activate the plugin. See `argocd_configured`.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ class ApplyTarget:
     - `kubeconfig`: a path (resolved against the cluster dir) used for kubectl.
     - `context`: optional `kubectl --context`; when kubeconfig is none, kubectl
       uses the default kubeconfig (e.g. ~/.kube/config).
-    - `url` / `token`: alternative ArgoCD API credentials (unused in kubectl mode).
+    - `url` / `token`: ArgoCD API credentials (not a supported apply mode).
     """
 
     kubeconfig: str | None = None
@@ -202,9 +202,12 @@ def _uniq(*values: str) -> tuple[str, ...]:
 
 
 def argocd_configured(root: Path) -> bool:
-    """True when secrets.yaml has an `argocd:` apply target.
+    """True when secrets.yaml names a supported ArgoCD apply target.
 
-    Sufficient if any one of kubeconfig / context / url+token is present.
+    Only a kubectl mode (kubeconfig or context) activates the plugin. A
+    `url`/`token` pair alone names an ArgoCD API endpoint, which the plugin does
+    not speak; refusing to report configured here keeps the plugin from showing
+    as active and then failing in every hook.
     """
     try:
         d = read_yaml(root / SECRETS_FILE)
@@ -213,6 +216,4 @@ def argocd_configured(root: Path) -> bool:
     argocd = _section(d, "argocd")
     if not argocd:
         return False
-    if argocd.get("kubeconfig") or argocd.get("context"):
-        return True
-    return bool(argocd.get("url") and argocd.get("token"))
+    return bool(argocd.get("kubeconfig") or argocd.get("context"))
