@@ -2016,6 +2016,93 @@ def test_validate_machines_accepts_reconcilable_changes(make_config):
     backend.validate_machines({cp1.name: cp1}, inventory)  # must not raise
 
 
+def _placement_cfg(make_config, node):
+    return make_config(
+        {
+            "controlplane": {
+                "count": 2, "cores": 4, "memory": 8, "disk": 40, "node": node
+            },
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "nodes": ["pve001", "pve002"],
+                "network": {
+                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+
+
+def _storage_cfg(make_config, storage):
+    return make_config(
+        {
+            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": storage,
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "nodes": ["pve001", "pve002"],
+                "network": {
+                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+
+
+def test_validate_machines_refuses_a_placement_change(make_config):
+    # cp-01 sits on pve001 (see _data); an explicit `node: pve002` would move it
+    cfg = _placement_cfg(make_config, "pve002")
+    client = FakeClient(_data())
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+    cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+
+    with pytest.raises(ReconcileError, match="refusing to move .* from host pve001 to pve002"):
+        backend.validate_machines({cp1.name: cp1}, inventory)
+    assert client.mutations == []
+
+
+def test_validate_machines_accepts_matching_placement(make_config):
+    # explicit `node: pve001` matches where cp-01 already runs
+    cfg = _placement_cfg(make_config, "pve001")
+    backend = _backend(cfg, FakeClient(_data()))
+    inventory = backend.load_inventory()
+    cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+
+    backend.validate_machines({cp1.name: cp1}, inventory)  # must not raise
+
+
+def test_validate_machines_refuses_a_storage_change(make_config):
+    # scsi0 lives on `vms` (see _data); configuring storage `local-lvm` is ignored today
+    cfg = _storage_cfg(make_config, "local-lvm")
+    data = _data()
+    data["storage"].append({"storage": "local-lvm", "content": "images"})
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+    cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+
+    with pytest.raises(ReconcileError, match="refusing to move the disk of .* from storage vms"):
+        backend.validate_machines({cp1.name: cp1}, inventory)
+    assert client.mutations == []
+
+
+def test_validate_machines_accepts_matching_storage(make_config):
+    cfg = _storage_cfg(make_config, "vms")
+    backend = _backend(cfg, FakeClient(_data()))
+    inventory = backend.load_inventory()
+    cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+
+    backend.validate_machines({cp1.name: cp1}, inventory)  # must not raise
+
+
 def test_memory_property_string_is_not_drift(make_config):
     data = _data()
     data["nodes/pve001/qemu/800/config"]["memory"] = "current=8192"

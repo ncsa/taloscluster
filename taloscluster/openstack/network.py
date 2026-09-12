@@ -8,9 +8,10 @@ planes, ingress -> workers).
 
 Every managed resource is found-by-name in the inventory cache first, created +
 tagged only if absent, and its reconciled fields (allowed_address_pairs, fip
-association) corrected in place. Tags are sent in the create request when the
-cloud supports it, or applied immediately afterward on older Neutron APIs.
-Read-only external-net lookup is a data source, never tagged or created.
+association, subnet DNS nameservers) corrected in place. Tags are sent in the
+create request when the cloud supports it, or applied immediately afterward on
+older Neutron APIs. Read-only external-net lookup is a data source, never tagged
+or created.
 """
 
 from __future__ import annotations
@@ -105,9 +106,11 @@ def _ensure_network(conn, cluster, inv, tags):
 
 def _ensure_subnet(conn, cfg, network, inv, tags):
     name = naming.subnet_name(cfg.name)
+    desired_dns = list(cfg.dns)
     sub = inv.get("subnets", name)
     if sub:
         info(f"subnet {name} exists")
+        _reconcile_subnet_dns(conn, sub, desired_dns)
         return sub
     action(f"create subnet {name} ({cfg.cidr})")
     if dry_run() or network is None:
@@ -120,9 +123,29 @@ def _ensure_subnet(conn, cfg, network, inv, tags):
         network_id=network.id,
         ip_version=4,
         cidr=cfg.cidr,
-        dns_nameservers=list(cfg.dns),
+        dns_nameservers=desired_dns,
     )
     return inv.put("subnets", sub)
+
+
+def _reconcile_subnet_dns(conn, sub, desired_dns) -> None:
+    """Update an existing subnet's DHCP DNS nameservers in place.
+
+    The subnet is created with ``network.dns`` but, being found-by-name, its
+    nameservers were never corrected before -- so editing ``network.dns`` on a
+    running cluster was silently ignored. Neutron lets us update them, so do it
+    and report it under ``plan``.
+    """
+    current = list(getattr(sub, "dns_nameservers", None) or [])
+    if current == desired_dns:
+        return
+    action(
+        f"update subnet {sub.name} dns ({', '.join(current) or 'none'}"
+        f" -> {', '.join(desired_dns)})"
+    )
+    if dry_run():
+        return
+    conn.network.update_subnet(sub, dns_nameservers=desired_dns)
 
 
 def _ensure_router(conn, cluster, ext, inv, tags):

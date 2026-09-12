@@ -60,13 +60,13 @@ Number of machines. The loader accepts zero or more for a worker pool, and at le
 
 Required · integer, GB
 
-Boot volume size, greater than zero. On OpenStack it is used only when creating a server; converge does not resize existing boot volumes. On Proxmox it may only grow: the disk is resized online and Talos extends its `EPHEMERAL` partition on the next reboot. Shrinking is refused.
+Boot volume size, greater than zero. On OpenStack it is used only when creating a server; changing it or the pool's `flavor` on existing servers is refused because they cannot be resized in place. On Proxmox it may only grow: the disk is resized online and Talos extends its `EPHEMERAL` partition on the next reboot. Shrinking is refused.
 
 ### `flavor`
 
 Required on OpenStack · string
 
-OpenStack flavor used when creating the pool's servers. Changing it does not resize existing servers.
+OpenStack flavor used when creating the pool's servers. Changing it does not resize existing servers, so converge refuses it with recreation guidance (as it does a `disk` or `availability_zone` change) instead of silently ignoring it.
 
 ### `cores`
 
@@ -84,7 +84,7 @@ VM memory. Same restart semantics as `cores`.
 
 Optional, Proxmox only · string
 
-Choose one Proxmox host for new machines in this pool. Changing this value does not migrate existing VMs. Must be listed in `proxmox.nodes` when that is set. Without it, placement spreads the pool across the online nodes.
+Choose one Proxmox host for new machines in this pool. Changing this value does not migrate existing VMs, so converge refuses a placement change that would move a running VM. Must be listed in `proxmox.nodes` when that is set. Without it, placement spreads the pool across the online nodes.
 
 ### `extensions`
 

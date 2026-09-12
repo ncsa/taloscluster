@@ -39,7 +39,7 @@ The Proxmox server origin. The `/api2/json` path is added internally; URLs that 
 
 Required · storage id
 
-Storage used when creating VM boot disks. Changing it does not migrate existing disks.
+Storage used when creating VM boot disks. Changing it does not migrate existing disks, so converge refuses the change with recreation guidance instead of silently leaving existing VMs on the old storage.
 
 ### `proxmox.iso_storage`
 

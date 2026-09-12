@@ -7,8 +7,9 @@ a new node never joins newer than the rest:
   validate -> image -> secrets -> network/SG -> discover -> scale-down ->
   upgrade -> compute -> bootstrap -> kubeconfig -> health -> plugins
 
-`validate` refuses provider changes that cannot be reconciled in place (a
-Proxmox disk shrink or NIC attachment move) before any phase mutates, so a
+`validate` refuses provider changes that cannot be reconciled in place (an
+OpenStack flavor, disk or availability-zone change, a Proxmox placement,
+storage, disk-shrink or NIC attachment move) before any phase mutates, so a
 rejected change never leaves a half-applied cluster.
 
 Plugins run last because they need a reachable cluster and the kubeconfig this
@@ -91,10 +92,11 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
 
     # ---- 1. INVENTORY + SUPPORTED-CHANGE PREFLIGHT ------------------------
     # Load what exists before anything mutates so a provider change that cannot
-    # be reconciled in place (a Proxmox disk shrink, a NIC attachment move) is
-    # refused while the cluster is still untouched -- not after the image,
-    # network or Talos phases already ran. The state and network phases reuse
-    # this load. Providers without such a preflight (OpenStack) may no-op here.
+    # be reconciled in place (an OpenStack flavor, disk or availability-zone
+    # change, a Proxmox disk shrink, placement or storage change, or a NIC
+    # attachment move) is refused while the cluster is still untouched -- not
+    # after the image, network or Talos phases already ran. The state and
+    # network phases reuse this load.
     log("validate")
     inv = backend.load_inventory()
     backend.validate_machines(machines, inv)

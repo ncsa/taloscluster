@@ -225,6 +225,63 @@ def test_validate_warnings_three_no_warnings(make_config):
     assert validate_warnings(cfg) == []
 
 
+def test_warns_that_dns_is_dhcp_backed_on_proxmox_bridge(make_config):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}},
+            },
+        },
+        remove=("openstack",),
+    )
+    assert any("DHCP-backed" in w and "network.dns" in w for w in validate_warnings(cfg))
+
+
+def test_no_dns_warning_on_proxmox_bridge_with_empty_dns(make_config):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"dns": []},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}},
+            },
+        },
+        remove=("openstack",),
+    )
+    # no configured resolvers, so there is nothing DHCP could be ignoring
+    assert all("DHCP-backed" not in w for w in validate_warnings(cfg))
+
+
+def test_no_dns_warning_on_openstack(make_config):
+    cfg = make_config()
+    assert all("network.dns" not in w for w in validate_warnings(cfg))
+
+
+def test_no_dns_warning_on_proxmox_sdn(make_config):
+    cfg = make_config(
+        {
+            "name": "testc",
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.9"}},
+            },
+        },
+        remove=("openstack",),
+    )
+    # SDN gets DNS from network.dns, so there is nothing to warn about
+    assert all("DHCP-backed" not in w for w in validate_warnings(cfg))
+
+
 # ---------------------------------------------------------------------------
 # cached_property semantics
 # ---------------------------------------------------------------------------

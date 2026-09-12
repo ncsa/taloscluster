@@ -23,7 +23,7 @@ Keystone identity endpoint.
 
 Required · string
 
-Availability zone used when creating servers. Changing it does not move existing servers.
+Availability zone used when creating servers. Servers are create-only: changing it (or a pool's `flavor` or `disk`) does not resize existing servers, so converge refuses such a change with recreation guidance and `plan` reports it instead of silently ignoring it.
 
 ### `openstack.external_net`
 

@@ -23,7 +23,7 @@ The network the nodes' private addresses come from, written as a network address
 
 Required · list of IP address strings, may be empty except on managed Proxmox SDN
 
-On OpenStack, these are DHCP nameservers on the subnet when it is first created; converge does not update the existing subnet's DNS settings. On Proxmox managed SDN, they are applied to each node through Talos `ResolverConfig`, including on later converges. Proxmox on an existing bridge or VNet uses DHCP-provided DNS; this list does not override it.
+On OpenStack, these are the subnet's DHCP nameservers; converge reconciles them on the existing subnet in place, so editing the list applies to the running cluster (a changed list is reported by `plan`). On Proxmox managed SDN, they are applied to each node through Talos `ResolverConfig`, including on later converges. Proxmox on an existing bridge or VNet uses DHCP-provided DNS; this list does not override it, so converge warns that `network.dns` has no effect there.
 
 ## `network.ntp`
 

@@ -978,4 +978,14 @@ def validate_warnings(cfg: Config) -> list[str]:
         warnings.append(f"even controlplane count ({cp_count}), etcd needs a majority")
     if cp_count == 1:
         warnings.append("single controlplane, no HA")
+    if (
+        isinstance(cfg.provider, ProxmoxConfig)
+        and cfg.dns
+        and not proxmox_sdn(cfg.name, cfg.provider)
+    ):
+        warnings.append(
+            "network.dns is ignored on a Proxmox bridge/vnet (DHCP-backed) network; "
+            "nodes get their DNS from the DHCP server, so the configured resolvers "
+            "are not applied"
+        )
     return warnings

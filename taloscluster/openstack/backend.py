@@ -129,7 +129,12 @@ class OpenStackBackend:
         machines: dict[str, Machine],
         inventory: InfrastructureInventory,
     ) -> None:
-        return None
+        compute.validate(
+            self.conn,
+            self.cfg,
+            machines,
+            self._raw(inventory),
+        )
 
     def reconcile_machines(
         self,

@@ -1039,8 +1039,10 @@ class ProxmoxBackend:
     def _assert_supported_changes(self, vm: ProxmoxVM, machine: Machine) -> dict[str, Any]:
         """Refuse unsupported changes to an existing VM, returning its config.
 
-        Raises when the private or external NIC would move to another bridge/VLAN
-        or when the disk would shrink: neither can be reconciled in place, and
+        Raises when the private or external NIC would move to another bridge/VLAN,
+        when the disk would shrink, when an explicit ``node`` placement moves the
+        VM to another host, or when the VM's boot disk sits on a different storage
+        than ``proxmox.storage``: none of these can be reconciled in place, and
         silently ignoring them would leave cluster.yaml lying about the cluster.
         Shared by the compute phase (``_vm_drift``) and the pre-mutation
         ``validate_machines`` preflight, so a rejected change is caught while
@@ -1049,6 +1051,20 @@ class ProxmoxBackend:
         config = self.client.get(f"nodes/{vm.node}/qemu/{vm.vmid}/config")
         if not isinstance(config, dict):
             raise ReconcileError(f"Proxmox returned no config for {vm.name}: {config!r}")
+        if machine.node and machine.node != vm.node:
+            raise ReconcileError(
+                f"refusing to move {vm.name} from host {vm.node} to {machine.node}: "
+                "changing the placement of a running cluster's VM is not supported; "
+                "revert the `node` in cluster.yaml or recreate the cluster"
+            )
+        have_storage = str(config.get("scsi0") or "").split(",", 1)[0].split(":", 1)[0]
+        if have_storage and have_storage != self.provider.storage:
+            raise ReconcileError(
+                f"refusing to move the disk of {vm.name} from storage "
+                f"{have_storage} to {self.provider.storage}: changing "
+                "proxmox.storage does not migrate existing disks; revert the "
+                "change in cluster.yaml or recreate the cluster"
+            )
         want_nics = {"net0": (self.cluster_link, self.cluster_network.get("vlan"))}
         ext = self.external_network
         if ext:
@@ -1087,7 +1103,8 @@ class ProxmoxBackend:
         (GiB, grow only), plus `stale` when the *running* VM differs from the
         desired sizing -- a change written on an earlier run that still waits
         for a restart. Unsupported changes (a NIC moving bridge/VLAN, a disk
-        shrinking) are refused up front by ``_assert_supported_changes``.
+        shrinking, a placement move, a storage change) are refused up front by
+        ``_assert_supported_changes``.
         """
         config = self._assert_supported_changes(vm, machine)
         # what the VM actually runs with; `config` alone shows pending values

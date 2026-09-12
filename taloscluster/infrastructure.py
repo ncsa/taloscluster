@@ -135,9 +135,11 @@ class InfrastructureBackend(Protocol):
     ) -> None:
         """Refuse unsupported machine changes before any converge mutation.
 
-        Providers that cannot reconcile every change in place (e.g. Proxmox disk
-        shrink, NIC attachment moves) reject them here, ahead of the image,
-        network and Talos phases. Providers without such a preflight may no-op.
+        Providers that cannot reconcile every change in place (e.g. an OpenStack
+        flavor, disk or availability-zone change, a Proxmox disk shrink, placement
+        or storage change, or a NIC attachment move) reject them here, ahead of the
+        image, network and Talos phases. Providers without such a preflight may
+        no-op.
         """
         ...
 

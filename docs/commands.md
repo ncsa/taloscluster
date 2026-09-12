@@ -33,7 +33,7 @@ taloscluster plan [--reboot]
 taloscluster plan -C mycluster --reboot
 ```
 
-Preview a converge, including creates, updates, deletions, supported Proxmox VM sizing changes, firewall changes, machine-configuration diffs with secrets redacted when the cluster is reachable, and plugin actions. A new cluster without Talos secrets or allocated addresses cannot produce all machine-config diffs. A configured plugin whose work depends on the cluster's own kubeconfig or an allocated endpoint reports it as deferred until converge bootstraps the cluster, instead of failing the plan. Equivalent to `converge --dry-run`. `--reboot` also previews which nodes would restart to apply sizing changes.
+Preview a converge, including creates, updates, deletions, supported Proxmox VM sizing changes and OpenStack subnet DNS updates, firewall changes, machine-configuration diffs with secrets redacted when the cluster is reachable, and plugin actions. Unsupported edits to an existing cluster (an OpenStack `flavor`/`disk`/`availability_zone` change, a Proxmox NIC, placement or `storage` change) are refused and reported. A new cluster without Talos secrets or allocated addresses cannot produce all machine-config diffs. A configured plugin whose work depends on the cluster's own kubeconfig or an allocated endpoint reports it as deferred until converge bootstraps the cluster, instead of failing the plan. Equivalent to `converge --dry-run`. `--reboot` also previews which nodes would restart to apply sizing changes.
 
 ## `converge`
 
