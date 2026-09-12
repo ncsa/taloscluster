@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Report deferred plugin work during `plan` before the first bootstrap: a configured plugin that needs the cluster's own kubeconfig or an allocated endpoint (such as argocd building its cluster Secret) is reported as deferred and no longer fails the plan with a missing-kubeconfig error.
+
 - Define consistent plugin deletion and failure behavior: a direct `taloscluster plugin NAME destroy` now asks for the cluster name to confirm before it runs (or `--yes` to skip), matching the top-level `destroy`; plugin cleanup failures still leave the infrastructure torn down with a nonzero exit, and plugin `status` errors stay warning-only. Document a `--dry-run` listing what a plugin `destroy` would delete and cover the `--yes`/`--dry-run` skip paths with tests.
 
 - Validate configured plugin configuration before any cluster mutation: a plugin's `validate` hook runs in converge's validate phase, so the argocd plugin refuses repository URLs that are not a pair, git credentials without a Git URL, malformed sections, and unsupported options with the cluster still untouched; `plan` reports the same.

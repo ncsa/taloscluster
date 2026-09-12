@@ -23,7 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from taloscluster.context import Context
-from taloscluster.output import info, log
+from taloscluster.output import dry_run, info, log
 
 from . import kube
 from .config import ApplyTarget, Config, enabled
@@ -49,6 +49,26 @@ def _validate(target: ApplyTarget) -> None:
         )
 
 
+def _deferred(ctx: Context) -> str | None:
+    """Why argocd's converge is deferred during a `plan` before bootstrap.
+
+    The cluster Secret and project destinations are built from this cluster's
+    own kubeconfig, which converge only writes after bootstrap, and the rendered
+    values consume the allocated kube-api / ingress endpoints. Before the first
+    bootstrap neither exists, so there is nothing to register yet -- a `plan`
+    must report the registration as deferred rather than fail with a confusing
+    missing-kubeconfig error. Returns a human reason when the run is a dry-run
+    and the cluster is not bootstrapped, None otherwise.
+    """
+    if not dry_run():
+        return None
+    if not ctx.kubeconfig.is_file():
+        return "this cluster has no kubeconfig yet (it is written at bootstrap)"
+    if not (ctx.kubernetes.get("floating_ip") or ctx.kubernetes.get("vip")):
+        return "this cluster's kube-api endpoint is not allocated yet"
+    return None
+
+
 def _git(target: ApplyTarget) -> tuple[str, str] | None:
     if target.git_username is None and target.git_token is None:
         return None
@@ -64,6 +84,11 @@ def _ost(target: ApplyTarget) -> tuple[str, str] | None:
 def converge(ctx: Context, assume_yes: bool = False) -> dict:
     cfg, target = _load(ctx.root)
     _validate(target)
+
+    reason = _deferred(ctx)
+    if reason:
+        info(f"argocd registration deferred ({reason}); nothing would be applied yet")
+        return {"deferred": True, "reason": reason, "server": cfg.name}
 
     log("render manifests")
     m = render(cfg, ctx, git=_git(target), ost=_ost(target))

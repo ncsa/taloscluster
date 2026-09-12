@@ -19,7 +19,7 @@ Two plugins ship today:
 A plugin hooks into the normal commands; there is nothing extra to invoke.
 
 - **`converge`** runs plugins last, after the cluster is healthy and the kubeconfig is written.
-- **`plan`** runs them in dry-run mode and prints what they would do.
+- **`plan`** runs them in dry-run mode and prints what they would do. Before the first bootstrap there is nothing to register yet: a plugin whose work needs the cluster's own kubeconfig or an allocated endpoint (for example argocd building its cluster Secret) reports the registration as deferred until `converge` bootstraps the cluster, so `plan` stays usable and successful.
 - **`destroy`** runs them first, in reverse order, while the cluster is still reachable, so a plugin can deregister the cluster before it disappears.
 - **`status`** and **`check`** include a section per plugin. A plugin whose check says converge would change something flips the exit code to 1, like an available upgrade does.
 
