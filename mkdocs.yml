@@ -56,4 +56,5 @@ nav:
       - Rancher plugin: configuration/rancher.md
       - ArgoCD plugin: configuration/argocd.md
   - Plugins: concepts/plugins.md
+  - Backup and recovery: backup.md
   - Troubleshooting: troubleshooting.md

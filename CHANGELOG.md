@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report the firewall a new Proxmox VM would get during `plan` (policy + rules), so a dry-run shows the same firewall outcome the converge would apply.
 - Warn when two plugin entry points share a name instead of silently collapsing to one, and keep the first.
 - Add an OpenStack setup guide parallel to the Proxmox one: tenant setup, application credentials, required services and quotas, the `RegionOne` default, external-network selection, availability zones and flavors, and management access.
+- Add a tested backup and recovery guide distinguishing provider credentials, Talos identity (`talossecrets.yaml`), derived client configs, etcd snapshots, and application data, including recovery from a lost management machine and an interrupted bootstrap.
 
 - Use the configured OpenStack region (`openstack.region`, default `RegionOne`) in the session, the reported status and `print_environment` output, and the region ArgoCD emits into the cluster-apps values, instead of a hardcoded `RegionOne`.
 
