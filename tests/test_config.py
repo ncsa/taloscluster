@@ -202,6 +202,23 @@ def test_invalid_configuration_fails_during_load(make_config, overrides, message
         make_config(overrides)
 
 
+def test_unprefixed_talos_version_is_normalized(make_config):
+    cfg = make_config({"talos": {"version": "1.13.9"}})
+    assert cfg.talos_version == "v1.13.9"
+
+
+def test_prefixed_talos_version_is_kept(make_config):
+    cfg = make_config({"talos": {"version": "v1.14.2"}})
+    assert cfg.talos_version == "v1.14.2"
+
+
+def test_non_string_talos_version_raises_config_error_not_attribute_error(make_config):
+    # An unquoted `1.13` parses as a float; normalization must not run before
+    # validation or it raises AttributeError instead of ConfigError.
+    with pytest.raises(ConfigError):
+        make_config({"talos": {"version": 1.13}})
+
+
 # ---------------------------------------------------------------------------
 # validate_warnings
 # ---------------------------------------------------------------------------

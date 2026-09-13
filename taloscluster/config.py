@@ -536,6 +536,12 @@ def load_config(root: Path) -> Config:
         raw=d,
     )
     _validate(cfg)
+    # Normalize the canonical `v` prefix: an unprefixed value passes the
+    # version regex but would otherwise be compared verbatim against talosctl
+    # output and baked into factory URLs, judging every node outdated forever.
+    # This runs after _validate so a non-string version still raises ConfigError.
+    if not cfg.talos_version.startswith("v"):
+        cfg.talos_version = f"v{cfg.talos_version}"
     return cfg
 
 

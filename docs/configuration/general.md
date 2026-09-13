@@ -40,7 +40,7 @@ Extra Kubernetes node labels applied to every node through Talos `machine.nodeLa
 
 Required · `vMAJOR.MINOR.PATCH`
 
-Talos release to run; use the canonical `vMAJOR.MINOR.PATCH` form. The loader also accepts a missing `v` prefix and prerelease/build suffixes, but upstream lookup and upgrade behavior is designed around release versions. Must be v1.13.0 or newer because the generated machine configuration uses multi-document network kinds that older releases reject. Bumping it builds a new boot image from factory.talos.dev and rolls the upgrade over existing nodes on the next converge. Nothing auto-upgrades.
+Talos release to run; use the canonical `vMAJOR.MINOR.PATCH` form. A missing `v` prefix is normalized to the canonical form during load, and prerelease/build suffixes are accepted, but upstream lookup and upgrade behavior is designed around release versions. Must be v1.13.0 or newer because the generated machine configuration uses multi-document network kinds that older releases reject. Bumping it builds a new boot image from factory.talos.dev and rolls the upgrade over existing nodes on the next converge. Nothing auto-upgrades.
 
 ### `talos.extensions`
 
