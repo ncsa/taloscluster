@@ -41,6 +41,7 @@ nav:
       - Planning and building: concepts/lifecycle.md
       - Machines and access: concepts/machines.md
       - Proxmox setup: providers/proxmox.md
+      - OpenStack setup: providers/openstack.md
       - Why Talos: concepts/talos.md
   - Commands: commands.md
   - Configuration:

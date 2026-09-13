@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Detect Tailscale addresses across the whole `100.64.0.0/10`, not just the `100.64.` prefix, so members on `100.65`–`100.127` are still picked as their stable unique address.
 - Report the firewall a new Proxmox VM would get during `plan` (policy + rules), so a dry-run shows the same firewall outcome the converge would apply.
 - Warn when two plugin entry points share a name instead of silently collapsing to one, and keep the first.
+- Add an OpenStack setup guide parallel to the Proxmox one: tenant setup, application credentials, required services and quotas, the `RegionOne` default, external-network selection, availability zones and flavors, and management access.
 
 - Use the configured OpenStack region (`openstack.region`, default `RegionOne`) in the session, the reported status and `print_environment` output, and the region ArgoCD emits into the cluster-apps values, instead of a hardcoded `RegionOne`.
 

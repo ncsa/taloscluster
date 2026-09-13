@@ -43,6 +43,7 @@ Edit the generated templates for your environment before converging. Back up `ta
 - [Commands](https://ncsa.github.io/taloscluster/commands/): subcommands, options, examples, and exit status.
 - [Configuration](https://ncsa.github.io/taloscluster/configuration/): every cluster and secrets setting.
 - [Proxmox setup](https://ncsa.github.io/taloscluster/providers/proxmox/): permissions, networking, and managed SDN.
+- [OpenStack setup](https://ncsa.github.io/taloscluster/providers/openstack/): application credentials, services and quotas, networking, and access.
 - [Plugins](https://ncsa.github.io/taloscluster/concepts/plugins/): Rancher, ArgoCD, and writing a plugin.
 - [Troubleshooting](https://ncsa.github.io/taloscluster/troubleshooting/): common problems and diagnostic steps.
 
