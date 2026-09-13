@@ -284,6 +284,32 @@ def test_converge_apply_config_does_not_pass_dry_run(tmp_path, monkeypatch):
     assert seen and "--dry-run" not in seen[0]
 
 
+def test_converge_apply_config_reports_live_apply(monkeypatch, tmp_path):
+    """A live/no-op apply (`--mode=auto` -> apid reports "without a reboot")
+    makes apply_config return False: no restart is pending, so a settle path
+    has nothing to wait out."""
+    monkeypatch.setattr(
+        talosctl, "_run_nocheck",
+        lambda args, timeout=None: (0, "", "Applied configuration without a reboot.\n"),
+    )
+    assert talosctl.apply_config(
+        tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}"
+    ) is False
+
+
+def test_converge_apply_config_reports_pending_reboot(monkeypatch, tmp_path):
+    """A restart-requiring apply (`--mode=auto` -> apid reports "with a reboot")
+    makes apply_config return True: the node is going down, so the settle path
+    must wait it out, back in, and health-check before the next one."""
+    monkeypatch.setattr(
+        talosctl, "_run_nocheck",
+        lambda args, timeout=None: (0, "", "Applied configuration with a reboot (2.5s).\n"),
+    )
+    assert talosctl.apply_config(
+        tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}"
+    ) is True
+
+
 def test_plan_apply_config_failure_is_a_warning(tmp_path, monkeypatch, capsys):
     from taloscluster.output import set_dry_run
 

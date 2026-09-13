@@ -234,7 +234,7 @@ def dashboard(talosconfig: Path, endpoint: str, nodes: list[str]) -> None:
 
 
 def apply_config(talosconfig: Path, endpoint: str, node: str, config: str,
-                 mode: str = "auto") -> None:
+                 mode: str = "auto") -> bool:
     """Push a machine config to an existing node.
 
     Without this, editing anything that lives in the machine config (extra
@@ -249,6 +249,11 @@ def apply_config(talosconfig: Path, endpoint: str, node: str, config: str,
     Under `plan` this still talks to the node, with `--dry-run`: talos then
     reports how the change would be applied and prints the config diff without
     changing anything, so `plan` shows what `converge` would push.
+
+    Returns True when the apply restarts the node (a reboot is pending), False
+    for a silent live/no-op apply. This is how a settle path knows whether the
+    node came down for a reason, so a no-op pass on a converged cluster is never
+    mistaken for a reboot that never visibly happened.
     """
     action(f"talosctl apply-config {node} (mode={mode})")
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
@@ -265,12 +270,35 @@ def apply_config(talosconfig: Path, endpoint: str, node: str, config: str,
     if rc != 0:
         if dry_run():
             warn(f"could not diff machine config on {node}: {(err or out).strip()}")
-            return
+            return False
         raise RuntimeError(f"apply-config on {node} failed: {(err or out).strip()}")
     if dry_run():
         # talosctl writes the summary and diff to stderr
         for line in _dry_run_summary(out + "\n" + err):
             info(f"    {line}")
+        return False
+    # talosctl prints the chosen mode (as apid ModeDetails) on stderr: "Applied
+    # configuration with a reboot" vs "without a reboot". That is the signal a
+    # settle path needs to tell a node taken down for a restart apart from a
+    # silent live apply.
+    return _apply_requires_reboot(out + "\n" + err)
+
+
+def _apply_requires_reboot(out: str) -> bool:
+    """Whether `talosctl apply-config` (mode=auto) restarted the node.
+
+    apid reports the mode it settled on in its ModeDetails line on stderr:
+    "Applied configuration with a reboot" when the change needs a restart, and
+    "Applied configuration without a reboot" for a silent live/no-op apply.
+    Anything unrecognised is treated as live -- auto mode only restarts a node
+    for a change that genuinely needs it, and a no-op pass on a converged
+    cluster is the overwhelmingly common case, so an unfamiliar message must not
+    be mistaken for a reboot that never happened.
+    """
+    text = f"\n{out}\n".lower()
+    if "with a reboot" in text:
+        return True
+    return False
 
 
 def _dry_run_summary(out: str) -> list[str]:

@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- Settle control-plane config applies quorum-safely: `apply_config` reports whether talos restarted the node (`--mode=auto`), so a no-op/live apply skips the settle wait, an unresolved grace-window expiry now refuses to advance instead of warn-and-continue, and a restarted control plane must pass `talosctl health` before the next one is touched.
 - Fix docs and docstring drift from the 2026-09-07 review: `sdn.exit_nodes` defaults to every cluster node (offline included), the managed-SDN example uses a placeholder instead of a real host, the `kubeapi_vip` move is no longer claimed to happen without a restart, the reachability-timeout message points at the troubleshooting guide, and module docstrings drop the removed terraform/shell/`yq` tooling and OpenStack-only framing.
 - Measure the hostname-length check against a pool's real widest ordinal, so a pool of 100+ nodes (three-digit index) is rejected instead of slipping through one character too long.
 - Scaffold the Proxmox `kubeapi_vip` at `192.168.0.2`, outside the managed-SDN static layout, so following the inline `sdn: {}` hint no longer collides with the reserved controlplane block.

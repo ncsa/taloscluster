@@ -700,16 +700,17 @@ _APPLY_ADDR = {h: f"192.0.2.{i + 1}" for i, h in enumerate(_APPLY_MACHINES)}
 
 
 def test_apply_configs_settles_control_planes_by_default(monkeypatch):
-    """`settle` defaults to True: a config apply waits for each control plane to
-    actually go down (a reboot started) and come back before the next one is
-    touched, so a reboot-requiring patch never restarts every control plane at
-    once. Workers are applied last in a single pass and never settled."""
+    """`settle` defaults to True: a config apply that reports a reboot waits for
+    each control plane to actually go down (a reboot started), come back, and
+    pass a health check before the next one is touched, so a restart-requiring
+    patch never restarts every control plane at once. Workers are applied last
+    in a single pass and never settled."""
     machines, inv, configs = _apply_configs_fixtures()
     _no_op_reachable(monkeypatch)
     events: list[tuple[str, str]] = []
     monkeypatch.setattr(
         converge.talosctl, "apply_config",
-        lambda _tc, _e, node, _cfg: events.append(("apply", node)),
+        lambda _tc, _e, node, _cfg: events.append(("apply", node)) or True,
     )
     monkeypatch.setattr(
         converge, "_wait_down",
@@ -718,6 +719,10 @@ def test_apply_configs_settles_control_planes_by_default(monkeypatch):
     monkeypatch.setattr(
         converge, "_wait_reachable",
         lambda _tc, _e, node: events.append(("up", node)),
+    )
+    monkeypatch.setattr(
+        converge, "_health_or_kube_fallback",
+        lambda *_a, **_k: events.append(("health", None)) or True,
     )
 
     # note: settle is left at its default -- the caller at the normal-path call
@@ -730,32 +735,29 @@ def test_apply_configs_settles_control_planes_by_default(monkeypatch):
 
     cp1, cp2, worker = (_APPLY_ADDR[h] for h in _APPLY_MACHINES)
     assert events == [
-        ("apply", cp1), ("down", cp1), ("up", cp1),
-        ("apply", cp2), ("down", cp2), ("up", cp2),
+        ("apply", cp1), ("down", cp1), ("up", cp1), ("health", None),
+        ("apply", cp2), ("down", cp2), ("up", cp2), ("health", None),
         ("apply", worker),
     ]
 
 
-def test_apply_configs_waits_live_apply_back_in_with_a_warning(monkeypatch):
-    """When the settle grace window expires without an observed node drop we
-    cannot tell a live apply from a slow reboot, so converge warns and STILL
-    waits the node back in before touching the next control plane -- the
-    serialisation that buys etcd quorum is never silently skipped."""
+def test_apply_configs_live_apply_skips_settle(monkeypatch):
+    """A live/no-op apply reports that no reboot is pending, so no settle wait
+    runs and the node is never health-checked off the back of a down: a silent
+    apply never took the node down, so there is no restart to settle and no
+    quorum risk."""
     machines, inv, configs = _apply_configs_fixtures()
     _no_op_reachable(monkeypatch)
     events: list[tuple[str, str]] = []
     monkeypatch.setattr(
         converge.talosctl, "apply_config",
-        lambda _tc, _e, node, _cfg: events.append(("apply", node)),
+        lambda _tc, _e, node, _cfg: events.append(("apply", node)) or False,
     )
+    monkeypatch.setattr(converge, "_wait_down", lambda *_a, **_k: events.append(("down", None)))
+    monkeypatch.setattr(converge, "_wait_reachable", lambda *_a, **_k: events.append(("up", None)))
     monkeypatch.setattr(
-        converge, "_wait_down", lambda _tc, _e, node: events.append(("down", node)) or False,
-    )
-    warns: list[str] = []
-    monkeypatch.setattr(converge, "warn", warns.append)
-    monkeypatch.setattr(
-        converge, "_wait_reachable",
-        lambda _tc, _e, node: events.append(("up", node)),
+        converge, "_health_or_kube_fallback",
+        lambda *_a, **_k: events.append(("health", None)) or True,
     )
 
     converge._apply_configs(
@@ -764,18 +766,78 @@ def test_apply_configs_waits_live_apply_back_in_with_a_warning(monkeypatch):
         Path("talosconfig"), Path("kubeconfig"),
     )
 
-    cp1, cp2, worker = (_APPLY_ADDR[h] for h in _APPLY_MACHINES)
-    # each control plane is still waited back in after the grace expires, so a
-    # late reboot can never overlap the next control plane
-    assert events == [
-        ("apply", cp1), ("down", cp1), ("up", cp1),
-        ("apply", cp2), ("down", cp2), ("up", cp2),
-        ("apply", worker),
-    ]
-    # and each expired grace window is disclosed to the operator
-    assert len(warns) == 2
-    for i, name in enumerate(_APPLY_MACHINES[:2], start=1):
-        assert "settle grace window" in warns[i - 1] and name in warns[i - 1]
+    # every apply is a live/no-op, so none of the settle machinery fires
+    assert events == [("apply", _APPLY_ADDR[h]) for h in _APPLY_MACHINES]
+
+
+def test_apply_configs_refuses_unresolved_reboot(monkeypatch):
+    """When a control-plane apply reports a reboot but apid never drops within
+    the settle grace window, converge refuses to touch the next control plane
+    instead of warn-and-continue: a node that never visibly rebooted may be
+    stuck, and advancing past it costs quorum on the next restart."""
+    machines, inv, configs = _apply_configs_fixtures()
+    _no_op_reachable(monkeypatch)
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        converge.talosctl, "apply_config",
+        lambda _tc, _e, node, _cfg: events.append(("apply", node)) or True,
+    )
+    monkeypatch.setattr(
+        converge, "_wait_down",
+        lambda _tc, _e, node: events.append(("down", node)) or False,
+    )
+    monkeypatch.setattr(converge, "_wait_reachable", lambda *_a, **_k: events.append(("up", None)))
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_k: True)
+
+    with pytest.raises(ReconcileError, match="settle grace window"):
+        converge._apply_configs(
+            SimpleNamespace(name="phoenix", tailscale_enabled=True),
+            machines, inv, NetworkResult(), configs,
+            Path("talosconfig"), Path("kubeconfig"),
+        )
+
+    # control plane 1 is applied and its grace window expires unresolved; no
+    # second control plane is ever touched
+    cp1 = _APPLY_ADDR["phoenix-controlplane-01"]
+    assert events == [("apply", cp1), ("down", cp1)]
+
+
+def test_apply_configs_aborts_when_cluster_unhealthy_after_reboot(monkeypatch):
+    """Even after an observed reboot (the node went down and its apid answered
+    again), apid reachability alone does not prove the node rejoined etcd --
+    converge requires cluster health before advancing, and aborts the rollout
+    rather than touch another control plane past a member that never came back."""
+    machines, inv, configs = _apply_configs_fixtures()
+    _no_op_reachable(monkeypatch)
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        converge.talosctl, "apply_config",
+        lambda _tc, _e, node, _cfg: events.append(("apply", node)) or True,
+    )
+    monkeypatch.setattr(
+        converge, "_wait_down",
+        lambda _tc, _e, node: events.append(("down", node)) or True,
+    )
+    monkeypatch.setattr(
+        converge, "_wait_reachable",
+        lambda _tc, _e, node: events.append(("up", node)),
+    )
+    # the control plane does not pass talosctl health after coming back -- a
+    # responding apid was never enough
+    monkeypatch.setattr(
+        converge, "_health_or_kube_fallback",
+        lambda *_a, **_k: events.append(("health", None)) or False,
+    )
+
+    with pytest.raises(ReconcileError, match="cluster unhealthy"):
+        converge._apply_configs(
+            SimpleNamespace(name="phoenix", tailscale_enabled=True),
+            machines, inv, NetworkResult(), configs,
+            Path("talosconfig"), Path("kubeconfig"),
+        )
+
+    cp1 = _APPLY_ADDR["phoenix-controlplane-01"]
+    assert events == [("apply", cp1), ("down", cp1), ("up", cp1), ("health", None)]
 
 
 def test_wait_down_returns_true_only_after_apid_stops_answering(monkeypatch):
