@@ -39,6 +39,7 @@ nav:
   - Usage:
       - Overview: usage.md
       - Maintenance: maintenance.md
+      - Load balancing and ingress: load-balancer.md
       - Planning and building: concepts/lifecycle.md
       - Machines and access: concepts/machines.md
       - Proxmox setup: providers/proxmox.md

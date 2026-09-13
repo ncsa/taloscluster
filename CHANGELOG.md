@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add an OpenStack setup guide parallel to the Proxmox one: tenant setup, application credentials, required services and quotas, the `RegionOne` default, external-network selection, availability zones and flavors, and management access.
 - Add a tested backup and recovery guide distinguishing provider credentials, Talos identity (`talossecrets.yaml`), derived client configs, etcd snapshots, and application data, including recovery from a lost management machine and an interrupted bootstrap.
 - Add a maintenance walkthrough covering replicas, PodDisruptionBudgets, spare worker capacity, scheduling restrictions and storage constraints, with a blocked drain and its resolution; two eligible workers stay a recommendation, not a requirement.
+- Add a load-balancer and ingress guide with complete OpenStack and Proxmox examples, showing which addresses core allocates or configures and which MetalLB `IPAddressPool` / `L2Advertisement` and ingress `LoadBalancer` / `Ingress` resources the operator or GitOps setup must supply.
 
 - Use the configured OpenStack region (`openstack.region`, default `RegionOne`) in the session, the reported status and `print_environment` output, and the region ArgoCD emits into the cluster-apps values, instead of a hardcoded `RegionOne`.
 
