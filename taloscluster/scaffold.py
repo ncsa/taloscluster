@@ -125,7 +125,10 @@ proxmox:
       #         # primary_exit_node, mtu, nodes); the zone/VNet id is `name`
       #         # (default: the cluster name, max 8 chars, no hyphens); removing
       #         # a set mtu/nodes later does not unset it on the zone
-      kubeapi_vip: 192.168.0.10""",
+      #         # the VIP must sit OUTSIDE the static layout (.2 is the first
+      #         # free host: the layout reserves .1 for the gateway, the
+      #         # controlplane block, and a block per worker pool)
+      kubeapi_vip: 192.168.0.2""",
         "secrets": """\
 proxmox:
   token_id: "taloscluster@pve!provider"

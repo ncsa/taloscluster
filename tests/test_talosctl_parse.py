@@ -202,6 +202,31 @@ def test_members_skips_the_shared_vip_when_excluded(monkeypatch, tmp_path):
     assert excluded["cp-01"].address == "10.0.0.236"
 
 
+def test_members_prefers_tailscale_anywhere_in_100_64_slash_10(monkeypatch):
+    """Tailscale CGNAT is the full 100.64.0.0/10: an address in 100.65-100.127
+    is still a tailscale one and must be preferred over the private/VIP ips."""
+    stream = (
+        '{"metadata": {"id": "cp-01"}, "spec": {"addresses": '
+        '["192.168.1.9", "100.127.0.17"], "operatingSystem": "Talos (v1.13.9)"}}'
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda _cmd: (0, stream, ""))
+    got = talosctl.members(Path("talosconfig"), "ep")
+    assert got["cp-01"].address == "100.127.0.17"
+
+
+def test_is_tailscale_covers_the_full_cgnat_range():
+    assert talosctl._is_tailscale("100.64.0.1")
+    assert talosctl._is_tailscale("100.127.255.254")
+    # the boundary masked prefix is what the old `100.64.` startswith missed
+    assert talosctl._is_tailscale("100.65.0.5")
+    # outside the CGNAT range -- a public or normal private address
+    assert not talosctl._is_tailscale("100.128.0.1")
+    assert not talosctl._is_tailscale("192.168.1.9")
+    assert not talosctl._is_tailscale("203.0.113.4")
+    # malformed addresses are not tailscale
+    assert not talosctl._is_tailscale("not-an-ip")
+
+
 # ---- apply-config under plan ------------------------------------------------
 
 def test_plan_apply_config_runs_talosctl_dry_run_and_prints_the_diff(tmp_path, monkeypatch, capsys):

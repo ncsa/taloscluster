@@ -1022,6 +1022,7 @@ class ProxmoxBackend:
                 f"({machine.cores} cores, {machine.memory}GB RAM, {machine.disk}GB disk)"
             )
             if dry_run():
+                self._report_new_vm_firewall(machine.name)
                 continue
             self._create_vm(
                 raw,
@@ -1388,6 +1389,20 @@ class ProxmoxBackend:
                 continue
             seen.add(key)
         return stale, seen
+
+    def _report_new_vm_firewall(self, name: str) -> None:
+        """Under plan, report the firewall a *new* VM will get.
+
+        An existing VM's firewall is compared against what is there (see
+        `_reconcile_firewall`), but a VM that does not exist yet cannot be
+        queried -- so the plan reports the full default it would apply: the
+        DROP-in policy plus every desired ingress rule.
+        """
+        count = len(self._desired_firewall_rules())
+        parts = ["policy"]
+        if count:
+            parts.append(f"{count} rule{'s' if count != 1 else ''} added")
+        action(f"configure firewall on {name} ({', '.join(parts)})")
 
     def _reconcile_firewall(self, node: str, vmid: int, name: str) -> None:
         """Converge one VM's firewall onto the desired rule set.

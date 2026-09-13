@@ -8,6 +8,7 @@ config) always run; cluster-mutating commands honour --dry-run.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -24,6 +25,18 @@ from ..errors import ReconcileError
 from ..output import action, dry_run, info, warn
 
 BIN = "talosctl"
+
+# Tailscale CGNAT addresses are the full 100.64.0.0/10 (100.64.0.0-100.127.255.255),
+# not just the 100.64.0.0/16 a naive `startswith("100.64.")` would catch.
+TAILSCALE_NET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _is_tailscale(addr: str) -> bool:
+    host = addr.split("/", 1)[0]
+    try:
+        return ipaddress.ip_address(host) in TAILSCALE_NET
+    except ValueError:
+        return False
 
 
 def _run(args: list[str], capture: bool = False, quiet_stderr: bool = False) -> str:
@@ -193,7 +206,7 @@ def members(
         addrs = spec.get("addresses") or []
         if not host or not addrs:
             continue
-        tailscale = [a for a in addrs if a.startswith("100.64.")]
+        tailscale = [a for a in addrs if _is_tailscale(a)]
         stable = [a for a in addrs if a not in excluded]
         found[host] = Member(
             address=tailscale[0] if tailscale else (stable[0] if stable else addrs[0]),

@@ -260,6 +260,78 @@ def test_collect_records_a_failure_rather_than_dropping_it(monkeypatch, ctx):
     assert "unreachable" in report["a"]["error"]
 
 
+def test_run_contains_a_Die_raised_by_a_plugin(monkeypatch, ctx, capsys):
+    """`Die` is a SystemExit (BaseException), so the usual `except Exception`
+    would not contain it; a plugin that dies must not abort the whole run."""
+    from taloscluster.output import Die
+
+    seen = []
+
+    def die(ctx, assume_yes=False):
+        raise Die("fatal plugin failure")
+
+    install(
+        monkeypatch,
+        FakeEntryPoint("a_dies", make_module("a_dies", converge=die)),
+        FakeEntryPoint("b_good", make_module(
+            "b_good", converge=lambda ctx, assume_yes=False: seen.append("b"))),
+    )
+    rc = plugins.run(plugins.discover(), "converge", ctx, assume_yes=False)
+    assert rc == 1                  # the Die is recorded as a failure...
+    assert seen == ["b"]            # ...and the healthy plugin still ran
+    assert "a_dies" in capsys.readouterr().err
+
+
+def test_collect_contains_a_Die_raised_by_a_plugin(monkeypatch, ctx, capsys):
+    from taloscluster.output import Die
+
+    def die(ctx):
+        raise Die("unreachable")
+
+    install(monkeypatch, FakeEntryPoint("a", make_module("a", check=die)))
+    report = plugins.collect(plugins.discover(), "check", ctx)
+    assert report["a"]["ok"] is False
+    assert "unreachable" in report["a"]["error"]
+
+
+def test_initialize_contains_a_Die_raised_by_a_plugin(monkeypatch, tmp_path, capsys):
+    from taloscluster.output import Die
+
+    def die(root):
+        raise Die("fatal init")
+
+    install(monkeypatch, FakeEntryPoint("a", make_module("a", init=die)))
+    plugins.initialize(tmp_path)    # warns, does not raise
+    assert "a" in capsys.readouterr().err
+
+
+def test_duplicate_entry_point_names_warn_and_keep_the_first(monkeypatch, capsys):
+    """_order keys plugins by name, so a duplicate silently collapses to one."""
+    install(
+        monkeypatch,
+        FakeEntryPoint("dup", make_module("dup")),
+        FakeEntryPoint("dup", make_module("dup2")),
+        FakeEntryPoint("other", make_module("other")),
+    )
+    assert [p.name for p in plugins.discover()] == ["dup", "other"]
+    assert "duplicate" in capsys.readouterr().err
+
+
+def test_duplicate_entry_point_name_that_fails_to_load_is_not_reported(monkeypatch, capsys):
+    """Only a name that actually survives counts: a load-failing duplicate is
+    dropped with its own load warning, not a duplicate warning."""
+    install(
+        monkeypatch,
+        FakeEntryPoint("broken", error=ImportError("no such thing")),
+        FakeEntryPoint("broken", make_module("broken")),
+        FakeEntryPoint("other", make_module("other")),
+    )
+    assert [p.name for p in plugins.discover()] == ["broken", "other"]
+    err = capsys.readouterr().err
+    assert "duplicate" not in err
+    assert "broken" in err
+
+
 # ---- dry-run ---------------------------------------------------------------
 
 def test_dry_run_reaches_plugin_code(monkeypatch, ctx):

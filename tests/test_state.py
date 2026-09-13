@@ -39,6 +39,16 @@ def test_write_secrets_sets_mode_0600(tmp_path):
     assert mode == 0o600
 
 
+def test_write_secrets_tightens_a_pre_existing_world_readable_file(tmp_path):
+    # O_TRUNC does not change an existing file's mode, so the fchmod must
+    # still force 0600 for a talossecrets.yaml left broader by an earlier run.
+    path = tmp_path / SECRETS_FILE
+    path.write_text("old")            # born 0644 under a default umask
+    os.chmod(path, 0o644)
+    State(tmp_path).write_secrets("dummy secrets")
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
 def test_require_secrets_raises_state_error_when_missing(tmp_path):
     state = State(tmp_path)
     with pytest.raises(StateError):

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Measure the hostname-length check against a pool's real widest ordinal, so a pool of 100+ nodes (three-digit index) is rejected instead of slipping through one character too long.
+- Scaffold the Proxmox `kubeapi_vip` at `192.168.0.2`, outside the managed-SDN static layout, so following the inline `sdn: {}` hint no longer collides with the reserved controlplane block.
+- Create `talossecrets.yaml` at mode 0600 at creation instead of write-then-chmod, so a fresh secrets file is never briefly world-readable (and a pre-existing broader one is still tightened).
+- Contain a `Die` a plugin raises during a hook, so one plugin's fatal abort no longer unwinds the whole run; it is reported like any other plugin failure.
+- Detect Tailscale addresses across the whole `100.64.0.0/10`, not just the `100.64.` prefix, so members on `100.65`–`100.127` are still picked as their stable unique address.
+- Report the firewall a new Proxmox VM would get during `plan` (policy + rules), so a dry-run shows the same firewall outcome the converge would apply.
+- Warn when two plugin entry points share a name instead of silently collapsing to one, and keep the first.
+
 - Use the configured OpenStack region (`openstack.region`, default `RegionOne`) in the session, the reported status and `print_environment` output, and the region ArgoCD emits into the cluster-apps values, instead of a hardcoded `RegionOne`.
 
 - Fix Rancher API error messages: a string `message` in the error body is preserved whole instead of joined character by character, and list-form messages and `errors` entries are joined with `; `.

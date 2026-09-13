@@ -38,7 +38,7 @@ from typing import Any
 
 from .context import Context
 from .errors import ConfigError
-from .output import warn
+from .output import Die, warn
 
 ENTRY_POINT_GROUP = "taloscluster.plugins"
 HOOKS = ("init", "converge", "destroy", "status", "check")
@@ -64,12 +64,18 @@ class Plugin:
 def discover() -> list[Plugin]:
     """Every installed plugin, in the order they should run."""
     found: list[Plugin] = []
+    seen: set[str] = set()
     for ep in entry_points(group=ENTRY_POINT_GROUP):
+        if ep.name in seen:
+            # _order keys plugins by name, so the second is silently dropped
+            warn(f"duplicate plugin entry-point name {ep.name!r}; only the first is used")
+            continue
         try:
             module = ep.load()
-        except Exception as e:  # a broken plugin must not take the CLI down
+        except (Exception, Die) as e:  # a broken plugin must not take the CLI down
             warn(f"plugin {ep.name!r} could not be loaded ({e}); skipping")
             continue
+        seen.add(ep.name)
         after = tuple(getattr(module, "AFTER", ()) or ())
         found.append(Plugin(name=ep.name, module=module, after=after))
     return _order(found)
@@ -82,7 +88,7 @@ def initialize(root: Path) -> None:
             continue
         try:
             plugin.module.init(root)
-        except Exception as e:
+        except (Exception, Die) as e:
             warn(f"plugin {plugin.name!r} failed during init: {e}")
 
 
@@ -122,7 +128,7 @@ def active(ctx: Context) -> list[Plugin]:
         try:
             if p.configured(ctx):
                 out.append(p)
-        except Exception as e:
+        except (Exception, Die) as e:
             warn(f"plugin {p.name!r}: could not tell whether it is configured ({e}); skipping")
     return out
 
@@ -144,7 +150,7 @@ def validate(ctx: Context) -> None:
             fn(ctx.root, ctx)
         except ConfigError as e:
             raise ConfigError(f"plugin {p.name!r}: {e}") from e
-        except Exception as e:  # a plugin that can't even validate must not mutate later
+        except (Exception, Die) as e:  # a plugin that can't even validate must not mutate later
             raise ConfigError(f"plugin {p.name!r}: invalid configuration: {e}") from e
 
 
@@ -160,7 +166,7 @@ def run(plugins: list[Plugin], hook: str, ctx: Context, **kw) -> int:
             continue
         try:
             result = p.call(hook, ctx, **kw)
-        except Exception as e:
+        except (Exception, Die) as e:
             warn(f"plugin {p.name!r} failed during {hook}: {e}")
             failed = 1
             continue
@@ -181,7 +187,7 @@ def collect(plugins: list[Plugin], hook: str, ctx: Context) -> dict[str, Any]:
             continue
         try:
             out[p.name] = p.call(hook, ctx)
-        except Exception as e:
+        except (Exception, Die) as e:
             warn(f"plugin {p.name!r} failed during {hook}: {e}")
             out[p.name] = {"ok": False, "error": str(e)}
     return out

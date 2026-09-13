@@ -4,13 +4,14 @@ never-overwrite behaviour, and .gitignore append logic, using tmp_path.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import stat
 
 import pytest
 import yaml
 
-from taloscluster import plugins
+from taloscluster import naming, plugins
 from taloscluster.config import ConfigError, load_config, load_secrets
 from taloscluster.scaffold import GITIGNORE_ENTRIES, init
 
@@ -91,6 +92,21 @@ def test_proxmox_templates_are_valid_and_provider_specific(tmp_path):
     assert secrets["proxmox"]["token_secret"] == "CHANGE-ME"
     with pytest.raises(ConfigError, match="CHANGE-ME"):
         load_secrets(tmp_path)
+
+
+def test_proxmox_scaffold_kubeapi_vip_sits_outside_the_sdn_layout(tmp_path):
+    """The scaffolded default VIP must still be valid if the user follows the
+    inline `sdn:` hint -- so it may not sit inside the SDN static layout
+    (controlplane block / worker pool blocks), which would then be rejected."""
+    init(tmp_path, name="demo", provider="proxmox")
+    cluster = yaml.safe_load((tmp_path / "cluster.yaml").read_text())
+    vip = cluster["proxmox"]["network"]["cluster"]["kubeapi_vip"]
+    cidr = cluster["network"]["cidr"]
+    assert ipaddress.ip_address(vip) not in naming.sdn_reserved(
+        cidr, tuple(cluster["workers"])
+    )
+    # the value also passes the full (Sdn-less) config load, as it always did
+    assert load_config(tmp_path).provider_name == "proxmox"
 
 
 def test_openstack_templates_remain_the_default(tmp_path):

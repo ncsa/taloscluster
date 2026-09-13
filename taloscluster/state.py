@@ -36,8 +36,18 @@ class State:
 
     def write_secrets(self, contents: str) -> None:
         """Persist the raw output of `talosctl gen secrets` (mode 0600)."""
-        self.secrets_path.write_text(contents)
-        os.chmod(self.secrets_path, 0o600)
+        # open with the mode up front (subject to umask, which only tightens)
+        # rather than write-then-chmod, so a fresh file is never briefly open
+        # to the world between creation and a chmod; fchmod still forces 0600
+        # when the file already exists with a broader mode.
+        fd = os.open(self.secrets_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except BaseException:
+            os.close(fd)
+            raise
+        with os.fdopen(fd, "w") as f:
+            f.write(contents)
 
     def require_secrets(self) -> Path:
         """Return the secrets path, or fail hard if it is missing.

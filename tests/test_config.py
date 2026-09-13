@@ -63,6 +63,23 @@ def test_machines_hostnames_are_zero_padded(make_config):
     assert "testcluster-gpu-01" in keys
 
 
+def test_hostname_length_uses_the_widest_real_ordinal(make_config):
+    # name + pool = 59 chars; -NN = 63 chars fits, so this used to pass. At 100
+    # nodes the ordinal is 3 digits (-100, 64 chars), which must now be rejected.
+    pool = "p" * 48
+    cfg = make_config({
+        "controlplane": {"count": 1, "flavor": "f", "disk": 20},
+        "workers": {pool: {"count": 99, "flavor": "f", "disk": 20}},
+    })
+    assert f"testcluster-{pool}-99" in cfg.machines  # 63 chars is still allowed
+
+    with pytest.raises(ConfigError, match="hostname longer than 63"):
+        make_config({
+            "controlplane": {"count": 1, "flavor": "f", "disk": 20},
+            "workers": {pool: {"count": 100, "flavor": "f", "disk": 20}},
+        })
+
+
 # ---------------------------------------------------------------------------
 # extension resolution
 # ---------------------------------------------------------------------------

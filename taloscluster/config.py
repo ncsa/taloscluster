@@ -929,7 +929,9 @@ def _validate(cfg: Config) -> None:
         _string_list(p.get("extensions"), f"pool '{pool_name}': extensions")
         _string_list(p.get("config_patches"), f"pool '{pool_name}': config_patches")
         _mapping(p.get("tags"), f"pool '{pool_name}': tags")
-        if len(f"{cfg.name}-{pool_name}-01") > 63:
+        # `count` gives the widest ordinal a pool can reach: 3 digits at 100+, so
+        # the -01 sentinel of a small pool would under-measure pools of 100+.
+        if len(f"{cfg.name}-{pool_name}-{count:02d}") > 63:
             raise ConfigError("cluster and pool names make a hostname longer than 63 characters")
 
     if not isinstance(cfg.cidr, str):

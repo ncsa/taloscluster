@@ -196,6 +196,28 @@ def test_plan_reports_missing_vm_without_mutating_proxmox(proxmox_cfg, capsys):
     assert all(method == "GET" for method, _path in client.calls)
 
 
+def test_plan_reports_firewall_for_a_new_vm(proxmox_cfg, capsys):
+    """A brand-new VM cannot be queried, so plan reports the full firewall it
+    would apply -- the DROP-in policy plus every desired ingress rule."""
+    client = FakeClient(_data())
+    backend = _backend(proxmox_cfg, client)
+    inventory = backend.load_inventory()
+    set_dry_run(True)
+
+    backend.reconcile_machines(
+        proxmox_cfg.machines,
+        inventory,
+        "isos:iso/talos.iso",
+        {},
+    )
+
+    output = capsys.readouterr().out
+    assert "configure firewall on testcluster-controlplane-02" in output
+    assert "policy" in output
+    assert "rules added" in output
+    assert all(method == "GET" for method, _path in client.calls)
+
+
 def test_cluster_memory_gb_converts_to_proxmox_api_mib():
     assert _memory_mib(8) == 8192
 
