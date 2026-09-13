@@ -1,15 +1,22 @@
-"""Tests for taloscluster.openstack.security: desired-rule construction and the
-``_rule_key`` normalizer that maps Neutron rule objects to comparable tuples.
+"""Tests for taloscluster.openstack.security: desired-rule construction, the
+``_rule_key`` normalizer that maps Neutron rule objects to comparable tuples,
+and the ``reconcile`` pass against a pre-populated rule set.
 
-No OpenStack connection is needed -- ``_desired_rules`` and ``_rule_key`` are
-pure functions over a :class:`Config` and a rule-like object.
+``_desired_rules`` and ``_rule_key`` are pure functions over a :class:`Config`
+and a rule-like object. ``reconcile`` drives a fake network API carrying a
+pre-populated rule set, so no OpenStack connection is needed.
 """
 
 from __future__ import annotations
 
 import types
 
-from taloscluster.openstack.security import SELF, _desired_rules, _rule_key
+import pytest
+
+from taloscluster import naming
+from taloscluster.openstack.security import SELF, _desired_rules, _rule_key, reconcile
+from taloscluster.openstack.session import Inventory
+from taloscluster.output import set_dry_run
 
 SG_ID = "sg-123"
 
@@ -84,6 +91,16 @@ def test_desired_rules_intra_sg_self_rules(make_config):
     assert ("udp", None, None, None, SELF) in rules
 
 
+def test_desired_rules_zero_cidr_host_normalizes_to_open(make_config):
+    # a host whose cidr is 0.0.0.0/0 must normalize to None, mirroring
+    # _rule_key, so it matches the existing null-form rule instead of being
+    # re-created (which would 409) on the next run.
+    cfg = make_config({"security": {"talos": {"any": "0.0.0.0/0"}}})
+    rules = _desired_rules(cfg)
+    assert ("tcp", 50000, 50000, None, None) in rules
+    assert ("tcp", 50000, 50000, "0.0.0.0/0", None) not in rules
+
+
 # ---------------------------------------------------------------------------
 # _rule_key normalizer
 # ---------------------------------------------------------------------------
@@ -119,10 +136,15 @@ def test_rule_key_remote_group_id_maps_to_self_sentinel():
     assert key == ("tcp", None, None, None, SELF)
 
 
-def test_rule_key_remote_group_id_unrelated_is_none():
+def test_rule_key_remote_group_id_unrelated_stays_distinct():
+    # A foreign remote group must not collapse to open-to-all (None): that
+    # would mask the real open rule on the same port and never delete the
+    # foreign rule. It stays its own id so it matches neither open nor SELF.
     r = _fake_rule(protocol="tcp", remote_group_id="other-sg")
     key = _rule_key(r, SG_ID)
-    assert key == ("tcp", None, None, None, None)
+    assert key == ("tcp", None, None, None, "other-sg")
+    assert key != ("tcp", None, None, None, None)
+    assert key != ("tcp", None, None, None, SELF)
 
 
 def test_rule_key_roundtrips_into_desired_rules(make_config):
@@ -199,3 +221,87 @@ def test_desired_rules_updating_a_host_replaces_its_rule(make_config):
     assert ("tcp", 50000, 50000, "10.0.0.0/24", None) in before
     assert ("tcp", 50000, 50000, "10.0.0.0/24", None) not in after
     assert ("tcp", 50000, 50000, "10.1.0.0/24", None) in after
+
+
+# ---------------------------------------------------------------------------
+# reconcile against a pre-populated rule set
+# ---------------------------------------------------------------------------
+
+class _FakeNetwork:
+    """A minimal Neutron network API that stores rules and records mutations."""
+
+    def __init__(self, rules: list):
+        self._store = list(rules)
+        self._seq = 1
+        self.created: list[dict] = []
+        self.deleted: list[str] = []
+
+    def security_group_rules(self, **kw) -> list:
+        return list(self._store)
+
+    def create_security_group_rule(self, **kwargs) -> None:
+        self.created.append(kwargs)
+        self._store.append(_fake_rule(
+            id=f"r{self._seq}",
+            protocol=kwargs.get("protocol"),
+            port_range_min=kwargs.get("port_range_min"),
+            port_range_max=kwargs.get("port_range_max"),
+            remote_ip_prefix=kwargs.get("remote_ip_prefix"),
+            remote_group_id=kwargs.get("remote_group_id"),
+        ))
+        self._seq += 1
+
+    def delete_security_group_rule(self, rule_id) -> None:
+        self.deleted.append(rule_id)
+        self._store[:] = [r for r in self._store if r.id != rule_id]
+
+
+def _reconcile(net, cfg, sg_id: str = SG_ID, cluster: str = "testcluster"):
+    """Run reconcile with the SG pre-populated in an Inventory over a fake net."""
+    conn = types.SimpleNamespace(network=net)
+    inv = Inventory(conn, cluster)
+    inv.put("security_groups",
+            types.SimpleNamespace(id=sg_id, name=naming.secgroup_name(cluster)))
+    reconcile(conn, cfg, inv)
+
+
+@pytest.fixture(autouse=True)
+def _no_dry_run():
+    set_dry_run(False)
+    yield
+    set_dry_run(False)
+
+
+def test_reconcile_creates_open_rule_and_removes_foreign_group_rule(make_config):
+    """An unrelated remote_group_id rule must not mask the real open rule: the
+    open rule is created and the foreign rule deleted, not left in place."""
+    cfg = make_config(SECURITY_OVERRIDES)
+    net = _FakeNetwork([
+        _fake_rule(id="r1", protocol="tcp", port_range_min=80, port_range_max=80,
+                   remote_group_id="other-sg"),
+    ])
+    _reconcile(net, cfg)
+    # the real open-to-all tcp/80 rule is created (previously never created)
+    assert any(
+        c.get("direction") == "ingress" and c.get("protocol") == "tcp"
+        and c.get("port_range_min") == 80 and c.get("port_range_max") == 80
+        and "remote_ip_prefix" not in c and "remote_group_id" not in c
+        for c in net.created
+    )
+    # the foreign remote-group rule is removed (previously never removed)
+    assert net.deleted == ["r1"]
+
+
+def test_reconcile_zero_cidr_host_is_idempotent_across_runs(make_config):
+    """A host cidr of 0.0.0.0/0 normalizes to the null-form rule, so a second
+    reconcile over the materialized rule set makes no changes (no 409)."""
+    cfg = make_config({"security": {"talos": {"any": "0.0.0.0/0"}}})
+    net = _FakeNetwork([_fake_rule(id="r0", protocol="tcp", port_range_min=50000,
+                                   port_range_max=50000)])
+    _reconcile(net, cfg)
+    assert net.created, "first run should create the missing rules"
+    # run again against the resulting rule set: nothing left to do
+    net2 = _FakeNetwork(net._store)
+    _reconcile(net2, cfg)
+    assert net2.created == []
+    assert net2.deleted == []

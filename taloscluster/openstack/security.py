@@ -25,8 +25,14 @@ from .tags import create_tagged
 
 # a normalized, hashable rule: (protocol, pmin, pmax, remote_ip, remote_group_ref)
 # remote_group_ref is the sentinel "@self" for intra-SG rules (resolved to the
-# sg id at create time), else None.
+# sg id at create time), None for open-to-all, or a foreign security-group id.
 SELF = "@self"
+
+
+def _normalize_cidr(cidr: str | None) -> str | None:
+    """Normalize the wildcard prefix to None so clouds that materialize the
+    default prefix don't flap add/delete against clouds that store null."""
+    return None if cidr == "0.0.0.0/0" else cidr
 
 
 def _desired_rules(cfg: Config) -> dict[tuple, str]:
@@ -37,7 +43,9 @@ def _desired_rules(cfg: Config) -> dict[tuple, str]:
         rules[("tcp", port, port, None, None)] = f"tcp/{port} open"
     for rule in cfg.security.values():
         for name, cidr in rule.hosts.items():
-            rules[("tcp", rule.port, rule.port, cidr, None)] = f"{rule.name} from {name}"
+            rules[("tcp", rule.port, rule.port, _normalize_cidr(cidr), None)] = (
+                f"{rule.name} from {name}"
+            )
     rules[("tcp", None, None, None, SELF)] = "intra-sg tcp"
     rules[("udp", None, None, None, SELF)] = "intra-sg udp"
     return rules
@@ -49,12 +57,10 @@ def _rule_key(r: Any, sg_id: str) -> tuple | None:
     ether = getattr(r, "ether_type", None) or getattr(r, "ethertype", None)
     if r.direction != "ingress" or ether != "IPv4":
         return None
-    remote_group = SELF if r.remote_group_id == sg_id else None
-    # normalize "0.0.0.0/0" to None so clouds that materialize the default
-    # prefix don't flap add/delete against clouds that store null
-    remote_ip = r.remote_ip_prefix
-    if remote_ip == "0.0.0.0/0":
-        remote_ip = None
+    # A remote group that is not this SG's own id must stay distinct: it is not
+    # open-to-all (None) nor intra-SG (SELF), so it cannot mask an open rule.
+    remote_group = SELF if r.remote_group_id == sg_id else r.remote_group_id
+    remote_ip = _normalize_cidr(r.remote_ip_prefix)
     return (
         r.protocol,
         r.port_range_min,
