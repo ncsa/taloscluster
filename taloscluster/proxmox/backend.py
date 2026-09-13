@@ -62,6 +62,9 @@ _FIREWALL_MARKER = "taloscluster: "
 _RESIZE_TAG = "taloscluster-pending-resize"
 # (proto, destination port or None, source CIDR or None)
 _FirewallKey = tuple[str, int | None, str | None]
+# How long to keep waiting for the SDN VNet bridge to appear on every node after
+# applying SDN. The apply task can return before each node's network reload finishes.
+_SDN_BRIDGE_DEADLINE = 60.0
 
 
 def _memory_mib(memory_gb: int) -> int:
@@ -829,6 +832,8 @@ class ProxmoxBackend:
             if (kind, str(item.get(id_key))) in ours
         )
         if not staged and not resumable:
+            if not dry_run():
+                self._verify_sdn_bridges()
             return
         action("apply SDN configuration")
         if dry_run():
@@ -873,11 +878,9 @@ class ProxmoxBackend:
         """The apply task can return before every node's network reload finishes."""
         assert self.sdn is not None
         vnet_id = self.sdn.name
-        missing: list[str] = []
-        for attempt in range(5):
-            if attempt:
-                time.sleep(2)
-            missing = []
+        deadline = time.monotonic() + _SDN_BRIDGE_DEADLINE
+        while True:
+            missing: list[str] = []
             for node in self._compute_nodes:
                 # the plain listing reads only /etc/network/interfaces; SDN
                 # bridges live in interfaces.d/sdn and need the bridge filter
@@ -893,6 +896,9 @@ class ProxmoxBackend:
                     missing.append(node)
             if not missing:
                 return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(5)
         raise ReconcileError(
             f"SDN bridge {vnet_id} is missing after apply on: " + ", ".join(missing)
         )

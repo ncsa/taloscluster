@@ -96,7 +96,7 @@ The preflight checks the following paths are `/` (`Pool.Allocate`), the ISO, cid
 
 ## Managed EVPN SDN
 
-Replace `bridge:` with an `sdn:` block under `proxmox.network.cluster` to have taloscluster create the private network itself: an EVPN zone, a VNet and an SNAT subnet from `network.cidr`, applied cluster-wide and verified as a bridge on every compute node. Every field is optional:
+Replace `bridge:` with an `sdn:` block under `proxmox.network.cluster` to have taloscluster create the private network itself: an EVPN zone, a VNet and an SNAT subnet from `network.cidr`, applied cluster-wide and verified as a bridge on every compute node. The bridge is re-verified on every converge and, because the apply task can return before each node's network reload finishes, converge keeps retrying for up to a minute before it reports a node that still lacks the bridge. Every field is optional:
 
 ```yaml
 proxmox:

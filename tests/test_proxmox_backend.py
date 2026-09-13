@@ -1196,6 +1196,57 @@ def test_sdn_second_converge_makes_no_mutations(sdn_cfg):
     assert client.mutations == []
 
 
+def test_sdn_converged_run_still_verifies_bridges(sdn_cfg):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    client = FakeClient(_sdn_converged_data(backend_probe.sdn))
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    # a no-mutation converge still checks the bridge exists on every node, so a
+    # missing bridge is caught before a VM is ever placed on that node
+    assert client.mutations == []
+    assert ("GET", "nodes/pve001/network") in client.calls
+    assert ("GET", "nodes/pve002/network") in client.calls
+
+
+def test_sdn_verify_bridges_raises_when_missing_on_a_node(sdn_cfg, monkeypatch):
+    monkeypatch.setattr("taloscluster.proxmox.backend._SDN_BRIDGE_DEADLINE", 0.0)
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data["nodes/pve002/network"] = []
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(
+        ReconcileError,
+        match="SDN bridge testc is missing after apply on: pve002",
+    ):
+        backend.reconcile_network(sdn_cfg.machines, inventory)
+
+
+def test_sdn_plan_on_converged_data_skips_bridge_verify(sdn_cfg, monkeypatch, capsys):
+    # a plan is read-only: on converged data with nothing staged it must not run
+    # the up-to-a-minute bridge retry loop, even when a bridge is missing
+    monkeypatch.setattr("taloscluster.proxmox.backend._SDN_BRIDGE_DEADLINE", 0.0)
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data["nodes/pve002/network"] = []
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+    set_dry_run(True)
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert client.mutations == []
+    assert ("GET", "nodes/pve001/network") not in client.calls
+    assert ("GET", "nodes/pve002/network") not in client.calls
+    assert "missing after apply" not in capsys.readouterr().out
+
+
 def test_sdn_plan_makes_only_reads(sdn_cfg, capsys):
     client = FakeClient(_sdn_data())
     backend = _backend(sdn_cfg, client)
@@ -1661,15 +1712,24 @@ def test_sdn_bridge_verify_retries_before_failing(sdn_cfg, monkeypatch):
     client = FakeClient(data)
     backend = _backend(sdn_cfg, client)
     inventory = backend.load_inventory()
-    sleeps: list[int] = []
+    now = [0.0]
+
+    def fake_sleep(_seconds: float) -> None:
+        now[0] += 5
+
     monkeypatch.setattr(
-        "taloscluster.proxmox.backend.time.sleep", lambda s: sleeps.append(s)
+        "taloscluster.proxmox.backend.time.sleep", fake_sleep
     )
+    monkeypatch.setattr(
+        "taloscluster.proxmox.backend.time.monotonic", lambda: now[0]
+    )
+    monkeypatch.setattr("taloscluster.proxmox.backend._SDN_BRIDGE_DEADLINE", 12.0)
 
     with pytest.raises(ReconcileError, match="missing after apply on: pve002"):
         backend.reconcile_network(sdn_cfg.machines, inventory)
 
-    assert len(sleeps) == 4  # the apply reload is async; retried before failing
+    # the apply reload is async, so the check retries until the deadline
+    assert now[0] >= 12.0
 
 
 def test_sdn_destroy_tolerates_missing_subnet_endpoint_on_pending_vnet(sdn_cfg):
