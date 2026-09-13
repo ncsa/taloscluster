@@ -123,13 +123,26 @@ class ProxmoxClient:
             status = self.get(path)
             if isinstance(status, dict) and status.get("status") == "stopped":
                 exit_status = status.get("exitstatus")
-                if exit_status != "OK":
+                if exit_status != "OK" and not _exit_status_indicates_warnings(
+                    exit_status
+                ):
                     raise ReconcileError(
                         f"Proxmox task {upid} failed: {exit_status or 'unknown status'}"
                     )
                 return
             time.sleep(self.poll_interval)
         raise TimeoutError(f"Proxmox task {upid} did not finish within {self.task_timeout}s")
+
+
+def _exit_status_indicates_warnings(exit_status: Any) -> bool:
+    # Proxmox reports a completed task that logged warnings as "WARNINGS: N".
+    # The mutation itself succeeded, so treat it as success rather than failing
+    # converge or destroy after the task already completed.
+    return (
+        isinstance(exit_status, str)
+        and exit_status.startswith("WARNINGS:")
+        and exit_status[len("WARNINGS:") :].strip().isdigit()
+    )
 
 
 def _error_detail(body: Any, fallback: str) -> str:

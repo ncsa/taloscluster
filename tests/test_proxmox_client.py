@@ -112,3 +112,36 @@ def test_failed_task_reports_exit_status():
 
     with pytest.raises(ReconcileError, match="ERROR"):
         client.mutate("POST", "nodes/pve001/qemu")
+
+
+def test_warnings_exit_status_is_treated_as_success():
+    upid = "UPID:pve001:1:2:3:qmcreate:800:user@pve:"
+    session = Session(
+        [
+            Response(200, upid),
+            Response(200, {"status": "stopped", "exitstatus": "WARNINGS: 3"}),
+        ]
+    )
+    client = ProxmoxClient(
+        "https://pve", "id", "secret", session=session, poll_interval=0
+    )
+
+    client.mutate("POST", "nodes/pve001/qemu")
+
+    assert len(session.calls) == 2
+
+
+def test_malformed_warnings_exit_status_is_still_a_failure():
+    upid = "UPID:pve001:1:2:3:qmcreate:800:user@pve:"
+    session = Session(
+        [
+            Response(200, upid),
+            Response(200, {"status": "stopped", "exitstatus": "WARNINGS: nope"}),
+        ]
+    )
+    client = ProxmoxClient(
+        "https://pve", "id", "secret", session=session, poll_interval=0
+    )
+
+    with pytest.raises(ReconcileError, match="WARNINGS: nope"):
+        client.mutate("POST", "nodes/pve001/qemu")
