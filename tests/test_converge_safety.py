@@ -233,6 +233,88 @@ def test_scale_down_aborts_when_no_address_and_status_unknown(monkeypatch):
     assert mutations == []
 
 
+def test_scale_down_aborts_addressless_control_plane_when_still_a_member(monkeypatch, tmp_path):
+    """An addressless NotReady control plane that is still registered as a talos
+    etcd member must abort, not delete the VM: NotReady does not prove it left
+    etcd, so deleting would bypass the reset-failure protection."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
+    monkeypatch.setattr(
+        converge.kubectl, "node_names", lambda _kc: ["testcluster-controlplane-03"]
+    )
+    monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: False)
+    monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
+    # the failed-reset node is still an (unreachable) etcd member
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses",
+        lambda *_a, **_k: {"testcluster-controlplane-03": ""},
+    )
+
+    with pytest.raises(ReconcileError, match="not established"):
+        converge._scale_down(
+            FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
+            talosconfig, Path("kubeconfig"), assume_yes=True,
+        )
+
+    assert mutations == []
+
+
+def test_scale_down_aborts_addressless_control_plane_when_discovery_empty(monkeypatch):
+    """Without a member list we cannot positively establish that an addressless
+    control plane left etcd, so relying on NotReady alone must abort."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    monkeypatch.setattr(
+        converge.kubectl, "node_names", lambda _kc: ["testcluster-controlplane-03"]
+    )
+    monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: False)
+    monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
+
+    with pytest.raises(ReconcileError, match="not established"):
+        converge._scale_down(
+            FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
+            Path("talosconfig"), Path("kubeconfig"), assume_yes=True,
+        )
+
+    assert mutations == []
+
+
+def test_scale_down_deletes_addressless_control_plane_when_removal_established(
+    monkeypatch, tmp_path
+):
+    """An addressless NotReady control plane whose node is confirmed absent from
+    the member list has positively left etcd and can be deleted."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
+    monkeypatch.setattr(
+        converge.kubectl, "node_names", lambda _kc: ["testcluster-controlplane-03"]
+    )
+    monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: False)
+    monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
+    # discovery works and the removed node is not among the current members
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses",
+        lambda *_a, **_k: {"testcluster-controlplane-02": "192.0.2.2"},
+    )
+
+    converge._scale_down(
+        FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
+        talosconfig, Path("kubeconfig"), assume_yes=True,
+    )
+
+    assert mutations == ["delete", "compute"]
+
+
 def _cp_inventory(*names):
     return InfrastructureInventory(
         machines={

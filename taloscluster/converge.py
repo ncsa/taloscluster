@@ -895,6 +895,18 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
                     f"no address for {node} but node is {'Ready' if ready else 'unknown'} in k8s; "
                     "aborting -- may be a discovery failure, not a reset node"
                 )
+            # NotReady alone does not prove a control plane left etcd: a failed
+            # or timed-out reset leaves a dead member, and deleting the VM would
+            # bypass the reset-failure protection. Require positive proof the
+            # member left: discovery returned a member list AND this node is
+            # absent from it. Otherwise abort and keep the VM.
+            if is_cp and (not discovered or node in discovered):
+                raise ReconcileError(
+                    f"no address for control plane {node} and membership removal is not "
+                    f"established (node still a talos etcd member, or discovery "
+                    f"returned no member list); NotReady does not prove it left etcd, "
+                    "aborting rather than delete a member that could cost quorum"
+                )
             warn(f"no address for {node} (node is NotReady, likely already reset); deleting")
         kubectl.delete_node(kubeconfig, node)
         backend.delete_machine(node, inv)
