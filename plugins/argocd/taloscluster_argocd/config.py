@@ -212,6 +212,23 @@ _MAPPING_KEYS = {
     "git", "infra", "metallb", "ingress", "sealedsecrets", "certmanager",
     "cinder", "nfs", "monitoring",
 }
+#: Keys each `argocd.<app>` per-app section accepts. Anything outside this set
+#: is a typo or an unsupported override and is refused rather than silently
+#: dropped.
+_PER_APP_KEYS = {
+    "metallb": {"enabled", "version"},
+    "sealedsecrets": {"enabled", "version"},
+    "certmanager": {"enabled", "version", "email"},
+    "cinder": {"enabled", "version"},
+    "ingress": {"enabled", "class", "traefik", "version"},
+    "nfs": {"enabled", "servers", "version"},
+    "monitoring": {"enabled", "version"},
+}
+#: Apps whose `version:` is forwarded to the rendered chart. Setting `version`
+#: on any other app (`ingress`, `nfs`, `monitoring`) is silently ignored by the
+#: renderer today, so it is refused here instead; Traefik's pin lives at
+#: `argocd.ingress.traefik.version`.
+_VERSION_FORWARDED = {"metallb", "sealedsecrets", "certmanager", "cinder"}
 
 
 def validate_argocd(root: Path) -> None:
@@ -223,6 +240,8 @@ def validate_argocd(root: Path) -> None:
       - a non-mapping `argocd:` or sub-section (malformed settings),
       - a top-level `argocd:` key the plugin does not understand (unsupported
         options),
+      - an unsupported key inside a per-app section (a typo or a `version`
+        override the renderer would silently ignore),
       - only one of `git.url` / `infra.url` set (missing paired repository URLs),
       - git credentials in secrets.yaml without `git.url` (credentials without a
         Git URL).
@@ -249,6 +268,64 @@ def validate_argocd(root: Path) -> None:
     for key in sorted(_MAPPING_KEYS & set(clan)):
         if not isinstance(clan[key], dict):
             raise ConfigError(f"{where} (argocd.{key}) must be a YAML mapping")
+
+    # each per-app section: refuse a misspelled or unsupported key, refuse a
+    # `version` override the renderer would silently ignore, and require a
+    # forwarded version to be a non-empty string.
+    for app, allowed in _PER_APP_KEYS.items():
+        section = clan.get(app)
+        if not isinstance(section, dict):
+            continue
+        unknown = sorted(set(section) - allowed)
+        if unknown:
+            raise ConfigError(
+                f"{where} (argocd.{app}): unsupported key(s): {', '.join(unknown)}"
+            )
+        if "version" in section and app not in _VERSION_FORWARDED:
+            raise ConfigError(
+                f"{where} (argocd.{app}.version): the plugin does not forward a "
+                "chart version for this app; set version under argocd.metallb, "
+                "argocd.sealedsecrets, argocd.certmanager, argocd.cinder, or "
+                "argocd.ingress.traefik, or remove the key"
+            )
+        if app in _VERSION_FORWARDED and "version" in section:
+            v = section["version"]
+            if not isinstance(v, str) or not v.strip():
+                raise ConfigError(
+                    f"{where} (argocd.{app}.version) must be a non-empty string"
+                )
+
+    ingress = clan.get("ingress")
+    if isinstance(ingress, dict):
+        traefik = ingress.get("traefik")
+        if traefik is not None:
+            if not isinstance(traefik, dict):
+                raise ConfigError(
+                    f"{where} (argocd.ingress.traefik) must be a YAML mapping"
+                )
+            unknown = sorted(set(traefik) - {"version"})
+            if unknown:
+                raise ConfigError(
+                    f"{where} (argocd.ingress.traefik): unsupported key(s): "
+                    f"{', '.join(unknown)}"
+                )
+            if "version" in traefik and (
+                not isinstance(traefik["version"], str) or not traefik["version"].strip()
+            ):
+                raise ConfigError(
+                    f"{where} (argocd.ingress.traefik.version) must be a non-empty string"
+                )
+
+    nfs = clan.get("nfs")
+    if isinstance(nfs, dict):
+        servers = nfs.get("servers")
+        if servers is not None:
+            if not isinstance(servers, dict) or any(
+                not isinstance(s, dict) for s in servers.values()
+            ):
+                raise ConfigError(
+                    f"{where} (argocd.nfs.servers) must map server names to mappings"
+                )
 
     git = clan.get("git") or {}
     infra = clan.get("infra") or {}

@@ -122,3 +122,91 @@ def test_unsupported_top_level_option_rejected(tmp_path, key):
                                      key: "x"})
     with pytest.raises(ConfigError, match=f"unsupported option.*{key}"):
         validate_argocd(tmp_path)
+
+
+# ---- per-app keys and version overrides ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        {"metallb": {"enabled": True, "verson": "1.2"}},
+        {"certmanager": {"enabled": True, "emial": "admin@example.edu"}},
+        {"monitoring": {"enabled": True, "scrapeInterval": "30s"}},
+    ],
+)
+def test_misspelled_per_app_key_rejected(tmp_path, section):
+    _write(tmp_path, argocd_cluster=section)
+    with pytest.raises(ConfigError, match="unsupported key"):
+        validate_argocd(tmp_path)
+
+
+@pytest.mark.parametrize("app", ["ingress", "nfs", "monitoring"])
+def test_version_on_an_app_that_does_not_forward_it_is_rejected(tmp_path, app):
+    _write(tmp_path, argocd_cluster={app: {"enabled": True, "version": "9.9"}})
+    with pytest.raises(ConfigError, match=f"argocd\\.{app}\\.version.*does not forward"):
+        validate_argocd(tmp_path)
+
+
+@pytest.mark.parametrize("app", ["metallb", "sealedsecrets", "certmanager", "cinder"])
+def test_forwarded_version_is_accepted(tmp_path, app):
+    _write(tmp_path, argocd_cluster={app: {"enabled": True, "version": "34.0.0"}})
+    _ok(tmp_path)
+
+
+@pytest.mark.parametrize("bad", [34.0, 34, "", "   "])
+def test_forwarded_version_must_be_a_nonempty_string(tmp_path, bad):
+    _write(tmp_path, argocd_cluster={"metallb": {"enabled": True, "version": bad}})
+    with pytest.raises(ConfigError, match="argocd\\.metallb\\.version.*non-empty string"):
+        validate_argocd(tmp_path)
+
+
+def test_ingress_traefik_version_is_accepted(tmp_path):
+    _write(tmp_path, argocd_cluster={
+        "ingress": {"enabled": True, "class": "traefik", "traefik": {"version": "34.0.0"}}})
+    _ok(tmp_path)
+
+
+def test_ingress_traefik_misspelled_key_rejected(tmp_path):
+    _write(tmp_path, argocd_cluster={
+        "ingress": {"enabled": True, "traefik": {"verson": "34.0.0"}}})
+    with pytest.raises(ConfigError, match="argocd\\.ingress\\.traefik.*unsupported key"):
+        validate_argocd(tmp_path)
+
+
+def test_ingress_traefik_must_be_a_mapping(tmp_path):
+    _write(tmp_path, argocd_cluster={"ingress": {"enabled": True, "traefik": "34.0.0"}})
+    with pytest.raises(ConfigError, match="argocd\\.ingress\\.traefik.*YAML mapping"):
+        validate_argocd(tmp_path)
+
+
+def test_nfs_version_is_rejected(tmp_path):
+    _write(tmp_path, argocd_cluster={"nfs": {"enabled": True, "servers": {}, "version": "1"}})
+    with pytest.raises(ConfigError, match="argocd\\.nfs\\.version.*does not forward"):
+        validate_argocd(tmp_path)
+
+
+def test_nfs_servers_must_map_names_to_mappings(tmp_path):
+    _write(tmp_path, argocd_cluster={"nfs": {"enabled": True, "servers": "nfs.example.edu"}})
+    with pytest.raises(ConfigError, match="argocd\\.nfs\\.servers.*map server names to mappings"):
+        validate_argocd(tmp_path)
+
+
+def test_nfs_servers_verbatim_chart_keys_are_accepted(tmp_path):
+    _write(tmp_path, argocd_cluster={"nfs": {"enabled": True, "servers": {
+        "shared": {"server": "nfs.example.edu", "path": "/exports/x", "defaultClass": True}}}})
+    _ok(tmp_path)
+
+
+def test_valid_full_config_with_versions_passes(tmp_path):
+    _write(
+        tmp_path,
+        argocd_cluster={"git": {"url": "https://git.example.com/cluster.git"},
+                        "infra": {"url": "https://git.example.com/infra.git"},
+                        "metallb": {"enabled": True, "version": "34.0.0"},
+                        "ingress": {"enabled": True, "traefik": {"version": "28.0.0"}},
+                        "certmanager": {"email": "admin@example.edu", "version": "1.14.0"},
+                        "nfs": {"enabled": True, "servers": {"shared": {"path": "/e"}}}},
+        argocd_secrets={"kubeconfig": "../argocd-kubeconfig"},
+    )
+    _ok(tmp_path)

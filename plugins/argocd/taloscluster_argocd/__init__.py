@@ -33,6 +33,11 @@ except PackageNotFoundError:  # source tree imported without installing the pack
 # installed -- this is an ordering wish, not a dependency.
 AFTER: tuple[str, ...] = ("rancher",)
 
+# Top-level cluster.yaml / secrets.yaml keys this plugin owns. Core retains them
+# as valid config keys when this plugin is installed, so an argocd: section is
+# not reported as an unknown top-level key.
+CONFIG_SECTIONS: tuple[str, ...] = ("argocd",)
+
 CLUSTER_SCAFFOLD = """\
 # ArgoCD project access uses full email addresses.
 argocd:
@@ -72,7 +77,8 @@ def validate(root: Path, ctx: Context) -> None:
 
     Runs in core's converge validate phase, before any cluster mutation, so a
     broken `argocd:` section (paired repository URLs, git credentials without a
-    Git URL, a non-mapping section, or an unsupported option) stops the run while
+    Git URL, a non-mapping section, an unsupported top-level or per-app option,
+    or a chart `version` the plugin would silently ignore) stops the run while
     the cluster is still untouched instead of failing the late plugin hooks.
     """
     validate_argocd(root)

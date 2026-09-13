@@ -1,6 +1,6 @@
 # Configuration
 
-A cluster directory holds two files that taloscluster reads together. `cluster.yaml` describes the desired state and is safe to commit. `secrets.yaml` holds credentials and is gitignored. `taloscluster init [--openstack|--proxmox] NAME` scaffolds both, and the core loader validates required fields and supported values. Unknown keys are not generally rejected, and plugins read their own sections when their hooks run; a successful core validation does not validate every plugin setting.
+A cluster directory holds two files that taloscluster reads together. `cluster.yaml` describes the desired state and is safe to commit. `secrets.yaml` holds credentials and is gitignored. `taloscluster init [--openstack|--proxmox] NAME` scaffolds both, and the core loader validates required fields and supported values. A top-level key neither core nor an installed plugin owns is refused — a misspelled or unsupported section is caught instead of silently ignored. Sections owned by an installed plugin (e.g. `argocd`, `rancher`) are retained as valid; each plugin validates the keys inside its own section when its hooks run, so a successful core validation does not validate every plugin setting.
 
 All example addresses and hostnames in these pages are placeholders (RFC 5737 documentation ranges and `example.edu`).
 

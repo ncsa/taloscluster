@@ -32,6 +32,10 @@ except PackageNotFoundError:  # source tree imported without installing the pack
 # declares AFTER = ("rancher",)
 AFTER: tuple[str, ...] = ()
 
+# Top-level cluster.yaml / secrets.yaml keys this plugin owns. Core retains them
+# as valid config keys when this plugin is installed.
+CONFIG_SECTIONS: tuple[str, ...] = ("rancher",)
+
 CLUSTER_SCAFFOLD = """\
 # Rancher membership uses usernames/netids.
 rancher:

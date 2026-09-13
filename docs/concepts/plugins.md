@@ -56,6 +56,7 @@ The named module implements as much of the protocol as it has. Only `configured`
 
 ```python
 AFTER: tuple[str, ...] = ("rancher",)     # run after these, if they are installed
+CONFIG_SECTIONS: tuple[str, ...] = ("myplugin",)  # top-level config keys this plugin owns
 
 def init(root) -> None: ...               # scaffold missing config sections
 def validate(root, ctx) -> None: ...      # raise ConfigError on bad config
@@ -65,6 +66,8 @@ def destroy(ctx, assume_yes=False) -> None: ...
 def status(ctx) -> dict: ...              # rendered by core, text or yaml
 def check(ctx) -> dict: ...               # must carry "ok": bool
 ```
+
+`CONFIG_SECTIONS` lists the top-level `cluster.yaml` / `secrets.yaml` keys the plugin owns. Core's loader retains those keys as valid even though it does not parse them, so an installed plugin's section is not mistaken for a misspelled or unsupported top-level key; a plugin that omits it contributes nothing, and the plugin is free to validate the keys inside its own section in `validate`.
 
 `ctx` is a `Context` carrying what taloscluster already knows, so a plugin never re-derives it: `ctx.root`, `ctx.cfg` (the parsed `cluster.yaml`), `ctx.kubeconfig` / `ctx.talosconfig`, and `ctx.infrastructure` / `ctx.openstack` / `ctx.kubernetes` / `ctx.ingress` (url, region, project; floating ips and VIPs). During a converge these are already in hand, so reading them costs nothing.
 

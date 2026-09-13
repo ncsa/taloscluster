@@ -931,3 +931,45 @@ def test_proxmox_sdn_vip_inside_a_worker_pool_block_is_rejected(make_config):
     overrides["proxmox"]["network"]["cluster"]["kubeapi_vip"] = "192.168.0.65"
     with pytest.raises(ConfigError, match="sits inside the SDN static address layout"):
         make_config(overrides, remove=("openstack",))
+
+
+# ---------------------------------------------------------------------------
+# top-level key validation (misspelled / unsupported keys, plugin sections)
+# ---------------------------------------------------------------------------
+
+def test_unknown_top_level_cluster_key_is_rejected(make_config):
+    with pytest.raises(ConfigError, match=r"unknown key\(s\): clustrer"):
+        make_config({"clustrer": "oops"})
+
+
+def test_unknown_top_level_cluster_key_lists_every_unknown(make_config):
+    with pytest.raises(ConfigError, match=r"unknown key\(s\): anemia, mistkes"):
+        make_config({"anemia": 1, "mistkes": 2})
+
+
+def test_installed_plugin_sections_are_retained(make_config):
+    """An `argocd:` / `rancher:` section is valid because the plugin owns it."""
+    cfg = make_config({"argocd": {"admins": [], "users": []},
+                       "rancher": {"admins": [], "users": []}})
+    assert cfg.raw["argocd"]["admins"] == []
+
+
+def test_unknown_top_level_secrets_key_is_rejected(tmp_path):
+    _write_provider_files(
+        tmp_path,
+        {"proxmox": {"url": "https://pve.example"}},
+        {"proxmox": {"token_id": "a", "token_secret": "b"}, "taliscla": {"auth_key": "x"}},
+    )
+    with pytest.raises(ConfigError, match=r"unknown key\(s\): taliscla"):
+        load_secrets(tmp_path)
+
+
+def test_unknown_top_level_secrets_plugin_key_still_rejected(tmp_path):
+    """A section that no installed plugin owns is unknown, not a valid retention."""
+    _write_provider_files(
+        tmp_path,
+        {"proxmox": {"url": "https://pve.example"}},
+        {"proxmox": {"token_id": "a", "token_secret": "b"}, "gitlab": {"url": "x"}},
+    )
+    with pytest.raises(ConfigError, match=r"unknown key\(s\): gitlab"):
+        load_secrets(tmp_path)

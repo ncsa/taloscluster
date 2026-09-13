@@ -25,6 +25,16 @@ from .naming import BASE_EXTENSIONS
 CLUSTER_FILE = "cluster.yaml"
 SECRETS_FILE = "secrets.yaml"
 
+# Top-level `cluster.yaml` keys taloscluster understands itself. Plugin-owned
+# sections (e.g. `argocd:`, `rancher:`) are added from each installed plugin's
+# CONFIG_SECTIONS, and `openstack`/`proxmox` is the one selected provider.
+_CLUSTER_KEYS = {
+    "name", "tags", "talos", "kubernetes", "controlplane", "workers",
+    "network", "security", "tailscale", "openstack", "proxmox",
+}
+# Top-level `secrets.yaml` keys taloscluster reads (plus plugin sections).
+_SECRETS_KEYS = {"tailscale", "openstack", "proxmox"}
+
 _NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 # Oldest Talos release the generated machine configuration targets: the
 # multi-document network kinds (LinkConfig, DHCPv4Config, Layer2VIPConfig,
@@ -361,6 +371,31 @@ def read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _plugin_config_sections() -> set[str]:
+    """Top-level keys owned by installed plugins (e.g. a plugin's `argocd:`).
+
+    Imported lazily because plugins import this module (plugins -> context ->
+    config forms an import cycle). A plugin that does not declare its sections
+    contributes nothing, so a bare core install accepts only the core keys below.
+    """
+    from . import plugins  # deferred to break plugins -> context -> config
+
+    sections: set[str] = set()
+    for plugin in plugins.discover():
+        for name in getattr(plugin.module, "CONFIG_SECTIONS", ()) or ():
+            sections.add(name)
+    return sections
+
+
+def _reject_unknown_keys(data: dict[str, Any], where: str, known: set[str]) -> None:
+    unknown = sorted(set(data) - known)
+    if unknown:
+        raise ConfigError(
+            f"{where}: unknown key(s): {', '.join(unknown)}; "
+            "taloscluster does not use them"
+        )
+
+
 def require(d: dict[str, Any], *keys: str, where: str) -> Any:
     cur: Any = d
     for k in keys:
@@ -469,6 +504,7 @@ def _provider_config(d: dict[str, Any], where: str) -> ProviderConfig:
 def load_config(root: Path) -> Config:
     d = read_yaml(root / CLUSTER_FILE)
     where = CLUSTER_FILE
+    _reject_unknown_keys(d, where, _CLUSTER_KEYS | _plugin_config_sections())
 
     talos = _mapping(d.get("talos"), f"{where}: talos")
     controlplane = _mapping(require(d, "controlplane", where=where),
@@ -506,6 +542,7 @@ def load_config(root: Path) -> Config:
 def load_secrets(root: Path) -> Secrets:
     d = read_yaml(root / SECRETS_FILE)
     where = SECRETS_FILE
+    _reject_unknown_keys(d, where, _SECRETS_KEYS | _plugin_config_sections())
     cluster = read_yaml(root / CLUSTER_FILE)
     selected = [name for name in ("openstack", "proxmox") if name in cluster]
     if len(selected) != 1:

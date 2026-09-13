@@ -65,7 +65,7 @@ Required when `argocd.git.url` is set · URL
 
 The repository whose `charts/apps` chart is the app-of-apps the cluster Application points at. NCSA's is [ncsa/radiant-cluster](https://github.com/ncsa/radiant-cluster/tree/main/charts/apps).
 
-Converge validates the `argocd:` section before any cluster change: setting only one of `git.url` / `infra.url`, specifying git credentials without `git.url`, a non-mapping `argocd:` sub-section, or a top-level `argocd:` option the plugin does not understand is refused in the validate phase while the cluster is still untouched. `taloscluster plan` reports the same rejections before anything is attempted.
+Converge validates the `argocd:` section before any cluster change: setting only one of `git.url` / `infra.url`, specifying git credentials without `git.url`, a non-mapping `argocd:` sub-section, a top-level `argocd:` option the plugin does not understand, an unknown key inside a per-app section, or a chart `version` the plugin would silently ignore is refused in the validate phase while the cluster is still untouched. `taloscluster plan` reports the same rejections before anything is attempted.
 
 ### `argocd.sync`
 
@@ -83,7 +83,7 @@ Enable automated sync, pruning, and self-healing on the two parent Applications 
 
 Optional · mapping each
 
-`metallb`, `ingress`, `sealedsecrets`, `certmanager`, `cinder`, `nfs` and `monitoring` each accept `enabled: true` to turn the app on. The plugin forwards `version` for `metallb`, `sealedsecrets`, `certmanager`, and `cinder`; Traefik uses `ingress.traefik.version`. It does not forward `ingress.version`, `nfs.version`, or `monitoring.version`. When a supported version key is absent, the chart default is kept. A few apps take extra keys:
+`metallb`, `ingress`, `sealedsecrets`, `certmanager`, `cinder`, `nfs` and `monitoring` each accept `enabled: true` to turn the app on. The plugin forwards `version` for `metallb`, `sealedsecrets`, `certmanager`, and `cinder`; Traefik uses `ingress.traefik.version`. It does not forward `ingress.version`, `nfs.version`, or `monitoring.version` — setting one of those is refused during validation rather than silently ignored; pin those charts under `ingress.traefik.version` instead. When a supported version key is absent, the chart default is kept. Each per-app section is validated: an unknown key inside one (a typo or an unsupported override) is refused, and a forwarded `version` must be a non-empty string. A few apps take extra keys:
 
 - **`ingress.class`**: ingress class name, default `traefik`. Also used as the cert-manager solver class.
 - **`ingress.traefik.version`**: pins the Traefik chart.
