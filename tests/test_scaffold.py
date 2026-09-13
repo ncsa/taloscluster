@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from taloscluster import plugins
-from taloscluster.config import load_config, load_secrets
+from taloscluster.config import ConfigError, load_config, load_secrets
 from taloscluster.scaffold import GITIGNORE_ENTRIES, init
 
 
@@ -87,7 +87,10 @@ def test_proxmox_templates_are_valid_and_provider_specific(tmp_path):
     assert "openstack" not in secrets
     assert secrets["proxmox"].keys() >= {"token_id", "token_secret"}
     assert load_config(tmp_path).provider_name == "proxmox"
-    assert load_secrets(tmp_path).provider.token_secret == "CHANGE-ME"
+    # the scaffolded placeholder must be replaced before the secrets load
+    assert secrets["proxmox"]["token_secret"] == "CHANGE-ME"
+    with pytest.raises(ConfigError, match="CHANGE-ME"):
+        load_secrets(tmp_path)
 
 
 def test_openstack_templates_remain_the_default(tmp_path):
@@ -97,7 +100,10 @@ def test_openstack_templates_remain_the_default(tmp_path):
     assert "openstack" in cluster and "proxmox" not in cluster
     assert "openstack" in secrets and "proxmox" not in secrets
     assert load_config(tmp_path).provider_name == "openstack"
-    assert load_secrets(tmp_path).provider.credential_id == "CHANGE-ME"
+    # the scaffolded placeholder must be replaced before the secrets load
+    assert secrets["openstack"]["credential_id"] == "CHANGE-ME"
+    with pytest.raises(ConfigError, match="CHANGE-ME"):
+        load_secrets(tmp_path)
 
 
 def test_init_never_overwrites_existing_files(tmp_path):

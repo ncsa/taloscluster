@@ -34,4 +34,4 @@ tailscale:
 
 Optional · string
 
-A reusable, ideally ephemeral, pre-auth key every node registers with. Omit it to leave the extension idle. Use a valid key when registering new or recreated nodes; an ephemeral node setting does not make an expired or single-use key reusable. The value is redacted from the machine-config diff that `plan` prints.
+A reusable, ideally ephemeral, pre-auth key every node registers with. Omit it (or leave it `null`) to leave the extension idle. Use a valid key when registering new or recreated nodes; an ephemeral node setting does not make an expired or single-use key reusable. A non-string, empty, or still-scaffolded `CHANGE-ME` value is refused at secrets load time. The value is redacted from the machine-config diff that `plan` prints.

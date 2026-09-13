@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Fix Rancher API error messages: a string `message` in the error body is preserved whole instead of joined character by character, and list-form messages and `errors` entries are joined with `; `.
+- Refuse a null, non-string, empty, or still-scaffolded `CHANGE-ME` value for the provider credentials and the Tailscale auth key at secrets load time, instead of letting them fail later as an opaque 401.
 - Re-verify the managed SDN bridge on every converge (not just after an apply) and wait up to a minute for it to appear, so a missing bridge on a node is reported before a VM is ever placed there.
 - Remember a Proxmox disk grow until the node reboots, so a converge without `--reboot` that grows a disk is followed by one with `--reboot` that still finds and restarts the node (the grow is tagged on the VM and cleared on its Proxmox reboot).
 - Accept a Proxmox task that finishes with `WARNINGS: N` as success, so converge and destroy no longer abort after a mutation that already succeeded; only a genuine non-`OK` failure is raised.

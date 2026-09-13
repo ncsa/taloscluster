@@ -781,6 +781,115 @@ def test_secrets_provider_must_match_cluster_provider(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# secrets value validation (null, non-string, CHANGE-ME placeholders)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("secrets", "message"),
+    [
+        # null / non-string credential values
+        ({"openstack": {"credential_id": None, "credential_secret": "secret"}},
+         "credential_id must be a non-empty string"),
+        ({"openstack": {"credential_id": 123, "credential_secret": "secret"}},
+         "credential_id must be a non-empty string"),
+        ({"openstack": {"credential_id": "id", "credential_secret": None}},
+         "credential_secret must be a non-empty string"),
+        ({"openstack": {"credential_id": "id", "credential_secret": []}},
+         "credential_secret must be a non-empty string"),
+        ({"openstack": {"credential_id": "id", "credential_secret": ""}},
+         "credential_secret must be a non-empty string"),
+        # scaffolded CHANGE-ME placeholders
+        ({"openstack": {"credential_id": "CHANGE-ME", "credential_secret": "secret"}},
+         "CHANGE-ME"),
+        ({"openstack": {"credential_id": "id", "credential_secret": "CHANGE-ME"}},
+         "CHANGE-ME"),
+    ],
+)
+def test_openstack_secrets_reject_invalid_values(tmp_path, secrets, message):
+    _write_provider_files(
+        tmp_path,
+        {"openstack": {"url": "https://example.com/v3",
+                       "availability_zone": "nova", "external_net": "public"}},
+        secrets,
+    )
+    with pytest.raises(ConfigError, match=message):
+        load_secrets(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("secrets", "message"),
+    [
+        ({"proxmox": {"token_id": None, "token_secret": "secret"}},
+         "token_id must be a non-empty string"),
+        ({"proxmox": {"token_id": "u@pve!t", "token_secret": 42}},
+         "token_secret must be a non-empty string"),
+        ({"proxmox": {"token_id": "u@pve!t", "token_secret": "CHANGE-ME"}},
+         "CHANGE-ME"),
+    ],
+)
+def test_proxmox_secrets_reject_invalid_values(tmp_path, secrets, message):
+    _write_provider_files(
+        tmp_path,
+        {"proxmox": {"url": "https://pve.example"}},
+        secrets,
+    )
+    with pytest.raises(ConfigError, match=message):
+        load_secrets(tmp_path)
+
+
+def test_tailscale_auth_key_may_be_omitted(tmp_path):
+    """An absent tailscale.auth_key leaves the tailscale extension idle."""
+    _write_provider_files(
+        tmp_path,
+        {"proxmox": {"url": "https://pve.example"}},
+        {"proxmox": {"token_id": "u@pve!t", "token_secret": "secret"}},
+    )
+    secrets = load_secrets(tmp_path)
+    assert secrets.tailscale_auth_key is None
+
+
+def test_tailscale_auth_key_none_is_allowed(tmp_path):
+    _write_provider_files(
+        tmp_path,
+        {"proxmox": {"url": "https://pve.example"}},
+        {"proxmox": {"token_id": "u@pve!t", "token_secret": "secret"},
+         "tailscale": {"auth_key": None}},
+    )
+    assert load_secrets(tmp_path).tailscale_auth_key is None
+
+
+def test_tailscale_auth_key_rejects_non_string_and_placeholder(tmp_path):
+    cluster = {"proxmox": {"url": "https://pve.example"}}
+    for bad, message in (
+        ({"auth_key": 42}, "tailscale.auth_key must be a non-empty string"),
+        ({"auth_key": "CHANGE-ME"}, "CHANGE-ME"),
+        ({"auth_key": ""}, "tailscale.auth_key must be a non-empty string"),
+    ):
+        _write_provider_files(
+            tmp_path,
+            cluster,
+            {"proxmox": {"token_id": "u@pve!t", "token_secret": "secret"},
+             "tailscale": bad},
+        )
+        with pytest.raises(ConfigError, match=message):
+            load_secrets(tmp_path)
+
+
+def test_valid_real_secrets_load(tmp_path):
+    _write_provider_files(
+        tmp_path,
+        {"openstack": {"url": "https://example.com/v3",
+                       "availability_zone": "nova", "external_net": "public"}},
+        {"openstack": {"credential_id": "real-id", "credential_secret": "real-secret"},
+         "tailscale": {"auth_key": "tskey-auth-abc123"}},
+    )
+    secrets = load_secrets(tmp_path)
+    assert secrets.provider.credential_id == "real-id"
+    assert secrets.provider.credential_secret == "real-secret"
+    assert secrets.tailscale_auth_key == "tskey-auth-abc123"
+
+
+# ---------------------------------------------------------------------------
 # security rules
 # ---------------------------------------------------------------------------
 

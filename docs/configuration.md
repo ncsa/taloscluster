@@ -70,7 +70,7 @@ security:
 
 ## secrets.yaml
 
-Never commit this file. `taloscluster init` writes it with mode 0600 and adds it to `.gitignore`. The provider block must match the provider chosen in `cluster.yaml`, and the other provider's block may not be present.
+Never commit this file. `taloscluster init` writes it with mode 0600 and adds it to `.gitignore`. The provider block must match the provider chosen in `cluster.yaml`, and the other provider's block may not be present. Each credential value must be a real, non-empty string: a null, non-string, or still-scaffolded `CHANGE-ME` placeholder is refused at secrets load time (see `init` and the provider/Tailscale pages) instead of failing later as an opaque 401.
 
 | Key | Required | What it is | Details |
 | --- | --- | --- | --- |

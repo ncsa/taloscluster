@@ -36,6 +36,10 @@ _CLUSTER_KEYS = {
 _SECRETS_KEYS = {"tailscale", "openstack", "proxmox"}
 
 _NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+# `taloscluster init` scaffolds this placeholder into secrets.yaml; leaving it
+# in place must not survive loading, or the provider client fails deep in an
+# opaque 401 instead of at configuration time.
+SECRET_PLACEHOLDER = "CHANGE-ME"
 # Oldest Talos release the generated machine configuration targets: the
 # multi-document network kinds (LinkConfig, DHCPv4Config, Layer2VIPConfig,
 # RoutingRuleConfig, ResolverConfig) all exist from v1.13.
@@ -413,6 +417,23 @@ def _mapping(value: Any, field: str) -> dict[str, Any]:
     return value
 
 
+def _secret(name: str, value: Any, where: str) -> str:
+    """Validate a secrets.yaml credential is a real, non-empty string.
+
+    A null, non-string, empty, or scaffolded ``CHANGE-ME`` value is refused here
+    because it would otherwise load cleanly and then fail deep in the provider
+    client as an opaque 401.
+    """
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{where}: {name} must be a non-empty string")
+    if value == SECRET_PLACEHOLDER:
+        raise ConfigError(
+            f"{where}: {name} is still the scaffolded {SECRET_PLACEHOLDER!r} "
+            "placeholder; set it to your real credential"
+        )
+    return value
+
+
 def _string_list(value: Any, field: str) -> list[str]:
     if value is None:
         return []
@@ -564,20 +585,37 @@ def load_secrets(root: Path) -> Secrets:
     provider_data = _mapping(d[provider_name], f"{where}: {provider_name}")
     if provider_name == "openstack":
         provider: ProviderSecrets = OpenStackSecrets(
-            credential_id=require(provider_data, "credential_id", where=f"{where}: openstack"),
-            credential_secret=require(
-                provider_data, "credential_secret", where=f"{where}: openstack"
+            credential_id=_secret(
+                "openstack.credential_id",
+                require(provider_data, "credential_id", where=f"{where}: openstack"),
+                where=f"{where}: openstack",
+            ),
+            credential_secret=_secret(
+                "openstack.credential_secret",
+                require(provider_data, "credential_secret", where=f"{where}: openstack"),
+                where=f"{where}: openstack",
             ),
         )
     else:
         provider = ProxmoxSecrets(
-            token_id=require(provider_data, "token_id", where=f"{where}: proxmox"),
-            token_secret=require(provider_data, "token_secret", where=f"{where}: proxmox"),
+            token_id=_secret(
+                "proxmox.token_id",
+                require(provider_data, "token_id", where=f"{where}: proxmox"),
+                where=f"{where}: proxmox",
+            ),
+            token_secret=_secret(
+                "proxmox.token_secret",
+                require(provider_data, "token_secret", where=f"{where}: proxmox"),
+                where=f"{where}: proxmox",
+            ),
         )
     ts = _mapping(d.get("tailscale"), f"{where}: tailscale")
+    auth_key = ts.get("auth_key")
     return Secrets(
         provider=provider,
-        tailscale_auth_key=ts.get("auth_key"),
+        tailscale_auth_key=(
+            None if auth_key is None else _secret("tailscale.auth_key", auth_key, where)
+        ),
     )
 
 

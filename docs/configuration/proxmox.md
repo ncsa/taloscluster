@@ -246,4 +246,4 @@ Proxmox API token id. Provider operations that load Proxmox inventory run a read
 
 Required · string
 
-The token secret.
+The token secret. Must be a real, non-empty string that is not the scaffolded `CHANGE-ME` placeholder; a null, non-string, empty, or placeholder value is refused at secrets load time instead of failing later as an opaque 401.
