@@ -3,7 +3,7 @@
 Names are derived purely from cluster.yaml so every run computes the same name
 for the same resource -- that determinism is what makes reconcile idempotent
 without a state file. Tags let us enumerate exactly the resources this tool owns
-(and only those), replacing terraform's state-held resource inventory.
+(and only those), instead of a persisted inventory.
 
 Neutron/Nova/Cinder tags are plain strings, so we use a `key=value` convention.
 """

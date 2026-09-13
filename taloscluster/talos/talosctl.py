@@ -1,9 +1,9 @@
 """Thin subprocess wrapper around talosctl.
 
 talosctl has no stable python client, and it already IS a project dependency, so
-we shell out -- but with structured args and parsed output instead of the shell
-script's `awk`/text scraping. Pure/local generation commands (gen secrets, gen
-config) always run; cluster-mutating commands honour --dry-run.
+we shell out -- but with structured args and parsed output instead of text
+scraping. Pure/local generation commands (gen secrets, gen config) always run;
+cluster-mutating commands honour --dry-run.
 """
 
 from __future__ import annotations
@@ -99,8 +99,7 @@ def gen_config(
 
 def gen_talosconfig(cluster: str, endpoint: str, secrets_path: Path,
                     client_endpoint: str | None = None) -> str:
-    """The client talosconfig (CA + context), the heir of terraform's
-    talos_client_configuration.
+    """The client talosconfig (CA + context).
 
     taloscluster always passes -e/-n explicitly, so only the CA/context matter to
     it. `client_endpoint` (controlplane-01's tailscale name) is baked in as the

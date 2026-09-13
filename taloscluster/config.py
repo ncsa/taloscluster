@@ -2,9 +2,8 @@
 the node pools into the flat `machines` map (keyed by hostname) that the rest of
 the tool converges against.
 
-This replaces two things at once: terraform's `yamldecode(cluster.yaml)` +
-`local.machines`, and the shell script's `yq` reads. Parsing is native (PyYAML),
-so yq/jq disappear.
+Parsing is native (PyYAML) with no external preprocessing; validation happens
+up front so later phases only ever see a consistent, resolved config.
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ _VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 @dataclass(frozen=True)
 class Machine:
-    """One node, fully resolved (the heir of terraform's local.machines value)."""
+    """One node, fully resolved from the pools and defaults."""
 
     name: str
     role: str          # controlplane | worker
@@ -88,8 +87,7 @@ class OpenStackConfig:
     url: str
     availability_zone: str
     external_net: str
-    # Default region, matching the OS_REGION_NAME the shell script and terraform
-    # provider used; override in cluster.yaml with `openstack.region`.
+    # Default region; override in cluster.yaml with `openstack.region`.
     region: str = "RegionOne"
 
 
@@ -110,8 +108,9 @@ class ProxmoxSdn:
     """Resolved managed-SDN settings (EVPN zone + VNet + subnet).
 
     Every cluster.yaml field is optional; this carries the derived defaults.
-    Empty `exit_nodes` means every online cluster node, resolved at reconcile
-    time, and an empty `primary_exit_node` means the first resolved exit node.
+    Empty `exit_nodes` means every cluster node, offline included, resolved at
+    reconcile time, and an empty `primary_exit_node` means the first resolved
+    exit node.
     """
 
     name: str = ""  # the SDN zone/VNet id; defaults to the cluster name
@@ -297,8 +296,8 @@ class Config:
     def machines(self) -> dict[str, Machine]:
         """Flat hostname -> Machine map: controlplane pool + every worker pool.
 
-        Keyed by hostname (like terraform's for_each) so adding/removing a node
-        never renumbers the survivors.
+        Keyed by hostname so adding/removing a node never renumbers the
+        survivors.
         """
         out: dict[str, Machine] = {}
 

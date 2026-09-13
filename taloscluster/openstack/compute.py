@@ -1,16 +1,15 @@
-"""Reconcile compute instances, the port of nodes.tf.
+"""Reconcile compute instances.
 
 Each server is volume-backed (a boot volume cloned from the shared Talos image,
 delete_on_termination) with config_drive + the node's machine config as
 user_data, attached to its pre-created port (which carries the security group
 and the VIP allowed_address_pairs). No floating ip.
 
-Create-only: like terraform's ignore_changes=[user_data, flavor_name,
-block_device, availability_zone], an existing server is left untouched -- talos
-and kubernetes upgrades happen via talosctl, never by replacing instances. A
-change to a server's flavor, disk or availability zone cannot be reconciled in
-place, so ``validate`` refuses it before any converge phase mutates; ``plan``
-reports it the same way.
+Create-only: an existing server is left untouched -- talos and kubernetes
+upgrades happen via talosctl, never by replacing instances. A change to a
+server's flavor, disk or availability zone cannot be reconciled in place, so
+``validate`` refuses it before any converge phase mutates; ``plan`` reports it
+the same way.
 
 Scale-down deletion is driven by converge (after drain + talos reset); here we
 just delete the server and its port. The boot volume goes with the server via

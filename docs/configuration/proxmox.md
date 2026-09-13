@@ -99,7 +99,7 @@ VLAN tag on the NIC. Not allowed together with `sdn`.
 
 Required here or under `external` · IPv4 inside `network.cidr`
 
-The address control planes share as a Layer 2 VIP for the Kubernetes API. Set it in exactly one of `cluster` or `external`. Changing it later moves the API endpoint of the running cluster without a reboot. On a managed SDN it may not collide with the anycast gateway, a node's static address, or any address the static layout reserves.
+The address control planes share as a Layer 2 VIP for the Kubernetes API. Set it in exactly one of `cluster` or `external`. Changing it later moves the API endpoint of the running cluster by re-applying the new endpoint through the machine config; it is not guaranteed to avoid a restart. On a managed SDN it may not collide with the anycast gateway, a node's static address, or any address the static layout reserves.
 
 ## `proxmox.network.cluster.sdn`
 
@@ -158,7 +158,7 @@ VXLAN id of the VNet.
 
 ### `sdn.exit_nodes`
 
-Optional · list of node names · default `sdn.nodes`, else `proxmox.nodes`, else every online node
+Optional · list of node names · default `sdn.nodes`, else `proxmox.nodes` (every cluster node, offline included)
 
 Hosts that route traffic out of the overlay. List only hosts with a routed external address; an exit node without one blackholes its VMs' egress.
 

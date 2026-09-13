@@ -79,7 +79,7 @@ For each desired, owned VM, converge compares CPU, memory, disk size, placement,
 - `disk` may only grow: the Proxmox disk is resized online and Talos extends its `EPHEMERAL` partition on the next reboot. The grow is remembered on the VM and re-listed as pending until a `converge --reboot` restarts the node (the pending grow is cleared on that reboot). A smaller `disk` is refused in the validate phase before any converge mutation. Revert it, or replace the machine by scaling its pool down past it and back up.
 - Moving a NIC to another bridge, VLAN or VNet, adding or removing the `external:` section, switching `bridge:` to `sdn:`, pinning a pool to a different `node`, or changing `proxmox.storage` is refused in the validate phase before any converge mutation: none of these migrate an existing VM. They renumber or re-home every node; recreate the cluster instead.
 - `security:` edits reconcile the per-VM firewall (see above); `ingress_pool` and `network.ntp` edits flow through the machine config, as do `network.dns` edits on managed SDN, which converge re-applies to every node and `plan` shows as a diff. On a `bridge`/`vnet` network DNS is DHCP-provided, so `network.dns` is not applied and converge warns about it. A `network.cidr` change on a managed SDN cluster is refused because it would renumber running nodes.
-- Changing `kubeapi_vip` moves the API endpoint of the running cluster. Control planes are re-applied one at a time (cluster endpoint, certificate SANs, the Layer 2 VIP) and each is waited for before the next, the kubeconfig is regenerated from a control plane, converge waits until the API answers on the new address, and only then are the workers re-applied. Talos applies all of it without a reboot. The old address keeps answering until every control plane has switched, so the move is gradual rather than a hard cutover; still, update anything external that pins the old address. The move is detected against the endpoint recorded in the `kubeconfig` converge wrote, so keep that file next to `cluster.yaml`. The VIP may not sit inside `ingress_pool`.
+- Changing `kubeapi_vip` moves the API endpoint of the running cluster. Control planes are re-applied one at a time (cluster endpoint, certificate SANs, the Layer 2 VIP) and each is waited for before the next, the kubeconfig is regenerated from a control plane, converge waits until the API answers on the new address, and only then are the workers re-applied. A move applies the new endpoint through each node's machine config, which may or may not settle without a restart — it is not guaranteed to avoid one. The old address keeps answering until every control plane has switched, so the move is gradual rather than a hard cutover; still, update anything external that pins the old address. The move is detected against the endpoint recorded in the `kubeconfig` converge wrote, so keep that file next to `cluster.yaml`. The VIP may not sit inside `ingress_pool`.
 
 ## Proxmox API token permissions
 
@@ -103,7 +103,7 @@ proxmox:
   network:
     cluster:
       sdn:
-        # name: phoenix          # zone + VNet id; default cluster name, 2-8 chars, no hyphens
+        # name: mycl             # zone + VNet id; default cluster name, 2-8 chars, no hyphens
         # controller: evpnctl    # created with peers from the cluster when missing
         # asn: 65000
         # vrf_tag: 12345         # VXLAN ids; default derived from the cluster name

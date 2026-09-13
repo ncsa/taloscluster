@@ -800,6 +800,24 @@ def test_wait_down_returns_true_only_after_apid_stops_answering(monkeypatch):
                                grace_s=10, interval_s=5) is False
 
 
+def test_reachability_timeout_points_at_troubleshooting(monkeypatch):
+    """A node that never answers times out with a pointer to the troubleshooting
+    guide (the old message referenced a README section that no longer exists)."""
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    # deadline is computed from the first monotonic read, then the poll check
+    # reads a later one -- jump past the deadline so the loop exits immediately
+    monkeypatch.setattr(converge.time, "monotonic", iter([0, 1]).__next__)
+
+    with pytest.raises(TimeoutError) as exc:
+        converge._wait_reachable(Path("tc"), "cp-01", "192.0.2.1", timeout_s=1)
+
+    assert "did not become reachable" in str(exc.value)
+    assert ("docs/troubleshooting.md"
+            "#recreating-a-cluster-reuses-stale-headscale-entries") in str(exc.value)
+    assert "README" not in str(exc.value)
+
+
 def test_health_or_kube_fallback_allows_kube_api_for_a_worker(monkeypatch):
     """A worker upgrade still falls back to kube-api readiness when talosctl
     health fails twice -- the worker is not an etcd member, so a responding

@@ -12,7 +12,7 @@
 
 `plan` is just `converge --dry-run`; both print every state-changing action they
 would take. Any deletion in converge requires --yes (or an interactive confirm),
-recovering the safety terraform's plan gave.
+so a destructive run is never silent.
 """
 
 from __future__ import annotations

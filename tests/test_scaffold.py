@@ -13,7 +13,7 @@ import yaml
 
 from taloscluster import naming, plugins
 from taloscluster.config import ConfigError, load_config, load_secrets
-from taloscluster.scaffold import GITIGNORE_ENTRIES, init
+from taloscluster.scaffold import CLUSTER_TEMPLATE, GITIGNORE_ENTRIES, init
 
 
 @pytest.fixture(autouse=True)
@@ -153,3 +153,12 @@ def test_gitignore_untouched_when_complete(tmp_path):
     (tmp_path / ".gitignore").write_text(content)
     init(tmp_path, name="demo")
     assert (tmp_path / ".gitignore").read_text() == content
+
+
+def test_scaffold_comment_no_longer_claims_every_node_gets_ncsa_project():
+    """Only OpenStack adds the `ncsa/project` label; the scaffold comment must
+    say so instead of promising it on every node (Proxmox supplies none)."""
+    text = CLUSTER_TEMPLATE
+    assert "ncsa/role" in text and "ncsa/pool" in text
+    assert "OpenStack adds ncsa/project" in text
+    assert "always added as ncsa/project" not in text

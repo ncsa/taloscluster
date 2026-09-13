@@ -1,9 +1,8 @@
 """Talos Image Factory client (https://factory.talos.dev).
 
-Replaces the `curl | jq` schematic POST in bin/cluster.sh. A schematic pins the
-set of system extensions baked into an image; its id feeds both the downloadable
-boot image and the `install.image` installer reference so `talosctl upgrade`
-keeps (or drops) extensions to match.
+A schematic pins the set of system extensions baked into an image; its id feeds
+both the downloadable boot image and the `install.image` installer reference so
+`talosctl upgrade` keeps (or drops) extensions to match.
 """
 
 from __future__ import annotations

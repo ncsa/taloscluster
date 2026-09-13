@@ -1,8 +1,8 @@
-"""The converger -- the heir of bin/cluster.sh.
+"""The converger.
 
-Enforces the phase order the shell script established, the crux being that
-existing nodes are upgraded to the target versions BEFORE new ones are added, so
-a new node never joins newer than the rest:
+Enforces a strict phase order, the crux being that existing nodes are upgraded
+to the target versions BEFORE new ones are added, so a new node never joins
+newer than the rest:
 
   validate -> image -> secrets -> network/SG -> discover -> scale-down ->
   upgrade -> compute -> bootstrap -> kubeconfig -> health -> plugins
@@ -576,7 +576,8 @@ def _wait_reachable(talosconfig: Path, endpoint: str, node: str,
     raise TimeoutError(
         f"{endpoint} -> {node} did not become reachable within {timeout_s // 60}m. "
         "Is this machine on the tailnet, and is there a stale headscale entry "
-        f"for {endpoint}? (see README: headscale hygiene)"
+        f"for {endpoint}? (see docs/troubleshooting.md"
+        "#recreating-a-cluster-reuses-stale-headscale-entries)"
     )
 
 

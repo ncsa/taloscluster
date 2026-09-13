@@ -1,10 +1,10 @@
 """OpenStack connection + a per-run inventory cache.
 
-The connection uses the same application-credential auth the terraform provider
-and the shell script used (OS_AUTH_TYPE=v3applicationcredential), in the
-cluster's configured region (cluster.yaml `openstack.region`, default RegionOne).
+The connection authenticates with application-credential auth
+(OS_AUTH_TYPE=v3applicationcredential) in the cluster's configured region
+(cluster.yaml `openstack.region`, default RegionOne).
 
-Inventory is the performance heart of the rewrite: OpenStack API calls are
+Inventory is the performance heart of the package: OpenStack API calls are
 expensive, so instead of a `find_*` per resource we do ONE bulk `list` per
 resource type up front, filtered to the tags this cluster owns, and index it by
 name. Reconcile functions read from the cache and write freshly created/updated

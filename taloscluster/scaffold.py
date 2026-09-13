@@ -26,7 +26,8 @@ CLUSTER_TEMPLATE = """\
 name: {name}
 
 # extra tags exposed by talos as kubernetes node labels (machine.nodeLabels);
-# the provider project/pool name is always added as ncsa/project (spaces -> _).
+# every node also gets ncsa/role and ncsa/pool; OpenStack adds ncsa/project
+# when the project name is available (spaces -> _).
 # per-pool tags: are also supported and override these on key collision.
 # tags:
 #   team: platform

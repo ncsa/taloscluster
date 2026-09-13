@@ -1,8 +1,7 @@
-"""Tiny logging + dry-run helpers, the heirs of bin/cluster.sh's log()/die().
+"""Tiny logging + dry-run helpers.
 
 `--dry-run` sets DRY_RUN true; state-changing code paths check `dry_run()` and
-print what they *would* do via `action()` instead of doing it, mirroring the
-DEBUG=echo behaviour of the shell script.
+print what they *would* do via `action()` instead of doing it.
 """
 
 from __future__ import annotations

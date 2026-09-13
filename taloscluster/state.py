@@ -1,13 +1,12 @@
 """The only persisted local state.
 
 `talossecrets.yaml` holds the Talos machine secrets (cluster CA, etcd CA, join
-tokens) that terraform used to keep inside terraform.tfstate. It is the cluster's
-cryptographic identity and CANNOT be regenerated -- losing it means losing
-control of the cluster. It is a critical artifact on par with cluster.yaml and
-secrets.yaml (see README-python.md), gitignored, mode 0600.
+tokens); it is the cluster's cryptographic identity and CANNOT be regenerated --
+losing it means losing control of the cluster. It is a critical artifact on par
+with cluster.yaml and secrets.yaml, gitignored, mode 0600.
 
-Everything else terraform's state held (IPs, IDs, the machines map) is re-derived
-live by querying OpenStack, so it is not persisted here.
+Everything else (IPs, IDs, the machines map) is re-derived live from the selected
+provider, so it is not persisted here.
 """
 
 from __future__ import annotations

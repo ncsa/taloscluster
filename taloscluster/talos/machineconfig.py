@@ -1,7 +1,7 @@
-"""Build each node's Talos machine config, the port of talos.tf:51-158.
+"""Build each node's Talos machine config.
 
-The four yamlencode patches become Python dicts dumped to YAML files and stacked
-as `--config-patch` on `talosctl gen config`, in the same order terraform used:
+The four machine-config patches become Python dicts dumped to YAML files and
+stacked as `--config-patch` on `talosctl gen config`, in this order:
   machine -> hostname -> (cluster, controlplane only) -> tailscale -> freeform.
 
 Kept as separate patch files on purpose: hostname (HostnameConfig) and tailscale

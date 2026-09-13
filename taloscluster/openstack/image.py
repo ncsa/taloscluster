@@ -5,9 +5,8 @@ image is baked with the BASE_EXTENSIONS (tailscale + qemu-guest-agent). Anything
 beyond that (e.g. a GPU pool's nvidia extensions) is NOT in the boot image -- it
 lives in the node's install.image and loads on a later `talosctl upgrade`.
 
-This replaces the curl + xz + `openstack image create` block of bin/cluster.sh
-with requests + lzma + glance. Images are shared across clusters (same name =
-same content) and NEVER deleted here.
+The download + upload use requests + lzma + the OpenStack Glance API. Images
+are shared across clusters (same name = same content) and NEVER deleted here.
 """
 
 from __future__ import annotations

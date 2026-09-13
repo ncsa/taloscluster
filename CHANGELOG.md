@@ -2,11 +2,11 @@
 
 All notable changes to taloscluster are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Fix docs and docstring drift from the 2026-09-07 review: `sdn.exit_nodes` defaults to every cluster node (offline included), the managed-SDN example uses a placeholder instead of a real host, the `kubeapi_vip` move is no longer claimed to happen without a restart, the reachability-timeout message points at the troubleshooting guide, and module docstrings drop the removed terraform/shell/`yq` tooling and OpenStack-only framing.
 - Measure the hostname-length check against a pool's real widest ordinal, so a pool of 100+ nodes (three-digit index) is rejected instead of slipping through one character too long.
 - Scaffold the Proxmox `kubeapi_vip` at `192.168.0.2`, outside the managed-SDN static layout, so following the inline `sdn: {}` hint no longer collides with the reserved controlplane block.
 - Create `talossecrets.yaml` at mode 0600 at creation instead of write-then-chmod, so a fresh secrets file is never briefly world-readable (and a pre-existing broader one is still tightened).
@@ -197,10 +197,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Read package versions from distribution metadata.
 - Renamed from `clusterctl` to `taloscluster`.
   - Resources tagged `managed-by=clusterctl` are still discovered.
-- `argocd` and `rancher` are plugins of `taloscluster` instead of standalone
-  tools; converge, plan, destroy, status and check run them automatically.
-- The standalone `argocd` and `rancher` commands are gone; use
-  `taloscluster plugin <name>` to run one on its own.
+- `argocd` and `rancher` are plugins of `taloscluster` instead of standalone tools; converge, plan, destroy, status and check run them automatically.
+- The standalone `argocd` and `rancher` commands are gone; use `taloscluster plugin <name>` to run one on its own.
 
 ### Fixed
 
@@ -213,32 +211,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scale-down and destroy confirm before deleting nodes or plugin-managed resources.
 - Converge fails when final Talos and Kubernetes health checks both fail.
 - Invalid cluster names, versions, networks and node pools fail before reconciliation.
-- The argocd plugin rendered an empty metallb address pool and empty ingress IPs:
-  it read them from the `clusterctl` binary, gone since the rename, and ignored
-  the failure.
+- The argocd plugin rendered an empty metallb address pool and empty ingress IPs: it read them from the `clusterctl` binary, gone since the rename, and ignored the failure.
 
 ### Added
 
-- Converge Talos Kubernetes clusters on OpenStack from a declarative
-  `cluster.yaml`; no state file, resources are discovered via tags.
-- Commands: `init`, `plan`, `converge`, `status`, `check`, `dashboard`, `env`,
-  `image download` / `image remove`, `destroy`.
-- `check` compares pinned versions against upstream and the running nodes;
-  exits 1 on an update, drift, or a leftover cordon.
+- Converge Talos Kubernetes clusters on OpenStack from a declarative `cluster.yaml`; no state file, resources are discovered via tags.
+- Commands: `init`, `plan`, `converge`, `status`, `check`, `dashboard`, `env`, `image download` / `image remove`, `destroy`.
+- `check` compares pinned versions against upstream and the running nodes; exits 1 on an update, drift, or a leftover cordon.
 - Converge uncordons nodes left `SchedulingDisabled` by an interrupted upgrade.
 - Per-pool Talos extensions and freeform machine-config patches.
 - One boot image per talos version, built via factory.talos.dev.
 - Tailscale-based node reachability.
 - Security-group allowlists for the kube and talos APIs.
-- `tags:` in `cluster.yaml` applied as node labels; pool tags win over
-  cluster-wide.
+- `tags:` in `cluster.yaml` applied as node labels; pool tags win over cluster-wide.
 - Every node is labeled `ncsa/project` with its OpenStack project.
-- `status` also prints the OpenStack endpoint/region/project and the kube-api /
-  ingress floating ips.
+- `status` also prints the OpenStack endpoint/region/project and the kube-api / ingress floating ips.
 - `-o yaml` on `status` and `check` for machine-readable output.
 - The kube-api and ingress ports join the cluster security group.
-- Optional plugins, installed as `taloscluster[argocd]`, `taloscluster[rancher]`
-  or `taloscluster[all]`, and inert until configured in cluster.yaml/secrets.yaml.
+- Optional plugins, installed as `taloscluster[argocd]`, `taloscluster[rancher]` or `taloscluster[all]`, and inert until configured in cluster.yaml/secrets.yaml.
 - `taloscluster plugin list` and `taloscluster plugin NAME [ACTION]`.
 - `rancher` plugin: import the cluster, install the agent, reconcile members.
 - `argocd` plugin: apply the cluster secret, app project and applications.

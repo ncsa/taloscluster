@@ -1,8 +1,8 @@
-"""taloscluster -- converge a Talos cluster on OpenStack from cluster.yaml.
+"""taloscluster -- converge a Talos cluster from cluster.yaml.
 
-A pure-Python alternative to the terraform/ + bin/cluster.sh workflow living in
-the same folder. Both provision the same thing; only one is used per cluster.
-See README-python.md.
+A pure-Python tool that creates and maintains a Talos Kubernetes cluster on
+OpenStack or Proxmox from a declarative `cluster.yaml` (plus a `secrets.yaml`).
+See the documentation in `docs/`.
 """
 
 from importlib.metadata import PackageNotFoundError, version
