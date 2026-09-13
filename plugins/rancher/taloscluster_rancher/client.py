@@ -296,9 +296,13 @@ class Client:
 def _error_detail(resp: requests.Response) -> str:
     try:
         body = resp.json()
-        msgs = body.get("message") or [e.get("message", "") for e in body.get("errors", [])]
-        if isinstance(msgs, list):
-            msgs = [m for m in msgs if m]
-        return "; ".join(msgs) if msgs else resp.text[:300]
     except ValueError:
         return resp.text[:300]
+    message = body.get("message")
+    if isinstance(message, str):
+        return message
+    msgs = message or [e.get("message", "") for e in body.get("errors", [])]
+    if not isinstance(msgs, list):
+        msgs = []
+    msgs = [m for m in msgs if m]
+    return "; ".join(msgs) if msgs else resp.text[:300]
