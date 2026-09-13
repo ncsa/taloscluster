@@ -20,14 +20,48 @@ Converge downloads the boot ISO to `iso_storage`, writes each node's machine con
 
 ## Reaching the nodes
 
-On OpenStack, and on Proxmox with a managed SDN, the nodes sit on a private network with no public address. Only the API VIP and the ingress address are reachable from outside. There is no SSH on Talos anyway, but `talosctl` and `taloscluster` still have to reach the Talos API on port 50000 of a real node address to bootstrap and manage the cluster. The usual answer is a bastion host or a VPN into the tenant network.
+On OpenStack, and on Proxmox with a managed SDN, the nodes sit on a private network with no public address. Only the API VIP and the ingress address are reachable from outside. There is no SSH on Talos anyway, but `talosctl` and `taloscluster` still have to reach the Talos API on port 50000 of a real node address to bootstrap and manage the cluster. The usual answer is a bastion host or a VPN into the tenant network; taloscluster supports two management access paths, and which one applies is decided by whether the `tailscale` section is present in `cluster.yaml`:
 
-taloscluster solves it with [Tailscale](https://tailscale.com/) instead. Every node runs the tailscale extension and, given the [`auth_key`](../configuration/tailscale.md#tailscaleauth_key) in `secrets.yaml`, joins your tailnet at boot under its own hostname. You must install and connect Tailscale on the machine you run `taloscluster` from yourself, so it is already on the same tailnet; taloscluster does not add that machine automatically. The tool then reaches the first control plane by its tailscale name, no bastion required. Pod and etcd traffic stays on the private network; tailscale only carries management traffic.
+- **Tailscale** — the `tailscale` section (even empty) is present, so management talks to the first control plane by its MagicDNS name.
+- **Direct** — no `tailscale` section, so management talks to the first control plane's real node address, which your machine must already be able to route to.
 
-Two things follow from this:
+Both paths reach the same Talos API on port 50000 of one real node (controlplane-01). The Kubernetes API VIP and the ingress floating IP are not Talos API endpoints; they answer only the Kubernetes API and ingress traffic.
 
-- **The allowlists must include the tailnet.** Add `100.64.0.0/10` to the `kubernetes` and `talos` rules under [`security`](../configuration/security.md), or converge locks itself out of the firewall it just applied.
-- **A cluster without tailscale works, but only where you can already reach the node addresses**, for example Proxmox on a routed bridge. Omit the [`tailscale`](../configuration/tailscale.md) section and taloscluster falls back to the provider-reported address.
+### Path A: an already-connected Tailscale management machine
+
+The [Tailscale](https://tailscale.com/) path is how taloscluster reaches a cluster whose nodes sit on an otherwise unreachable private network. Every node runs the tailscale extension and, given the [`auth_key`](../configuration/tailscale.md#tailscaleauth_key) in `secrets.yaml`, joins your tailnet at boot under its own hostname. You must install and connect Tailscale on the machine you run `taloscluster` from yourself, so it is already on the same tailnet before converge runs; taloscluster does not add that management machine automatically. Pod and etcd traffic stays on the private network; tailscale only carries management traffic.
+
+To use this path end to end:
+
+1. **Connect the management machine** to the tailnet (`tailscale up`, or `tailscale login --login-server=<url>` for Headscale) so it is up before any `taloscluster` run.
+2. **Enable the section and an auth key** in `cluster.yaml` / `secrets.yaml`: the `tailscale` section selects Tailscale hostnames for management, and the `auth_key` lets nodes register. See [Tailscale configuration](../configuration/tailscale.md).
+3. **Let the allowlists include the tailnet**: add `100.64.0.0/10` to the `kubernetes` and `talos` rules under [`security`](../configuration/security.md), or converge locks itself out of the firewall it just applied. The Talos host firewall opens UDP/41641 for Tailscale whenever the section is present.
+4. **Run `taloscluster converge`.** taloscluster reaches the first control plane as `<name>-controlplane-01` by its MagicDNS name, writes the `talosconfig` pointing at that name, waits for a freshly booted node to come up, and bootstraps.
+
+Verify the path with `taloscluster status`, check the endpoint `converge` printed on its `talosctl:` line, and confirm the control plane answers:
+
+```bash
+taloscluster status
+talosctl -n mycluster-controlplane-01 version
+```
+
+### Path B: direct access to real node addresses without Tailscale
+
+A cluster without a `tailscale` section works, but only where you can already reach the node addresses — for example Proxmox on a routed bridge, or a routed network your management machine can route to. With no MagicDNS name to resolve, taloscluster falls back to the provider-reported address of the first control plane.
+
+To use this path end to end:
+
+1. **Make the node addresses reachable**: route the private `network.cidr` from the management machine — a routed bridge on Proxmox, a router+floating setup on a tenant network, or a VPN. There must be no firewall in the way of TCP/50000.
+2. **Omit the `tailscale` section** from `cluster.yaml`; a leftover `tailscale.auth_key` in `secrets.yaml` is simply unused. Removing the section also drops the tailscale extension from new installer images (see [Tailscale](../configuration/tailscale.md)).
+3. **Let the allowlists include your management network**: put the source CIDR you reach the node addresses from into the `kubernetes` and `talos` rules under [`security`](../configuration/security.md), or converge locks itself out.
+4. **Run `taloscluster converge`.** Without Tailscale, taloscluster resolves the control plane's address in this order: a managed-SDN static address from the network plan, then the address the guest agent reports, polling until a freshly booted node reports one, then the endpoint an earlier `talosconfig` recorded.
+
+Verify the path with `taloscluster status` and confirm the control plane answers on its real address:
+
+```bash
+taloscluster status
+talosctl -n 192.0.2.11 version
+```
 
 ### Headscale
 
