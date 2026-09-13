@@ -324,6 +324,49 @@ def test_scale_down_stops_before_second_control_plane_when_unhealthy(monkeypatch
     assert mutations == ["drain", "reset", "delete", "compute"]
 
 
+def test_scale_down_real_health_refuses_fallback_between_control_plane_removals(
+    monkeypatch,
+):
+    """Between control-plane removals the real _health_or_kube_fallback must
+    refuse the kube-api fallback: talosctl health fails twice and the VIP
+    answers (the surviving control planes serve it even when the removed member
+    never left etcd), so the rollout must abort before removing the next control
+    plane instead of trusting kube-api readiness."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    monkeypatch.setattr(
+        converge.kubectl, "node_names",
+        lambda _kc: ["testcluster-controlplane-02", "testcluster-controlplane-03"],
+    )
+    monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses", lambda *_a, **_kw: {},
+    )
+    # talosctl health fails twice and the kube-api VIP answers: the health
+    # barrier between control-plane removals is exercised for real, not stubbed.
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        converge.talosctl, "health",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, "health")
+        ),
+    )
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+
+    with pytest.raises(ReconcileError, match="unhealthy after removing control plane"):
+        converge._scale_down(
+            FakeBackend(mutations), cfg, {},
+            _cp_inventory("testcluster-controlplane-02", "testcluster-controlplane-03"),
+            NetworkResult(), Path("talosconfig"), Path("kubeconfig"), assume_yes=True,
+        )
+
+    # only the first control plane was removed; the second is untouched because
+    # the real helper refused the kube-api fallback for a control plane
+    assert mutations == ["drain", "reset", "delete", "compute"]
+
+
 def test_destroy_decline_happens_before_plugin_teardown(monkeypatch, tmp_path):
     cfg = SimpleNamespace(name="testcluster")
     plugin_calls: list[str] = []

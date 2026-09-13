@@ -904,7 +904,7 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
             if remaining_cp > 0:
                 info(f"control plane {node} removed; health-checking before the next")
                 if not _health_or_kube_fallback(talosconfig, endpoint, refs.kubernetes.vip,
-                                                kubeconfig, timeout="10m"):
+                                                kubeconfig, timeout="10m", fallback=False):
                     raise ReconcileError(
                         f"cluster unhealthy after removing control plane {node}; "
                         "refusing to remove another control plane (etcd quorum at risk)"
