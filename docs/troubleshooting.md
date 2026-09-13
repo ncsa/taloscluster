@@ -22,7 +22,7 @@ The permission preflight reports missing privileges with their ACL paths. Compar
 
 ## Proxmox sizing still shows pending changes
 
-Use `taloscluster plan --reboot`, then `taloscluster converge --reboot`, to review and apply the needed VM restarts. A reboot inside the guest, including a Talos upgrade, does not replace the Proxmox VM process that holds pending CPU and memory settings. Disk growth needs a reboot for Talos to extend its partition; use `--reboot` in the same converge that grows the disk. See [Changing a Proxmox cluster](providers/proxmox.md#changing-a-proxmox-cluster-after-it-exists).
+Use `taloscluster plan --reboot`, then `taloscluster converge --reboot`, to review and apply the needed VM restarts. A reboot inside the guest, including a Talos upgrade, does not replace the Proxmox VM process that holds pending CPU and memory settings. Disk growth needs a reboot for Talos to extend its partition; the grow is listed as pending on every run until a `--reboot` converge restarts the node. See [Changing a Proxmox cluster](providers/proxmox.md#changing-a-proxmox-cluster-after-it-exists).
 
 ## Managed SDN nodes have no egress or transfers stall
 

@@ -1855,6 +1855,108 @@ def test_converge_grows_disk_in_place(make_config, capsys):
     )
 
 
+def test_grown_disk_is_tagged_pending_resize_for_a_running_vm(make_config):
+    client = FakeClient(_data())
+
+    _reconcile_cp1(_resized_cfg(make_config, disk=100), client)
+
+    tags = next(
+        payload for _m, path, payload in client.mutations
+        if path == "nodes/pve001/qemu/800/config" and "tags" in payload
+    )
+    assert "taloscluster-pending-resize" in tags["tags"].split(";")
+
+
+def test_grown_disk_on_a_stopped_vm_is_not_tagged(make_config):
+    data = _data()
+    data["cluster/resources"][0]["status"] = "stopped"
+    client = FakeClient(data)
+
+    _reconcile_cp1(_resized_cfg(make_config, disk=100), client)
+
+    tags_writes = [
+        payload for _m, path, payload in client.mutations
+        if path == "nodes/pve001/qemu/800/config" and "tags" in payload
+    ]
+    assert tags_writes == []
+
+
+def test_un_rebooted_disk_grow_is_still_reported_on_a_later_run(make_config):
+    # A prior converge grew the disk (40GB -> 100GB) without --reboot: the live
+    # config now shows 100GB and the running cores/memory match, so the only
+    # remaining signal is the pending-resize tag still on the VM.
+    data = _data()
+    data["nodes/pve001/qemu/800/config"]["scsi0"] = "vms:vm-800-disk-0,size=100G"
+    owned = "taloscluster;cluster_testcluster;role_controlplane;pool_controlplane"
+    data["cluster/resources"][0]["tags"] = owned + ";taloscluster-pending-resize"
+    client = FakeClient(data)
+
+    backend = _reconcile_cp1(_resized_cfg(make_config, disk=100), client)
+
+    assert backend.restart_result == {"testcluster-controlplane-01"}
+    # disk and sizing already match, so nothing is re-applied
+    assert not any(path.endswith("/800/resize") for _m, path, _d in client.mutations)
+    assert not any(path.endswith("/800/config") for _m, path, _d in client.mutations)
+
+
+def test_restart_clears_the_pending_resize_tag(make_config):
+    data = _data()
+    owned = "taloscluster;cluster_testcluster;role_controlplane;pool_controlplane"
+    data["cluster/resources"][0]["tags"] = owned + ";taloscluster-pending-resize"
+    client = FakeClient(data)
+    backend = _backend(_resized_cfg(make_config), client)
+    inventory = backend.load_inventory()
+
+    backend.restart_machine("testcluster-controlplane-01", inventory)
+
+    reboot = next(
+        payload for _m, path, payload in client.mutations
+        if path == "nodes/pve001/qemu/800/status/reboot"
+    )
+    assert reboot == {"timeout": 300}
+    tags = next(
+        payload for _m, path, payload in client.mutations
+        if path == "nodes/pve001/qemu/800/config" and "tags" in payload
+    )
+    assert "taloscluster-pending-resize" not in tags["tags"].split(";")
+    assert sorted(tags["tags"].split(";")) == sorted(owned.split(";"))
+
+
+def test_disk_grow_then_reboot_btw_converges_does_not_reboot_again(make_config):
+    # converge WITHOUT --reboot grows the disk and tags the VM, then converge WITH
+    # --reboot reboots it and clears the tag; a third converge finds nothing.
+    def reconcile_with(start_disk, *, reboot_tags):
+        data = _data()
+        data["nodes/pve001/qemu/800/config"]["scsi0"] = f"vms:vm-800-disk-0,size={start_disk}G"
+        if reboot_tags:
+            data["cluster/resources"][0]["tags"] += ";taloscluster-pending-resize"
+        client = FakeClient(data)
+        backend = _backend(_resized_cfg(make_config, disk=100), client)
+        inventory = backend.load_inventory()
+        cp1 = backend.cfg.machines["testcluster-controlplane-01"]
+        return backend, inventory, {cp1.name: cp1}
+
+    # run 1: grow 40GB -> 100GB (no --reboot) -> tagged and reported
+    backend1, inv1, machines = reconcile_with(40, reboot_tags=False)
+    needs1 = backend1.reconcile_machines(
+        machines, inv1, "isos:iso/talos.iso", {}
+    )
+    assert needs1 == {"testcluster-controlplane-01"}
+    # the next run re-reads the tag from Proxmox and still wants to reboot
+    backend2, inv2, machines = reconcile_with(100, reboot_tags=True)
+    needs2 = backend2.reconcile_machines(
+        machines, inv2, "isos:iso/talos.iso", {}
+    )
+    assert needs2 == {"testcluster-controlplane-01"}
+    backend2.restart_machine("testcluster-controlplane-01", inv2)
+    # run 3: the tag is gone, the disk already matches, nothing needs a restart
+    backend3, inv3, machines = reconcile_with(100, reboot_tags=False)
+    needs3 = backend3.reconcile_machines(
+        machines, inv3, "isos:iso/talos.iso", {}
+    )
+    assert needs3 == set()
+
+
 def test_disk_shrink_is_refused_before_any_mutation(make_config):
     client = FakeClient(_data())
 

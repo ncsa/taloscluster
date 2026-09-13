@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Remember a Proxmox disk grow until the node reboots, so a converge without `--reboot` that grows a disk is followed by one with `--reboot` that still finds and restarts the node (the grow is tagged on the VM and cleared on its Proxmox reboot).
 - Accept a Proxmox task that finishes with `WARNINGS: N` as success, so converge and destroy no longer abort after a mutation that already succeeded; only a genuine non-`OK` failure is raised.
 - Normalize a missing `v` prefix on `talos.version` to the canonical `vMAJOR.MINOR.PATCH` form, so an unprefixed value is no longer compared verbatim against talosctl output and used in factory URLs (which kept every node judged outdated forever).
 - Normalize OpenStack security-group rules correctly: a rule with an unrelated `remote_group_id` no longer collides with the open-to-all rule on the same port (so the allowlist is enforced and the foreign rule is removed), and a host CIDR of `0.0.0.0/0` is treated as open instead of being re-created as a duplicate on every run.

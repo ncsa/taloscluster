@@ -54,6 +54,12 @@ _MIB_PER_GB = 1024
 # whoever else administers it, so ownership has to be visible in the rule itself:
 # rules without this marker are never deleted.
 _FIREWALL_MARKER = "taloscluster: "
+# Tagged on a VM whose Proxmox disk was grown but not yet rebooted, so Talos has
+# not extended its EPHEMERAL partition. Unlike pending cores/memory (which Proxmox
+# keeps as pending until the next start), a grown disk shows the new size in the
+# live config immediately, so the un-rebooted grow would otherwise be invisible on
+# the next converge. The tag is written on the grow and cleared on the Proxmox reboot.
+_RESIZE_TAG = "taloscluster-pending-resize"
 # (proto, destination port or None, source CIDR or None)
 _FirewallKey = tuple[str, int | None, str | None]
 
@@ -967,6 +973,14 @@ class ProxmoxBackend:
             # A cores/memory revert (applied but not stale, no disk) needs no restart.
             if (stale or (applied and had_disk)) and vm.status == "running":
                 needs_restart.add(vm.name)
+            # remember a grown disk that is still waiting for its boot (only for a
+            # running VM: a stopped VM absorbs the grow when it next starts). Written
+            # to the VM so a later `converge --reboot` still finds it to restart, and
+            # cleared by restart_machine once the reboot happens.
+            if applied and had_disk and vm.status == "running" and not dry_run():
+                marked = replace(vm, tags=vm.tags | {_RESIZE_TAG})
+                raw.vms[vm.name] = marked
+                self._set_vm_tags(vm, marked.tags)
 
         if not dry_run():
             missing_configs = [machine.name for machine in missing if machine.name not in configs]
@@ -1128,6 +1142,10 @@ class ProxmoxBackend:
         if (
             int(running.get("cores") or 1) != machine.cores
             or _memory_of(running.get("memory")) != _memory_mib(machine.memory)
+            # a grown disk shows the new size in the live config immediately, so
+            # the only record that its EPHEMERAL extension still waits for a boot
+            # is the tag written when it grew
+            or _RESIZE_TAG in vm.tags
         ):
             drift["stale"] = True
         return drift
@@ -1164,6 +1182,14 @@ class ProxmoxBackend:
                     data={"disk": "scsi0", "size": f"{want}G"},
                 )
         return True
+
+    def _set_vm_tags(self, vm: ProxmoxVM, tags: frozenset[str]) -> None:
+        """Replace a VM's Proxmox tag set (Proxmox `tags` is not additive)."""
+        self.client.mutate(
+            "PUT",
+            f"nodes/{vm.node}/qemu/{vm.vmid}/config",
+            data={"tags": ";".join(sorted(tags))},
+        )
 
     def _ensure_pool(self, inventory: ProxmoxInventory) -> None:
         existing = inventory.pools.get(self.pool_id)
@@ -1451,6 +1477,12 @@ class ProxmoxBackend:
             self.client.mutate(
                 "POST", f"nodes/{vm.node}/qemu/{vm.vmid}/status/reboot", data={"timeout": 300}
             )
+            # the reboot extends the grown disk's EPHEMERAL partition; the grow is
+            # absorbed, so drop the pending-resize tag that made this restart happen
+            if _RESIZE_TAG in vm.tags:
+                cleared = replace(vm, tags=vm.tags - {_RESIZE_TAG})
+                raw.vms[vm.name] = cleared
+                self._set_vm_tags(vm, cleared.tags)
 
     def finalize_machines(self, inventory: InfrastructureInventory) -> None:
         raw = self._raw(inventory)
