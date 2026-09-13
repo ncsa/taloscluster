@@ -14,7 +14,7 @@ All example addresses and hostnames in these pages are placeholders (RFC 5737 do
 | `kubernetes` | yes | Kubernetes version | [General](configuration/general.md#kubernetes) |
 | `controlplane` | yes | Control plane pool: count and sizing | [Pools](configuration/pools.md) |
 | `workers` | no | Worker pools by name: count, sizing, extensions, tags | [Pools](configuration/pools.md) |
-| `openstack` | one of | OpenStack endpoint, availability zone, external network | [OpenStack](configuration/openstack.md) |
+| `openstack` | one of | OpenStack endpoint, availability zone, external network, optional region | [OpenStack](configuration/openstack.md) |
 | `proxmox` | one of | Proxmox endpoint, storages, placement, networks | [Proxmox](configuration/proxmox.md) |
 | `network` | yes | Private CIDR, DNS and NTP servers | [Network](configuration/network.md) |
 | `security` | no | Named ingress allowlists per port | [Security](configuration/security.md) |

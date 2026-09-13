@@ -1,7 +1,8 @@
 """OpenStack connection + a per-run inventory cache.
 
 The connection uses the same application-credential auth the terraform provider
-and the shell script used (OS_AUTH_TYPE=v3applicationcredential, RegionOne).
+and the shell script used (OS_AUTH_TYPE=v3applicationcredential), in the
+cluster's configured region (cluster.yaml `openstack.region`, default RegionOne).
 
 Inventory is the performance heart of the rewrite: OpenStack API calls are
 expensive, so instead of a `find_*` per resource we do ONE bulk `list` per
@@ -23,8 +24,6 @@ from .. import naming
 from ..config import Config, Secrets
 from ..errors import ReconcileError
 
-REGION = "RegionOne"
-
 # Neutron resource kinds we cache (all support tags). Servers/volumes are Nova/
 # Cinder and cached separately because their proxies differ.
 _NETWORK_KINDS = ("networks", "subnets", "routers", "ports", "security_groups", "ips")
@@ -38,7 +37,7 @@ def connect(cfg: Config, secrets: Secrets) -> Connection:
             "application_credential_id": secrets.openstack_credential_id,
             "application_credential_secret": secrets.openstack_credential_secret,
         },
-        region_name=REGION,
+        region_name=cfg.region,
     )
 
 

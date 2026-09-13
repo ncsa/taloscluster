@@ -88,6 +88,9 @@ class OpenStackConfig:
     url: str
     availability_zone: str
     external_net: str
+    # Default region, matching the OS_REGION_NAME the shell script and terraform
+    # provider used; override in cluster.yaml with `openstack.region`.
+    region: str = "RegionOne"
 
 
 @dataclass(frozen=True)
@@ -254,6 +257,10 @@ class Config:
     @property
     def external_net(self) -> str:
         return self._openstack.external_net
+
+    @property
+    def region(self) -> str:
+        return self._openstack.region
 
     @property
     def security_kubernetes(self) -> dict[str, str]:
@@ -509,6 +516,7 @@ def _provider_config(d: dict[str, Any], where: str) -> ProviderConfig:
                 provider, "availability_zone", where=f"{where}: openstack"
             ),
             external_net=require(provider, "external_net", where=f"{where}: openstack"),
+            region=str(provider.get("region") or "RegionOne"),
         )
     return ProxmoxConfig(
         url=require(provider, "url", where=f"{where}: proxmox"),

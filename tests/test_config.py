@@ -357,6 +357,13 @@ def test_existing_openstack_yaml_loads_typed_provider(make_config):
     assert cfg.openstack_url == "https://example.com:5000/v3/"
     assert cfg.availability_zone == "nova"
     assert cfg.external_net == "ext-net"
+    # region defaults to RegionOne when cluster.yaml omits it
+    assert cfg.region == "RegionOne"
+
+
+def test_openstack_region_is_loaded_from_cluster_yaml(make_config):
+    cfg = make_config({"openstack": {"region": "region-b"}})
+    assert cfg.region == "region-b"
 
 
 def test_exactly_one_provider_is_required(make_config):

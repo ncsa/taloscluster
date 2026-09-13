@@ -80,6 +80,27 @@ def test_cluster_apps_carries_the_openstack_project(kubeconfig, cfg):
     assert values["openstack"]["project"] == "my project"
 
 
+def test_cluster_apps_carries_the_configured_region(kubeconfig, cfg):
+    """The region follows cluster.yaml's openstack.region, not a hardcoded RegionOne."""
+    cfg.openstack = Openstack(project="", url="https://cloud", region="region-b")
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"])
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["openstack"]["region"] == "region-b"
+
+
+def test_cluster_apps_region_defaults_to_regionone(kubeconfig, cfg):
+    """Omit the region and the default RegionOne is emitted."""
+    cfg.openstack = Openstack(project="", url="https://cloud")
+    ctx = ctx_for(kubeconfig, status={
+        "openstack": {"url": "https://cloud", "project": "p"},
+        "kubernetes": CLUSTER_STATUS["kubernetes"],
+        "ingress": CLUSTER_STATUS["ingress"],
+    })
+    doc = yaml.safe_load(manifests.render(cfg, ctx)["cluster-apps"])
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["openstack"]["region"] == "RegionOne"
+
+
 def test_metallb_single_vip_renders_as_slash32(kubeconfig, cfg):
     """OpenStack: the single ingress VIP becomes a /32 in the MetalLB pool."""
     out = manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"]

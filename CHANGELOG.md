@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Use the configured OpenStack region (`openstack.region`, default `RegionOne`) in the session, the reported status and `print_environment` output, and the region ArgoCD emits into the cluster-apps values, instead of a hardcoded `RegionOne`.
+
 - Fix Rancher API error messages: a string `message` in the error body is preserved whole instead of joined character by character, and list-form messages and `errors` entries are joined with `; `.
 - Refuse a null, non-string, empty, or still-scaffolded `CHANGE-ME` value for the provider credentials and the Tailscale auth key at secrets load time, instead of letting them fail later as an opaque 401.
 - Re-verify the managed SDN bridge on every converge (not just after an apply) and wait up to a minute for it to appear, so a missing bridge on a node is reported before a VM is ever placed there.

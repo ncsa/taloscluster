@@ -251,6 +251,11 @@ def _cluster_apps(cfg: Config, ctx: Context) -> str:
     rancher_id = _rancher_id(ctx)
     openstack_url = cfg.openstack.url if cfg.openstack else ""
     openstack_project = ctx.openstack.get("project", "")
+    openstack_region = (
+        cfg.openstack.region
+        if cfg.openstack and cfg.openstack.region
+        else ctx.openstack.get("region") or "RegionOne"
+    )
     metallb_enabled = enabled(cfg.metallb)
     # MetalLB addresses: a bare single IP (OpenStack VIP) becomes a /32; the
     # Proxmox ingress_pool range ("start-end") is already a valid MetalLB spec.
@@ -318,7 +323,7 @@ spec:
         openstack:
           project: {openstack_project}
           auth_url: {openstack_url}
-          region: RegionOne
+          region: {openstack_region}
 
         notifications: {{}}
 

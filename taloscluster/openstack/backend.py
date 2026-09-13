@@ -20,7 +20,7 @@ from ..infrastructure import (
 from ..output import action, dry_run, info, log, warn
 from . import compute, image, network, security, talos
 from .network import _fixed_ip
-from .session import REGION, Inventory, connect, project_name
+from .session import Inventory, connect, project_name
 
 _STATUS_KINDS = (
     "networks", "subnets", "routers", "security_groups", "ports", "ips", "servers",
@@ -169,7 +169,7 @@ class OpenStackBackend:
     def provider_status(self) -> dict[str, str]:
         return {
             "url": self.cfg.provider.url,
-            "region": REGION,
+            "region": self.cfg.region,
             "project": project_name(self.conn),
         }
 
@@ -177,7 +177,7 @@ class OpenStackBackend:
         provider = self.cfg.provider
         print(f"export OS_AUTH_URL={shlex.quote(provider.url)}")
         print("export OS_AUTH_TYPE=v3applicationcredential")
-        print(f"export OS_REGION_NAME={shlex.quote(REGION)}")
+        print(f"export OS_REGION_NAME={shlex.quote(self.cfg.region)}")
         print(
             "export OS_APPLICATION_CREDENTIAL_ID="
             f"{shlex.quote(self.secrets.openstack_credential_id)}"
