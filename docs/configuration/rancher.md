@@ -4,7 +4,7 @@ Back to the [configuration index](../configuration.md).
 
 The rancher plugin imports the cluster into a Rancher server, installs the cluster agent, and reconciles the members listed here. It is skipped, and shown as `not configured` by `taloscluster plugin list`, unless `cluster.yaml` has a `rancher` section and `secrets.yaml` has both `url` and `token`. See [Plugins](../concepts/plugins.md#how-plugins-run) for what converge, destroy and check do.
 
-During converge's validate phase, before any core change, the plugin refuses a malformed or contradictory `rancher:` section in an active config: `admins`/`users` that are not lists of usernames, a member under both tiers, or `url`/`token` values that are not non-empty strings (including null or empty) stops the run while the cluster is still untouched. A `rancher:` section that is not a mapping is treated as absent, so the plugin is inactive and the cluster is simply not managed by Rancher.
+During converge's validate phase, before any core change, the plugin refuses a malformed or contradictory `rancher:` section in either file: a non-mapping section, `admins`/`users` that are not lists of usernames, a member under both tiers, or `url`/`token` values that are not non-empty strings (including null or empty) stops the run while the cluster is still untouched. Validation runs whether or not the plugin is active, so a supplied-but-malformed `rancher:` section is rejected even though it would otherwise be silently discarded by activation; an entirely absent section is a no-op.
 
 ## cluster.yaml
 

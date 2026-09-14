@@ -70,11 +70,12 @@ def validate(root: Path, ctx: Context) -> None:
     """Reject a malformed or contradictory `rancher:` configuration.
 
     Runs in core's converge validate phase, before any cluster mutation, so a
-    broken active `rancher:` section (admins/users that are not lists of
-    usernames, a member under both tiers, or credential values that are not
-    non-empty strings) stops the run while the cluster is still untouched
-    instead of failing the late reconcile hooks. A `rancher:` section that is
-    not a mapping never reaches here from core -- it makes the plugin inactive,
-    so the plugin is skipped rather than validated.
+    broken `rancher:` section (a non-mapping section, admins/users that are not
+    lists of usernames, a member under both tiers, or credential values that are
+    not non-empty strings) stops the run while the cluster is still untouched
+    instead of failing the late reconcile hooks. The hook is called whether or
+    not the plugin is active, so a supplied-but-malformed `rancher:` section is
+    rejected even though it would otherwise be silently discarded by activation;
+    an entirely absent section is a no-op.
     """
     validate_rancher(root)

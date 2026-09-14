@@ -1,14 +1,12 @@
 """Early plugin-configuration validation.
 
-Core calls each *configured* plugin's `validate` hook in converge's validate
-phase, before any cluster mutation; the plugin is only active when both
-`rancher:` sections are mappings and secrets carries url + token, so only an
-active config is validated there. These cover what the rancher plugin rejects
-on that path: admins/users that are not lists of usernames, a member under both
-tiers, and secret credential values that are not non-empty strings. A
-`rancher:` section that is not a mapping never reaches the hook from core -- it
-makes the plugin inactive -- but `validate_rancher` still refuses one on a
-direct call, as defense-in-depth.
+Core calls each installed plugin's `validate` hook in converge's validate
+phase, before any cluster mutation, whether or not the plugin is active -- a
+supplied-but-malformed `rancher:` section is rejected even though activation
+would silently discard it. These cover what the rancher plugin rejects on that
+path: admins/users that are not lists of usernames, a member under both tiers,
+and secret credential values that are not non-empty strings, plus a non-mapping
+`rancher:` section in either file.
 """
 
 from __future__ import annotations
@@ -56,10 +54,7 @@ def test_no_rancher_sections_pass(tmp_path):
     _ok(tmp_path)
 
 
-# ---- section shape (direct-call defense-in-depth) --------------------------
-# Core's preflight only validates an *active* plugin, and a `rancher:` section
-# that is not a mapping makes the plugin inactive, so these never fire on the
-# integration path. `validate_rancher` still refuses them on a direct call.
+# ---- section shape ---------------------------------------------------------
 
 
 def test_non_mapping_rancher_in_cluster_yaml_rejected(tmp_path):
@@ -137,3 +132,18 @@ def test_core_preflight_refuses_null_credentials(tmp_path):
             rancher_secrets={"url": None, "token": None})
     with pytest.raises(ConfigError, match=r"rancher\.(url|token)\) must be a non-empty string"):
         preflight_validate(Context(root=tmp_path, cfg=None))
+
+
+def test_core_preflight_refuses_a_non_mapping_section(tmp_path):
+    """A `rancher:` section that is not a mapping makes the plugin inactive, but
+    core still runs the `validate` hook for a supplied section, so it is refused
+    by the preflight instead of silently discarded by activation."""
+    _write(tmp_path, rancher_secrets="enabled")
+    with pytest.raises(ConfigError, match="rancher must be a YAML mapping"):
+        preflight_validate(Context(root=tmp_path, cfg=None))
+
+
+def test_core_preflight_noops_when_rancher_is_absent(tmp_path):
+    """No `rancher:` section anywhere means nothing supplied to validate."""
+    _write(tmp_path)
+    preflight_validate(Context(root=tmp_path, cfg=None))  # no error

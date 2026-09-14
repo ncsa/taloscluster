@@ -134,15 +134,21 @@ def active(ctx: Context) -> list[Plugin]:
 
 
 def validate(ctx: Context) -> None:
-    """Run every configured plugin's optional ``validate`` hook, refusing bad config.
+    """Run every installed plugin's optional ``validate`` hook, refusing bad config.
 
-    Used by converge in its validate phase, before any cluster mutation. Each
-    configured plugin that implements ``validate`` is consulted; one that raises
-    aborts with a ``ConfigError`` naming the plugin, so an invalid or
-    contradictory plugin section stops the run while the cluster is still
-    untouched. A plugin without the hook has nothing to check.
+    Used by converge in its validate phase, before any cluster mutation. Every
+    plugin that implements ``validate`` is consulted, whether or not it is active
+    for this cluster: a plugin whose configuration section is *supplied* but
+    malformed, or that names an unsupported connection mode, must be reported
+    even though it never activates (activation can silently discard an invalid
+    section). It is the plugin's ``validate`` hook that distinguishes an absent
+    section from invalid supplied configuration, so an entirely absent section
+    is a no-op. A hook that raises aborts with a ``ConfigError`` naming the
+    plugin, so an invalid or contradictory plugin section stops the run while
+    the cluster is still untouched. A plugin without the hook has nothing to
+    check.
     """
-    for p in active(ctx):
+    for p in discover():
         fn = getattr(p.module, "validate", None)
         if not callable(fn):
             continue

@@ -190,6 +190,14 @@ def enabled(section: dict[str, Any]) -> bool:
     return bool(section.get("enabled"))
 
 
+def _read_cluster(root: Path) -> dict[str, Any]:
+    return read_yaml(root / CLUSTER_FILE) if (root / CLUSTER_FILE).is_file() else {}
+
+
+def _read_secrets(root: Path) -> dict[str, Any]:
+    return read_yaml(root / SECRETS_FILE) if (root / SECRETS_FILE).is_file() else {}
+
+
 def _uniq(*values: str) -> tuple[str, ...]:
     seen: set[str] = set()
     out: list[str] = []
@@ -244,11 +252,16 @@ def validate_argocd(root: Path) -> None:
         override the renderer would silently ignore),
       - only one of `git.url` / `infra.url` set (missing paired repository URLs),
       - git credentials in secrets.yaml without `git.url` (credentials without a
-        Git URL).
-    Raises ConfigError on the first problem.
+        Git URL),
+      - a `url`/`token` apply target without a `kubeconfig`/`context` (an
+        unsupported mode the plugin would otherwise silently discard).
+    Raises ConfigError on the first problem. A missing config file is treated as
+    absent configuration (the plugin has nothing supplied to validate), matching
+    how activation already tolerates a missing file; core enforces that the files
+    exist for a real converge.
     """
-    dc = read_yaml(root / CLUSTER_FILE)
-    ds = read_yaml(root / SECRETS_FILE)
+    dc = _read_cluster(root)
+    ds = _read_secrets(root)
     where = CLUSTER_FILE
     clan_raw = dc.get("argocd")
     sec_raw = ds.get("argocd")
@@ -267,6 +280,19 @@ def validate_argocd(root: Path) -> None:
             raise ConfigError(
                 f"{SECRETS_FILE} (argocd.{key}) must be a string"
             )
+    # A supplied `url`/`token` pair names the ArgoCD API, but the plugin applies
+    # via kubectl only, so without a kubeconfig/context it is an unsupported
+    # apply target that would be silently discarded by activation. Refuse it here
+    # so the unsupported mode is reported up front instead of the plugin quietly
+    # staying inactive.
+    if (sec.get("url") or sec.get("token")) and not (
+        sec.get("kubeconfig") or sec.get("context")
+    ):
+        raise ConfigError(
+            f"{SECRETS_FILE} (argocd): url/token is not a supported apply target; "
+            "the plugin applies manifests via kubectl only, so set "
+            "argocd.kubeconfig or argocd.context instead of a url/token pair"
+        )
     sgit = sec.get("git")
     if sgit is not None and not isinstance(sgit, dict):
         raise ConfigError(f"{SECRETS_FILE} (argocd.git) must be a YAML mapping")

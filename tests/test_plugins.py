@@ -199,7 +199,10 @@ def test_validate_skips_plugins_without_the_hook(monkeypatch, ctx):
     plugins.validate(ctx)  # no configured plugin calls validate -> no error
 
 
-def test_validate_only_consults_configured_plugins(monkeypatch, ctx):
+def test_validate_consults_every_plugin_with_the_hook(monkeypatch, ctx):
+    """Activation can silently discard a supplied-but-invalid config section, so
+    validate runs the hook whether or not a plugin is active; the hook itself
+    treats an absent section as a no-op."""
     seen = []
     install(
         monkeypatch,
@@ -211,7 +214,7 @@ def test_validate_only_consults_configured_plugins(monkeypatch, ctx):
             validate=lambda root, ctx: seen.append(root))),
     )
     plugins.validate(ctx)
-    assert seen == [ctx.root]
+    assert seen == [ctx.root, ctx.root]
 
 
 def test_validate_raises_configerror_naming_the_plugin(monkeypatch, ctx):
@@ -238,6 +241,23 @@ def test_validate_contains_an_unexpected_exception(monkeypatch, ctx):
     with pytest.raises(ConfigError, match="plugin 'a'|plugin \"a\"") as exc:
         plugins.validate(ctx)
     assert "exploded" in str(exc.value)
+
+
+def test_validate_rejects_an_inactive_plugin_with_bad_supplied_config(monkeypatch, ctx):
+    """A malformed or unsupported config section can make a plugin inactive and
+    so escape activation's gating; validation must still refuse it (as the
+    ArgoCD plugin does for a non-mapping `argocd:` section or a url/token apply
+    target) instead of silently discarding it."""
+    def reject(root, ctx):
+        raise ConfigError("url/token is not a supported apply target")
+
+    install(
+        monkeypatch,
+        FakeEntryPoint("argocd", make_module(
+            "argocd", configured=lambda ctx: False, validate=reject)),
+    )
+    with pytest.raises(ConfigError, match="plugin 'argocd'|plugin \"argocd\""):
+        plugins.validate(ctx)
 
 
 # ---- collect ---------------------------------------------------------------

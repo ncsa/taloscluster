@@ -1,9 +1,12 @@
 """Early plugin-configuration validation.
 
-Core calls each configured plugin's `validate` hook in converge's validate phase,
-before any cluster mutation. These cover what the argocd plugin rejects there:
-paired repository URLs, git credentials without a Git URL, malformed settings,
-and unsupported options.
+Core calls each installed plugin's `validate` hook in converge's validate
+phase, before any cluster mutation, whether or not the plugin is active -- a
+supplied-but-malformed `argocd:` section is rejected even though activation
+would silently discard it. These cover what the argocd plugin rejects on that
+path: paired repository URLs, git credentials without a Git URL, malformed
+settings, unsupported options, and secrets `url`/`token` apply targets without
+a `kubeconfig`/`context`.
 """
 
 from __future__ import annotations
@@ -137,6 +140,41 @@ def test_apply_target_value_must_be_a_string(tmp_path, key):
     _write(tmp_path, argocd_cluster={}, argocd_secrets={key: ["not", "a", "string"]})
     with pytest.raises(ConfigError, match=f"argocd\\.{key}.*string"):
         validate_argocd(tmp_path)
+
+
+# ---- unsupported apply-target mode -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "secrets",
+    [
+        {"url": "https://argocd.example.edu", "token": "CHANGE-ME"},
+        {"url": "https://argocd.example.edu"},
+        {"token": "CHANGE-ME"},
+    ],
+)
+def test_url_token_alone_is_an_unsupported_apply_target(tmp_path, secrets):
+    """A supplied url/token names the ArgoCD API, which the plugin cannot apply
+    through; it must be reported instead of silently leaving the plugin
+    inactive."""
+    _write(tmp_path, argocd_cluster={}, argocd_secrets=secrets)
+    with pytest.raises(ConfigError, match="url/token is not a supported apply target"):
+        validate_argocd(tmp_path)
+
+
+def test_url_token_with_a_kubeconfig_still_activates_mode(tmp_path):
+    """A kubectl apply target alongside a url/token is a supported mode, so no
+    unsupported-mode refusal."""
+    _write(
+        tmp_path,
+        argocd_cluster={},
+        argocd_secrets={
+            "kubeconfig": "../argocd-kubeconfig",
+            "url": "https://argocd.example.edu",
+            "token": "x",
+        },
+    )
+    _ok(tmp_path)
 
 
 @pytest.mark.parametrize("key", ["username", "token"])
@@ -289,3 +327,37 @@ def test_valid_full_config_with_versions_passes(tmp_path):
         argocd_secrets={"kubeconfig": "../argocd-kubeconfig"},
     )
     _ok(tmp_path)
+
+
+# ---- core reaches the hook for supplied-but-inactive config -----------------
+# Activation can silently discard a supplied malformed section: a non-mapping
+# `argocd:` in secrets.yaml, or a `url`/`token` apply target, never activates
+# the plugin, so core must still run `validate_argocd`. These go through the
+# real `taloscluster.plugins.validate` so the full core -> plugin chain is
+# exercised, not just the hook in isolation.
+
+
+def _plugins_validate(tmp_path):
+    import taloscluster.plugins as core_plugins
+    from taloscluster.context import Context
+
+    core_plugins.validate(Context(root=tmp_path, cfg=None, status={}))
+
+
+def test_plugins_validate_refuses_a_non_mapping_secrets_section(tmp_path):
+    _write(tmp_path, argocd_secrets="enabled")
+    with pytest.raises(ConfigError, match=r"argocd must be a YAML mapping"):
+        _plugins_validate(tmp_path)
+
+
+def test_plugins_validate_refuses_url_token_only_apply_target(tmp_path):
+    _write(tmp_path, argocd_secrets={"url": "https://argocd.example.edu",
+                                     "token": "CHANGE-ME"})
+    with pytest.raises(ConfigError, match="url/token is not a supported apply target"):
+        _plugins_validate(tmp_path)
+
+
+def test_plugins_validate_noops_when_config_is_absent(tmp_path):
+    """An entirely absent section has nothing to validate."""
+    _write(tmp_path)
+    _plugins_validate(tmp_path)  # no error

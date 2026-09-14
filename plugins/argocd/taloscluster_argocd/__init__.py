@@ -78,7 +78,11 @@ def validate(root: Path, ctx: Context) -> None:
     Runs in core's converge validate phase, before any cluster mutation, so a
     broken `argocd:` section (paired repository URLs, git credentials without a
     Git URL, a non-mapping section, an unsupported top-level or per-app option,
-    or a chart `version` the plugin would silently ignore) stops the run while
-    the cluster is still untouched instead of failing the late plugin hooks.
+    a chart `version` the plugin would silently ignore, or a `url`/`token`
+    apply target without a `kubeconfig`/`context`) stops the run while the
+    cluster is still untouched instead of failing the late plugin hooks. The
+    hook runs whether or not the plugin is active, so a non-mapping or
+    unsupported-mode `argocd:` section is rejected even though activation would
+    otherwise silently discard it.
     """
     validate_argocd(root)

@@ -49,16 +49,19 @@ def validate_rancher(root: Path) -> None:
     """Refuse a malformed or contradictory `rancher:` configuration.
 
     Called by core in converge's validate phase, before any cluster mutation, so
-    a broken active `rancher:` section (admins/users that are not lists of
-    usernames, secret credential values that are not non-empty strings, or a
-    member listed under both tiers) stops the run while the cluster is still
-    untouched instead of failing the late reconcile hooks. A `rancher:` section
-    that is not a mapping never reaches here from core -- it makes the plugin
-    inactive, so the plugin is skipped rather than validated. Raises ConfigError
-    on the first problem.
+    a broken `rancher:` section (a non-mapping section, admins/users that are not
+    lists of usernames, secret credential values that are not non-empty strings,
+    or a member listed under both tiers) stops the run while the cluster is
+    still untouched instead of failing the late reconcile hooks. The hook runs
+    whether or not the plugin is active, so a supplied-but-malformed `rancher:`
+    section is rejected even though activation would otherwise discard it; an
+    entirely absent section passes. A missing config file is treated as absent
+    configuration (nothing supplied to validate), matching how activation
+    already tolerates a missing file; core enforces that the files exist for a
+    real converge. Raises ConfigError on the first problem.
     """
-    dc = read_yaml(root / CLUSTER_FILE)
-    ds = read_yaml(root / SECRETS_FILE)
+    dc = read_yaml(root / CLUSTER_FILE) if (root / CLUSTER_FILE).is_file() else {}
+    ds = read_yaml(root / SECRETS_FILE) if (root / SECRETS_FILE).is_file() else {}
     clan_raw = dc.get("rancher")
     sec_raw = ds.get("rancher")
     if clan_raw is not None and not isinstance(clan_raw, dict):

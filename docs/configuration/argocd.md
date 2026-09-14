@@ -65,7 +65,7 @@ Required when `argocd.git.url` is set · URL
 
 The repository whose `charts/apps` chart is the app-of-apps the cluster Application points at. NCSA's is [ncsa/radiant-cluster](https://github.com/ncsa/radiant-cluster/tree/main/charts/apps).
 
-Converge validates the `argocd:` section before any cluster change: setting only one of `git.url` / `infra.url`, specifying git credentials without `git.url`, a non-mapping `argocd:` sub-section, a top-level `argocd:` option the plugin does not understand, an unknown key inside a per-app section, or a chart `version` the plugin would silently ignore is refused in the validate phase while the cluster is still untouched. `taloscluster plan` reports the same rejections before anything is attempted. The documented scalar types are enforced too: `sync`, `automated`, and each per-app `enabled` must be a real YAML boolean (a quoted `"false"` is refused rather than treated as truthy), `admins`/`users` must be lists of email addresses, the repository URLs non-empty strings, and the secrets.yaml apply-target and credential values plain strings.
+Converge validates the `argocd:` section before any cluster change: setting only one of `git.url` / `infra.url`, specifying git credentials without `git.url`, a non-mapping `argocd:` sub-section, a top-level `argocd:` option the plugin does not understand, an unknown key inside a per-app section, a chart `version` the plugin would silently ignore, or a `url`/`token` apply target without a `kubeconfig`/`context` (see below) is refused in the validate phase while the cluster is still untouched. Validation runs whether or not the plugin is active, so a malformed or unsupported-mode section is reported even though it would otherwise be silently discarded by activation. `taloscluster plan` reports the same rejections before anything is attempted. The documented scalar types are enforced too: `sync`, `automated`, and each per-app `enabled` must be a real YAML boolean (a quoted `"false"` is refused rather than treated as truthy), `admins`/`users` must be lists of email addresses, the repository URLs non-empty strings, and the secrets.yaml apply-target and credential values plain strings.
 
 ### `argocd.sync`
 
@@ -125,7 +125,7 @@ A context in your default kubeconfig, passed as `kubectl --context`. May be comb
 
 Not a supported apply target · URL and string
 
-ArgoCD API endpoint and token. The plugin applies manifests via kubectl only, so a `url`/`token` pair without a `kubeconfig` or `context` does not activate the plugin; it is shown as not configured and no hooks run. Use `kubeconfig` or `context` above.
+ArgoCD API endpoint and token. The plugin applies manifests via kubectl only, so a `url`/`token` pair without a `kubeconfig` or `context` does not activate the plugin and is refused during validate as an unsupported apply target: set `kubeconfig` or `context` above instead.
 
 ### `argocd.git.username` and `argocd.git.token`
 
