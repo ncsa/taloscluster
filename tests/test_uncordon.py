@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from taloscluster import converge
+from taloscluster.errors import ReconcileError
 from taloscluster.infrastructure import (
     InfrastructureInventory,
     InfrastructureMachine,
@@ -73,6 +74,7 @@ def test_upgrade_resume_uncordons_a_node_already_at_the_target(monkeypatch):
     monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
     monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "sch-123")
     monkeypatch.setattr(converge, "_uncordon_stale", lambda _kc, host: uncordoned.append(host))
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_kw: True)
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.35.8")
 
     converge._upgrade(
@@ -225,6 +227,96 @@ def test_reconcile_talos_is_a_noop_for_a_node_on_the_target_schematic(monkeypatc
     )
 
     assert upgrade_calls == []
+
+
+def test_reconcile_talos_health_checks_a_resumed_control_plane_at_target(monkeypatch):
+    """A node already on the target may be the leftover of an interrupted run: its
+    apid answers while etcd never recovered. Resuming must re-establish the health
+    barrier before touching the next control plane."""
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9")
+    machines = {
+        "cp-01": SimpleNamespace(role="controlplane", extensions=("base",)),
+        "cp-02": SimpleNamespace(role="controlplane", extensions=("base",)),
+    }
+    inventory = InfrastructureInventory(machines={h: InfrastructureMachine(h) for h in machines})
+    health: list[str] = []
+    quick: list[str] = []
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses",
+        lambda *_a, **_kw: {h: f"192.0.2.{i}" for i, h in enumerate(machines, 1)},
+    )
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "sch-123")
+    monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
+
+    def fake_health(*_a, **_kw):
+        if _kw.get("fallback") is False and not health:
+            health.append("barrier")
+            return False  # etcd unhealthy under a resurrected cp-01
+        quick.append("advanced")
+        return True
+
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", fake_health)
+    monkeypatch.setattr(
+        converge.talosctl, "upgrade", lambda *_a, **_kw: quick.append("upgrade")
+    )
+
+    with pytest.raises(ReconcileError, match="unhealthy before touching cp-01"):
+        converge._reconcile_talos(
+            cfg, machines, inventory, NetworkResult(),
+            {("base",): "installer:v1.13.9"}, {("base",): "sch-123"},
+            Path("talosconfig"), Path("kubeconfig"),
+        )
+
+    # the barrier ran with fallback=False for the control plane and no node was
+    # upgraded past it -- cp-02 is never touched
+    assert health == ["barrier"]
+    assert quick == []
+
+
+def test_reconcile_talos_advances_past_a_healthy_resumed_control_plane(monkeypatch):
+    """A resumed control plane at the target that passes the health barrier does
+    not block the rollout -- the next node is still upgraded and health-checked."""
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9")
+    machines = {
+        "cp-01": SimpleNamespace(role="controlplane", extensions=("base",)),
+        "w-01": SimpleNamespace(role="worker", extensions=("base",)),
+    }
+    inventory = InfrastructureInventory(machines={h: InfrastructureMachine(h) for h in machines})
+    calls: list[str] = []
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses",
+        lambda *_a, **_kw: {h: f"192.0.2.{i}" for i, h in enumerate(machines, 1)},
+    )
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
+    # cp-01 sits on the target schematic; w-01 joins on the shared base image
+    monkeypatch.setattr(
+        converge.talosctl, "running_schematic",
+        lambda *_a, **_kw: "sch-123" if _a[2] == "192.0.2.1" else "base-sch",
+    )
+    monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
+
+    def fake_health(*_a, **_kw):
+        calls.append("health")
+        return True
+
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", fake_health)
+    monkeypatch.setattr(
+        converge.talosctl, "upgrade", lambda *_a, **_kw: calls.append("upgrade")
+    )
+    monkeypatch.setattr(converge, "_wait_version", lambda *_a, **_kw: None)
+
+    converge._reconcile_talos(
+        cfg, machines, inventory, NetworkResult(),
+        {("base",): "installer:v1.13.9"}, {("base",): "sch-123"},
+        Path("talosconfig"), Path("kubeconfig"),
+    )
+
+    # cp-01 at target passed its resumed barrier; w-01 was upgraded from base-sch
+    assert calls.count("health") == 2  # resumed barrier + worker post-upgrade
+    assert "upgrade" in calls
 
 
 def test_reconcile_joined_reloads_inventory_to_see_created_nodes(monkeypatch):

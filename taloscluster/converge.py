@@ -1060,7 +1060,18 @@ def _reconcile_talos(cfg: Config, machines: dict[str, Machine], inv: Infrastruct
         # an unreadable schematic is treated as matching, like an unreadable image
         # used to be, rather than forcing upgrades on nodes we cannot inspect
         if cur_ver == cfg.talos_version and (not cur_schematic or cur_schematic == want_schematic):
+            # already at the target: a resumed run can reach this node without
+            # ever health-checking it -- the previous run may have upgraded it
+            # and died before etcd recovered, and its apid answers the whole
+            # time. Before touching the next control plane, re-establish the
+            # health barrier promised at the end of an upgrade.
             _uncordon_stale(kubeconfig, host)
+            if m.role == "controlplane" and not _health_or_kube_fallback(
+                    talosconfig, endpoint, refs.kubernetes.vip, kubeconfig,
+                    timeout="10m", fallback=False):
+                raise ReconcileError(
+                    f"cluster unhealthy before touching {host}; aborting rollout"
+                )
             info(f"{host}: {cur_ver or '?'}, ok")
             continue
         reason = "extensions changed" if cur_ver == cfg.talos_version else str(cur_ver or "?")
