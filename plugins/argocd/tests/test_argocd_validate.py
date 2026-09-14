@@ -85,6 +85,85 @@ def test_git_token_alone_requires_git_url(tmp_path):
         validate_argocd(tmp_path)
 
 
+# ---- boolean and scalar type validation -----------------------------------
+
+
+@pytest.mark.parametrize("bad", ["false", "true", 1, 0])
+def test_sync_must_be_a_boolean(tmp_path, bad):
+    _write(tmp_path, argocd_cluster={"sync": bad})
+    with pytest.raises(ConfigError, match="argocd\\.sync.*boolean"):
+        validate_argocd(tmp_path)
+
+
+@pytest.mark.parametrize("bad", ["false", "true", 1, 0])
+def test_automated_must_be_a_boolean(tmp_path, bad):
+    _write(tmp_path, argocd_cluster={"automated": bad})
+    with pytest.raises(ConfigError, match="argocd\\.automated.*boolean"):
+        validate_argocd(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "app", ["metallb", "ingress", "sealedsecrets", "certmanager", "cinder", "nfs", "monitoring"]
+)
+def test_per_app_enabled_must_be_a_boolean(tmp_path, app):
+    _write(tmp_path, argocd_cluster={app: {"enabled": "false"}})
+    with pytest.raises(ConfigError, match=f"argocd\\.{app}\\.enabled.*boolean"):
+        validate_argocd(tmp_path)
+
+
+def test_quoted_booleans_reported_as_the_type_problem(tmp_path):
+    """A quoted 'false' is refused for what it is: the wrong YAML type."""
+    _write(tmp_path, argocd_cluster={"automated": "false", "sync": "false"})
+    with pytest.raises(ConfigError, match=r"must be a boolean \(true or false\)"):
+        validate_argocd(tmp_path)
+
+
+@pytest.mark.parametrize("bad", ["alice@example.com", 3, [1, 2]])
+def test_members_must_be_a_list_of_strings(tmp_path, bad):
+    _write(tmp_path, argocd_cluster={"admins": bad})
+    with pytest.raises(ConfigError, match="argocd\\.admins.*list of email addresses"):
+        validate_argocd(tmp_path)
+
+
+@pytest.mark.parametrize("repo", ["git", "infra"])
+def test_repository_url_must_be_a_nonempty_string(tmp_path, repo):
+    _write(tmp_path, argocd_cluster={repo: {"url": 42}})
+    with pytest.raises(ConfigError, match=f"argocd\\.{repo}\\.url.*non-empty string"):
+        validate_argocd(tmp_path)
+
+
+@pytest.mark.parametrize("key", ["kubeconfig", "context", "url", "token"])
+def test_apply_target_value_must_be_a_string(tmp_path, key):
+    _write(tmp_path, argocd_cluster={}, argocd_secrets={key: ["not", "a", "string"]})
+    with pytest.raises(ConfigError, match=f"argocd\\.{key}.*string"):
+        validate_argocd(tmp_path)
+
+
+@pytest.mark.parametrize("key", ["username", "token"])
+def test_secret_git_credential_type_must_be_a_string(tmp_path, key):
+    _write(tmp_path, argocd_cluster={"git": {"url": "https://git.example.com/cluster.git"},
+                                     "infra": {"url": "https://git.example.com/infra.git"}},
+            argocd_secrets={"git": {key: 123}})
+    with pytest.raises(ConfigError, match=f"argocd\\.git\\.{key}.*string"):
+        validate_argocd(tmp_path)
+
+
+@pytest.mark.parametrize("key", ["credential_id", "credential_secret"])
+def test_openstack_credential_must_be_a_string(tmp_path, key):
+    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({"name": "testcluster"}))
+    (tmp_path / "secrets.yaml").write_text(yaml.safe_dump({"openstack": {key: 123}}))
+    with pytest.raises(ConfigError, match=f"openstack\\.{key}.*string"):
+        validate_argocd(tmp_path)
+
+
+def test_non_mapping_secret_git_section_rejected(tmp_path):
+    _write(tmp_path, argocd_cluster={"git": {"url": "https://git.example.com/a"},
+                                     "infra": {"url": "https://git.example.com/b"}},
+            argocd_secrets={"git": "deploy"})
+    with pytest.raises(ConfigError, match="argocd\\.git.*YAML mapping"):
+        validate_argocd(tmp_path)
+
+
 # ---- malformed settings ---------------------------------------------------
 
 

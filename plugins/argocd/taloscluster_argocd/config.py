@@ -259,6 +259,24 @@ def validate_argocd(root: Path) -> None:
     if sec_raw is not None and not isinstance(sec_raw, dict):
         raise ConfigError(f"{SECRETS_FILE}: argocd must be a YAML mapping")
 
+    # apply-target values feed the kubectl subprocess and the repository Secret,
+    # so they must be plain strings (a list or number would corrupt the command).
+    for key in ("kubeconfig", "context", "url", "token"):
+        value = sec.get(key)
+        if value is not None and not isinstance(value, str):
+            raise ConfigError(
+                f"{SECRETS_FILE} (argocd.{key}) must be a string"
+            )
+    sgit = sec.get("git")
+    if sgit is not None and not isinstance(sgit, dict):
+        raise ConfigError(f"{SECRETS_FILE} (argocd.git) must be a YAML mapping")
+    if isinstance(sgit, dict):
+        for key in ("username", "token"):
+            if key in sgit and not isinstance(sgit[key], str):
+                raise ConfigError(
+                    f"{SECRETS_FILE} (argocd.git.{key}) must be a string"
+                )
+
     unknown = sorted(set(clan) - _KNOWN_KEYS)
     if unknown:
         raise ConfigError(
@@ -268,6 +286,37 @@ def validate_argocd(root: Path) -> None:
     for key in sorted(_MAPPING_KEYS & set(clan)):
         if not isinstance(clan[key], dict):
             raise ConfigError(f"{where} (argocd.{key}) must be a YAML mapping")
+
+    # member role lists must be lists of full email addresses. A bare string
+    # would iterate character by character when the renderer flattens it.
+    for role in ("admins", "users"):
+        members = clan.get(role)
+        if members is not None and (
+            not isinstance(members, list)
+            or any(not isinstance(m, str) or not m.strip() for m in members)
+        ):
+            raise ConfigError(
+                f"{where} (argocd.{role}) must be a list of email addresses"
+            )
+
+    # the two toggles are YAML booleans; a quoted "false" is a nonempty string
+    # and must be refused rather than treated as truthy when rendering.
+    for key, _default in (("sync", False), ("automated", True)):
+        value = clan.get(key)
+        if value is not None and not isinstance(value, bool):
+            raise ConfigError(
+                f"{where} (argocd.{key}) must be a boolean (true or false)"
+            )
+
+    # repository URLs are non-empty strings.
+    for repo in ("git", "infra"):
+        section = clan.get(repo)
+        if isinstance(section, dict) and "url" in section:
+            url = section["url"]
+            if not isinstance(url, str) or not url.strip():
+                raise ConfigError(
+                    f"{where} (argocd.{repo}.url) must be a non-empty string"
+                )
 
     # each per-app section: refuse a misspelled or unsupported key, refuse a
     # `version` override the renderer would silently ignore, and require a
@@ -280,6 +329,10 @@ def validate_argocd(root: Path) -> None:
         if unknown:
             raise ConfigError(
                 f"{where} (argocd.{app}): unsupported key(s): {', '.join(unknown)}"
+            )
+        if "enabled" in section and not isinstance(section["enabled"], bool):
+            raise ConfigError(
+                f"{where} (argocd.{app}.enabled) must be a boolean (true or false)"
             )
         if "version" in section and app not in _VERSION_FORWARDED:
             raise ConfigError(
@@ -348,6 +401,14 @@ def validate_argocd(root: Path) -> None:
             f"argocd.git.url in {where} is not, so no repository Secret can be "
             "rendered; set argocd.git.url or remove the credentials"
         )
+
+    s_openstack = ds.get("openstack")
+    if isinstance(s_openstack, dict):
+        for key in ("credential_id", "credential_secret"):
+            if key in s_openstack and not isinstance(s_openstack[key], str):
+                raise ConfigError(
+                    f"{SECRETS_FILE} (openstack.{key}) must be a string"
+                )
 
 
 def argocd_configured(root: Path) -> bool:

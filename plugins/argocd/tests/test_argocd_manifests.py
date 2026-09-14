@@ -257,6 +257,35 @@ def test_config_loads_automated_false(tmp_path):
     assert d.automated is False
 
 
+def test_real_booleans_from_yaml_flow_to_rendering(kubeconfig):
+    """Documented YAML booleans loaded via Config.load render as expected.
+
+    `automated: "false"` (a quoted string) is refused at validation; the real
+    `false` boolean loaded here must render the two parent Applications with no
+    automated sync block and the chart `sync: false`.
+    """
+    (kubeconfig / "cluster.yaml").write_text(yaml.safe_dump({
+        "name": "testcluster",
+        "argocd": {
+            "git": {"url": "https://git.example.com/repo.git"},
+            "infra": {"url": "https://git.example.com/infra.git"},
+            "sync": False,
+            "automated": False,
+            "monitoring": {"enabled": True},
+        },
+    }))
+    cfg = Config.load(kubeconfig)
+    assert cfg.sync is False and cfg.automated is False
+    out = manifests.render(cfg, ctx_for(kubeconfig))
+    for name in ("apps", "cluster-apps"):
+        assert "automated" not in yaml.safe_load(out[name])["spec"]["syncPolicy"]
+    values = yaml.safe_load(
+        yaml.safe_load(out["cluster-apps"])["spec"]["source"]["helm"]["values"]
+    )
+    assert values["sync"] is False
+    assert values["monitoring"]["enabled"] is True
+
+
 def test_cluster_secret_is_annotated_with_the_rancher_id(kubeconfig, cfg):
     """What AFTER = ("rancher",) buys: the ArgoCD entry points back at Rancher."""
     ctx = ctx_for(kubeconfig, results={"rancher": {"cluster_id": "c-abc12"}})
