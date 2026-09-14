@@ -43,7 +43,7 @@ rm -f talosconfig kubeconfig
 taloscluster converge -C mycluster
 ```
 
-`converge` requires `talossecrets.yaml` to regenerate the `talosconfig` context, so this only works when the Talos identity is present. After a `destroy`, converge wipes both derived files along with `talossecrets.yaml` so clients do not point stale credentials at a cluster that no longer exists.
+`converge` requires `talossecrets.yaml` to regenerate the `talosconfig` context, so this only works when the Talos identity is present. It also recovers a `kubeconfig` that went missing (for example a lost management machine) by re-fetching it from the cluster through the restored identity, so the cluster is reconciled as existing instead of being misread as a fresh bootstrap. After a `destroy`, converge wipes both derived files along with `talossecrets.yaml` so clients do not point stale credentials at a cluster that no longer exists.
 
 ## etcd snapshot
 
@@ -70,6 +70,8 @@ A new management machine recovers a cluster in the same way you back it up, in r
 1. Install taloscluster and connect the machine to the cluster's tailnet (or a reachable route to the private network). taloscluster does not join the tailnet for you; see [Machines and access](concepts/machines.md#reaching-the-nodes).
 2. Restore `cluster.yaml`, `secrets.yaml`, and `talossecrets.yaml` from backup into the cluster directory. Keep the file modes: `secrets.yaml` and `talossecrets.yaml` should be 0600.
 3. Run `taloscluster plan` to confirm the configuration matches what exists, then `taloscluster converge`. Converge regenerates `talosconfig` and `kubeconfig` from the restored identity and reconciles the cluster, so the new machine can manage it again.
+
+A missing `kubeconfig` is not treated as proof that the cluster was never bootstrapped. Because the identity and machines exist, converge first recovers the kubeconfig from the first control plane through the restored identity and only then decides whether the cluster is fresh. A recovered cluster is reconciled as an existing one -- scale-down, machine-config apply and the Kubernetes upgrade all run, and any node scaled up in the same run boots at the upgraded version rather than a newer one joining an older cluster. Only when the recovery produces no kubeconfig (a first run that never reached bootstrap) does converge treat the cluster as fresh and bootstrap it. Recovery reaches the first control plane the way every talosctl call does: by its MagicDNS name when Tailscale is enabled, or its real provider-reported address otherwise (no hostname to resolve when Tailscale is off).
 
 ```bash
 taloscluster plan -C mycluster

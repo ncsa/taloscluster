@@ -587,6 +587,184 @@ def test_kube_up_does_not_warn_for_a_genuinely_fresh_cluster(monkeypatch, tmp_pa
     assert warns == []
 
 
+def test_kube_up_recovers_a_missing_kubeconfig_from_the_restored_identity(
+    monkeypatch, tmp_path
+):
+    """A lost management machine restores the identity but not the derived
+    kubeconfig. With machines + identity present, recovery regenerates the file
+    from the restored talos identity and _kube_up probes it -- so a recovered
+    cluster reads UP instead of a never-bootstrapped fresh one (which would skip
+    scale-down, apply and upgrade and re-bootstrap the existing infra)."""
+    kubeconfig = tmp_path / "kubeconfig"  # missing, like a freshly recovered machine
+
+    def recover(*_a, **_k):
+        kubeconfig.write_text("clusters: []\n")
+        return True
+
+    monkeypatch.setattr(converge, "_recover_missing_kubeconfig", recover)
+    calls: list[bool] = []
+    monkeypatch.setattr(converge.kubectl, "cluster_up",
+                        lambda _kc: calls.append(True) or True)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert converge._kube_up(
+        kubeconfig, _cp_inventory("phoenix-controlplane-01"),
+        recover=True, talosconfig=Path("talosconfig"),
+        endpoint="phoenix-controlplane-01", node="phoenix-controlplane-01",
+    ) is True
+    assert kubeconfig.is_file()
+    assert warns == []
+
+
+def test_kube_up_plan_reports_a_recovered_cluster_up_in_dry_run(monkeypatch, tmp_path):
+    """The `plan` command (dry_run) cannot probe the real cluster, but a recovery
+    prognosis must read UP so plan reports reconcile-as-existing instead of the
+    misleading "will bootstrap if needed" the fresh path prints (which contradicts
+    the real converge, that will recover the kubeconfig and reconcile the cluster
+    as existing)."""
+    kubeconfig = tmp_path / "kubeconfig"  # missing, like a freshly recovered machine
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "_recover_missing_kubeconfig", lambda *_a, **_k: True)
+    # plan must not probe or reach for the node: no kubeconfig was written
+    monkeypatch.setattr(
+        converge.kubectl, "cluster_up",
+        lambda _kc: pytest.fail("dry run must not probe the kube-api"),
+    )
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert converge._kube_up(
+        kubeconfig, _cp_inventory("phoenix-controlplane-01"),
+        recover=True, talosconfig=Path("talosconfig"),
+        endpoint="phoenix-controlplane-01", node="phoenix-controlplane-01",
+    ) is True
+    assert not kubeconfig.exists()
+    assert warns == []
+
+
+def test_kube_up_recovered_then_api_never_answers_is_existing_but_down(
+    monkeypatch, tmp_path
+):
+    """Recovery materialises a kubeconfig but the api still does not answer
+    (an unhealthy recovered cluster). _kube_up must then warn it is NOT a fresh
+    cluster, so the caller refuses to recreate nodes or re-bootstrap."""
+    kubeconfig = tmp_path / "kubeconfig"
+
+    def recover(*_a, **_k):
+        kubeconfig.write_text("clusters: []\n")
+        return True
+
+    monkeypatch.setattr(converge, "_recover_missing_kubeconfig", recover)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert converge._kube_up(
+        kubeconfig, _cp_inventory("phoenix-controlplane-01"),
+        recover=True, talosconfig=Path("talosconfig"),
+        endpoint="phoenix-controlplane-01", node="phoenix-controlplane-01",
+    ) is False
+    joined = " ".join(warns)
+    assert "machine(s) already exist" in joined
+    assert "NOT a fresh cluster" in joined
+
+
+def test_kube_up_recovery_producing_no_kubeconfig_stays_fresh(monkeypatch, tmp_path):
+    """A never-bootstrapped first run (interrupted before bootstrap) has machines
+    but the node serves no kubeconfig, so recovery writes nothing and _kube_up
+    reports straight down for the caller to bootstrap -- no misleading warning
+    about a wrongly-classified existing cluster."""
+    kubeconfig = tmp_path / "kubeconfig"  # stays missing
+    # no `_recover_missing_kubeconfig` stub that writes a file -> returns False
+    monkeypatch.setattr(converge, "_recover_missing_kubeconfig", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        converge.kubectl, "cluster_up",
+        lambda _kc: pytest.fail("a probe cannot succeed without a kubeconfig"),
+    )
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: pytest.fail("must not sleep"))
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert converge._kube_up(
+        kubeconfig, _cp_inventory("phoenix-controlplane-01"),
+        recover=True, talosconfig=Path("talosconfig"),
+        endpoint="phoenix-controlplane-01", node="phoenix-controlplane-01",
+    ) is False
+    assert warns == []
+
+
+def test_recover_missing_kubeconfig_fetches_from_the_control_plane(monkeypatch, tmp_path):
+    """Recovery waits for the restored control plane to answer talos, then fetches
+    a fresh kubeconfig through the restored identity and reports success."""
+    kubeconfig = tmp_path / "kubeconfig"
+    monkeypatch.setattr(converge, "_wait_reachable", lambda *a, **k: None)
+    monkeypatch.setattr(
+        converge.talosctl, "kubeconfig",
+        lambda _t, _e, _n, out: out.write_text("clusters: []\n"),
+    )
+
+    assert converge._recover_missing_kubeconfig(
+        Path("talosconfig"), "phoenix-controlplane-01",
+        "phoenix-controlplane-01", kubeconfig,
+    ) is True
+    assert kubeconfig.is_file() and kubeconfig.stat().st_size > 0
+
+
+def test_recover_missing_kubeconfig_clears_a_partial_file_on_failure(
+    monkeypatch, tmp_path
+):
+    """A failed fetch (a never-bootstrapped node serves no kubeconfig) must report
+    failure and clear any partial file it left, so the caller still reads the
+    cluster as fresh rather than probing garbage."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("truncated")  # garbage a failed fetch left behind
+    monkeypatch.setattr(converge, "_wait_reachable", lambda *a, **k: None)
+
+    def fail_kubeconfig(*_a, **_k):
+        raise subprocess.CalledProcessError(1, "talosctl kubeconfig")
+
+    monkeypatch.setattr(converge.talosctl, "kubeconfig", fail_kubeconfig)
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert converge._recover_missing_kubeconfig(
+        Path("talosconfig"), "phoenix-controlplane-01",
+        "phoenix-controlplane-01", kubeconfig,
+    ) is False
+    assert not kubeconfig.exists()
+    assert "could not recover the kubeconfig" in " ".join(warns)
+
+
+def test_recover_missing_kubeconfig_reports_but_does_not_write_in_dry_run(
+    monkeypatch, tmp_path
+):
+    """plan/dry-run must not mutate: recovery reports the fetch it would perform
+    but writes no kubeconfig (and does not reach for the node). It signals the
+    prognosis (True) so the caller reports the cluster UP instead of "will
+    bootstrap if needed"."""
+    kubeconfig = tmp_path / "kubeconfig"
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(
+        converge.talosctl, "kubeconfig",
+        lambda *_a: pytest.fail("dry run must not fetch a kubeconfig"),
+    )
+    monkeypatch.setattr(
+        converge, "_wait_reachable", lambda *_a, **_k: pytest.fail("dry run must not wait")
+    )
+    actions: list[str] = []
+    monkeypatch.setattr(converge, "action", actions.append)
+
+    assert converge._recover_missing_kubeconfig(
+        Path("talosconfig"), "phoenix-controlplane-01",
+        "phoenix-controlplane-01", kubeconfig,
+    ) is True
+    assert "recover kubeconfig" in " ".join(actions)
+    assert not kubeconfig.exists()
+
+
 def test_resolve_cp1_address_prefers_network_result_then_inventory():
     cfg = SimpleNamespace(name="phoenix")
     host = "phoenix-controlplane-01"

@@ -164,8 +164,21 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # probe is retried so one transient failure is never read as fresh, and when
     # that kubeconfig exists yet the API still does not answer, converge warns
     # loudly and refuses to recreate nodes or re-bootstrap (an interrupted first
-    # run -- machines but no kubeconfig -- still bootstraps).
-    up = _kube_up(kubeconfig_path, inv)
+    # run -- machines but no kubeconfig -- still bootstraps). A recovered
+    # management machine restored the identity but not the derived kubeconfig,
+    # so a missing kubeconfig with live machines triggers recovery from the
+    # restored identity before the fresh/up decision is made. The endpoint and
+    # dial target are the same real control plane (`_talos_endpoint` resolves
+    # cp-01's tailnet name when tailscale is on, else its real address -- never
+    # the kube-api VIP -- since talosctl uses `-n` as the apid dial target).
+    cp1_endpoint = _talos_endpoint(cfg, refs, inv, talosconfig_path, required=False)
+    up = _kube_up(
+        kubeconfig_path, inv,
+        recover=state.secrets_exist() and bool(inv.machines),
+        talosconfig=talosconfig_path,
+        endpoint=cp1_endpoint,
+        node=cp1_endpoint,
+    )
     bootstrapped_before = kubeconfig_path.is_file() and kubeconfig_path.stat().st_size > 0
     existing_but_down = not up and bool(inv.machines) and bootstrapped_before
     if existing_but_down:
@@ -406,7 +419,11 @@ def _cluster_vips(cfg: Config, refs: NetworkResult, kubeconfig: Path) -> set[str
 
 
 def _kube_up(kubeconfig: Path, inv: InfrastructureInventory, attempts: int = 3,
-             interval_s: int = 10) -> bool:
+             interval_s: int = 10, *,
+             recover: bool = False,
+             talosconfig: Path | None = None,
+             endpoint: str | None = None,
+             node: str | None = None) -> bool:
     """Probe whether the kube-api answers, retrying, so one transient failure
     is never read as a fresh cluster.
 
@@ -414,18 +431,44 @@ def _kube_up(kubeconfig: Path, inv: InfrastructureInventory, attempts: int = 3,
     cascade into scale-down, apply and upgrade being skipped and missing nodes
     being recreated at the target version. So the probe is retried.
 
-    When there is no kubeconfig from an earlier converge the cluster was never
-    bootstrapped -- a probe cannot succeed (kubectl short-circuits on the
-    missing file), so no time is wasted retrying and it is reported straight
-    down for the caller to bootstrap an interrupted first run. And when a
-    kubeconfig DOES exist yet the API still does not answer after every
-    attempt, the operator is warned loudly that this is an existing but
+    When there is no kubeconfig from an earlier converge the cluster looks
+    never-bootstrapped. Two cases share that look and are told apart here:
+
+    * a genuinely fresh or interrupted first run has no kubeconfig because
+      bootstrap never completed -- a probe cannot succeed (kubectl
+      short-circuits on the missing file), so it is reported straight down for
+      the caller to bootstrap it;
+    * a recovered management machine has a healthy cluster but a missing
+      kubeconfig, since `talosconfig`/`kubeconfig` are derived client files and
+      are not restored (see docs/backup.md). When a talos identity and
+      infrastructure machines exist (`recover=True`), the kubeconfig is
+      regenerated from the restored identity first (`_recover_missing_kubeconfig`),
+      so the probe runs against the real cluster instead of assuming fresh; only
+      if that recovery produces no kubeconfig (a never-bootstrapped first run, or
+      an unreachable node) is the cluster read as never-bootstrapped.
+
+    And when a kubeconfig DOES exist yet the API still does not answer after
+    every attempt, the operator is warned loudly that this is an existing but
     unreachable cluster -- not a fresh one -- so `converge` will not recreate
     nodes or re-bootstrap it.
     """
     if not kubeconfig.is_file() or kubeconfig.stat().st_size == 0:
-        # never bootstrapped (no kubeconfig); a probe cannot succeed
-        return False
+        if recover and talosconfig and endpoint and node:
+            recovered = _recover_missing_kubeconfig(
+                talosconfig, endpoint, node, kubeconfig
+            )
+            if dry_run() and recovered:
+                # plan/dry-run wrote nothing, but recovery prognoses an existing
+                # cluster; report it UP (scale-down/apply/upgrade will run) rather
+                # than "will bootstrap if needed"
+                return True
+            if not recovered:
+                # no kubeconfig was reproduced: a never-bootstrapped first run
+                # (or an unreachable node) -- probe cannot succeed
+                return False
+        else:
+            # never bootstrapped (no kubeconfig); a probe cannot succeed
+            return False
     for attempt in range(1, attempts + 1):
         if kubectl.cluster_up(kubeconfig):
             return True
@@ -440,6 +483,51 @@ def _kube_up(kubeconfig: Path, inv: InfrastructureInventory, attempts: int = 3,
             "bootstrap. Investigate the cluster before re-running converge."
         )
     return False
+
+
+def _recover_missing_kubeconfig(talosconfig: Path, endpoint: str, node: str,
+                                kubeconfig: Path, reachable_timeout_s: int = 900,
+                                interval_s: int = 15) -> bool:
+    """Regenerate a missing kubeconfig from the restored Talos identity.
+
+    `talosconfig` and `kubeconfig` are derived client configs (see docs/backup.md)
+    and are not restored with the cluster directory. On a recovered management
+    machine the cluster itself is healthy but the client lost its kubeconfig,
+    which otherwise makes ``converge`` read the cluster as never-bootstrapped. Fetch
+    a fresh one from the first control plane through the identity the operator
+    restored, then let the caller probe it. Returns True only once a non-empty
+    kubeconfig was actually written (in dry-run, which writes nothing, True
+    reports the recovery prognosis so the caller reads the cluster as up). A
+    never-bootstrapped first run fails here (the node runs no api-server to serve
+    a kubeconfig) and stays a fresh cluster for the caller to bootstrap.
+
+    The control-plane endpoint is always a real node -- never the kube-api VIP --
+    so writing a kubeconfig proves the etcd/control plane behind it is up.
+    """
+    info(f"kubeconfig is missing but {node} and the talos identity exist; "
+         "recovering it from the restored identity...")
+    if dry_run():
+        # plan/dry-run must not write client files; report that a real run would
+        # recover the kubeconfig so the cluster is reconciled as existing. Return
+        # True so the caller reads the cluster as UP (it would be, once fetched)
+        # instead of "will bootstrap if needed".
+        action(f"recover kubeconfig from {endpoint}")
+        return True
+    try:
+        _wait_reachable(talosconfig, endpoint, node, timeout_s=reachable_timeout_s,
+                        interval_s=interval_s)
+        talosctl.kubeconfig(talosconfig, endpoint, node, kubeconfig)
+    except (TimeoutError, subprocess.CalledProcessError, OSError):
+        if kubeconfig.is_file():
+            # a partial/empty fetch must not read as a usable kubeconfig
+            try:
+                kubeconfig.unlink()
+            except OSError:
+                pass
+        warn(f"could not recover the kubeconfig from {node}: if this is a first "
+             "run that never bootstrapped, converge will bootstrap it")
+        return False
+    return bool(kubeconfig.is_file() and kubeconfig.stat().st_size > 0)
 
 
 def _endpoint_move(kubeconfig: Path, cluster: str, advertised: str) -> str:
@@ -839,7 +927,13 @@ def _scale_down(backend: InfrastructureBackend, cfg: Config,
     # tailscale); the node is always a numeric private ip apid can route to.
     endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
     desired = set(machines)
-    live = kubectl.node_names(kubeconfig)
+    if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
+        # plan prognosed the recovered cluster as up but wrote no kubeconfig, so
+        # there is no live node list to read against (a real run recovers it
+        # first); with no nodes known there is nothing to scale down.
+        live = []
+    else:
+        live = kubectl.node_names(kubeconfig)
     removals = [node for node in live if node not in desired]
     if not removals:
         info("nothing to remove")
@@ -1123,6 +1217,13 @@ def _upgrade(cfg: Config, machines: dict[str, Machine], inv: InfrastructureInven
     )
     cur = kubectl.server_version(kubeconfig)
     if not cur:
+        if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
+            # plan prognosed the recovered cluster as up but wrote no kubeconfig,
+            # so the running version is unknown and a real run recovers it and
+            # steps it through the minors; there is nothing a dry run can upgrade,
+            # and the 30s retry + stabilization waits have no kube-api to probe.
+            info("kubernetes version unknown (missing kubeconfig); skipped in plan")
+            return
         # the api server is briefly unreachable after a machine-config apply,
         # and an unknown current version costs us the minor-stepping path
         info("kube-api did not answer; retrying version check in 30s")

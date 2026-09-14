@@ -19,6 +19,7 @@ from taloscluster.infrastructure import (
     Endpoint,
     InfrastructureInventory,
     InfrastructureMachine,
+    NetworkAttachment,
     NetworkResult,
     TalosContribution,
 )
@@ -434,3 +435,228 @@ def test_converge_scales_up_nodes_at_the_upgraded_version(
     # the existing node keeps its running-version config, not a rebuild
     existing = "testcluster-controlplane-01"
     assert backend.applied.get(existing) == f"config/{existing}"
+
+
+def test_converge_recovers_a_missing_kubeconfig_and_keeps_upgrade_before_scale_up(
+    make_config, monkeypatch, tmp_path
+):
+    """End-to-end of the recovery fix: a lost management machine restored the
+    identity but not the derived kubeconfig. When converge recovers the kubeconfig
+    from the restored identity and finds the cluster UP (running a minor behind
+    cluster.yaml), a missing node must still be scaled up at the upgraded (target)
+    version -- NOT treated as a fresh cluster, which would skip the upgrade and
+    input newer kubelets among an old cluster."""
+    cfg = make_config({
+        "controlplane": {"count": 2, "flavor": "f", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
+        "kubernetes": {"version": "v1.36.4"},
+    })
+    running = "v1.34.4"  # a minor behind cfg.kubernetes_version (the upgrade target)
+    assert versions.is_older(running, cfg.kubernetes_version)
+
+    missing_h = {h for h in cfg.machines if h != "testcluster-controlplane-01"}
+    backend = _ScaleUpAfterUpgradeBackend(
+        InfrastructureInventory(
+            machines={
+                "testcluster-controlplane-01": InfrastructureMachine(
+                    "testcluster-controlplane-01"
+                )
+            }
+        )
+    )
+    state = _ExistingSecretsState(tmp_path)
+    kubeconfig = tmp_path / "kubeconfig"  # deliberately absent (recovered machine)
+
+    def recover(*_a, **_k):
+        kubeconfig.write_text("clusters: []\n")
+        return True
+
+    calls: list[str] = []
+
+    def fake_build_configs(
+        _cfg, _secrets, machines, _endpoint, _secrets_path, _images,
+        _contributions, default_tags=None, kubernetes_version=None,
+    ):
+        calls.append(kubernetes_version)
+        return {h: f"config/{h}" for h in machines}
+
+    monkeypatch.setattr(machineconfig, "build_configs", fake_build_configs)
+    # recovery succeeds: the kubeconfig now exists and the api answers; the real
+    # `_config_kubernetes_version` (and its downgrade guard) runs against `running`
+    monkeypatch.setattr(converge, "_recover_missing_kubeconfig", recover)
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: running)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_apply_configs", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(
+        converge, "load_secrets", lambda _root: SimpleNamespace(tailscale_auth_key=None)
+    )
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    converge.converge(tmp_path)
+
+    assert kubeconfig.is_file()  # the recovery wrote it back
+    # configs baked twice: the recovered cluster at the running version, then the
+    # missing nodes regenerated at the target version -- the ordering a fresh
+    # mis-read (target-version bootstrap) would have skipped
+    assert calls == [running, cfg.kubernetes_version]
+    for h in missing_h:
+        assert backend.applied.get(h) == f"config/{h}"
+    existing = "testcluster-controlplane-01"
+    assert backend.applied.get(existing) == f"config/{existing}"
+
+
+class _NoTailscaleRecoverBackend(_ScaleUpAfterUpgradeBackend):
+    """An up recovered cluster without tailscale: cp-01 reports a real managed
+    address so `_talos_endpoint` resolves to it, and the recovery must dial that
+    real address -- there is no MagicDNS name to dial as the bare hostname."""
+
+    def reconcile_network(self, _machines, _inventory):
+        return NetworkResult(
+            kubernetes=Endpoint(vip="192.0.2.10", advertised_address="203.0.113.10"),
+            machine_attachments={
+                "testcluster-controlplane-01": (
+                    NetworkAttachment(name="cluster", address="192.168.100.11"),
+                )
+            },
+        )
+
+
+def test_converge_recovers_a_missing_kubeconfig_via_the_real_address_without_tailscale(
+    make_config, monkeypatch, tmp_path
+):
+    """End-to-end of the recovery fix on the second supported access path (no
+    tailscale). talosctl uses `-n` as the apid dial target, so on a recovered
+    cluster without tailscale kubeconfig recovery must target cp-01's REAL
+    address -- the bare `{name}-controlplane-01` hostname has no MagicDNS name
+    to dial. Before this fix that left the 900s tolerant wait to expire, recovery
+    returned False and the healthy cluster was read as never-bootstrapped."""
+    cfg = make_config({
+        "controlplane": {"count": 1, "flavor": "f", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
+        "kubernetes": {"version": "v1.36.4"},
+    })
+    assert not cfg.tailscale_enabled
+    backend = _NoTailscaleRecoverBackend(
+        InfrastructureInventory(
+            machines={
+                "testcluster-controlplane-01": InfrastructureMachine(
+                    "testcluster-controlplane-01"
+                )
+            }
+        )
+    )
+    state = _ExistingSecretsState(tmp_path)
+    kubeconfig = tmp_path / "kubeconfig"  # deliberately absent (recovered machine)
+    dial: list[str] = []
+
+    def recover(_talosconfig, endpoint, node, _kubeconfig, **_k):
+        dial.append((endpoint, node))
+        kubeconfig.write_text("clusters: []\n")
+        return True
+
+    def fake_build_configs(
+        _cfg, _secrets, machines, _endpoint, _secrets_path, _images,
+        _contributions, default_tags=None, kubernetes_version=None,
+    ):
+        return {h: f"config/{h}" for h in machines}
+
+    monkeypatch.setattr(machineconfig, "build_configs", fake_build_configs)
+    monkeypatch.setattr(converge, "_recover_missing_kubeconfig", recover)
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.36.4")
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_apply_configs", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(
+        converge, "load_secrets", lambda _root: SimpleNamespace(tailscale_auth_key=None)
+    )
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    converge.converge(tmp_path)
+
+    # the recovery targeted cp-01's real managed address, not the bare hostname
+    assert dial == [("192.168.100.11", "192.168.100.11")]
+    assert kubeconfig.is_file()
+
+
+def test_converge_plan_recovers_without_stubbing_phase_functions(
+    make_config, monkeypatch, tmp_path
+):
+    """`plan` (dry-run) on a recovered machine must complete with the REAL phase
+    functions -- no kubeconfig is on disk, because recovery prognoses the cluster
+    UP without writing a client file. Before the dry-run guards, `_scale_down`
+    hit `kubectl.get nodes` (check=True) against the missing file and aborted,
+    and `_upgrade` slept 30s then failed its stabilization loop over an absent
+    kube-config. Regress only the phase functions is what the other recovery
+    tests do by stubbing them; this test exercises them for real."""
+    cfg = make_config({
+        "controlplane": {"count": 1, "flavor": "f", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
+        "kubernetes": {"version": "v1.36.4"},
+        "tailscale": {"enabled": True},
+    })
+    backend = _ScaleUpAfterUpgradeBackend(
+        InfrastructureInventory(
+            machines={
+                "testcluster-controlplane-01": InfrastructureMachine(
+                    "testcluster-controlplane-01"
+                )
+            }
+        )
+    )
+    state = _ExistingSecretsState(tmp_path)
+    kubeconfig = tmp_path / "kubeconfig"  # absent: plan recovers but writes nothing
+
+    def recover_prognosis(*_a, **_k):
+        return True  # dry-run recovery writes no kubeconfig, yet reports the cluster UP
+
+    def fake_build_configs(
+        _cfg, _secrets, _machines, _endpoint, _secrets_path, _images,
+        _contributions, default_tags=None, kubernetes_version=None,
+    ):
+        return {}
+
+    monkeypatch.setattr(machineconfig, "build_configs", fake_build_configs)
+    monkeypatch.setattr(converge, "_recover_missing_kubeconfig", recover_prognosis)
+    # no talosctl/kubectl binaries on CI: the dry-run guards under test are the
+    # _scale_down/_upgrade reclaim paths, not membership discovery or node state,
+    # so keep those probes from shelling out
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
+    # a missing kubeconfig reports an empty/unknown server version, like real kubectl
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "")
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(
+        converge, "load_secrets", lambda _root: SimpleNamespace(tailscale_auth_key=None)
+    )
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    converge.converge(tmp_path)  # must not raise CalledProcessError/ReconcileError
+
+    assert not kubeconfig.exists()  # dry-run wrote no client file
+    assert not backend.applied  # nothing reached reconcile_machines (no configs)
