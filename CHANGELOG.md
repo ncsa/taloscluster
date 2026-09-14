@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 - Recover a missing kubeconfig from the restored Talos identity before deciding an existing cluster is fresh, so a lost management machine's cluster is reconciled (scale-down, config apply, upgrade) instead of being re-bootstrapped; a scale-up in the same run still boots new nodes at the upgraded version.
+- Report an existing-but-unreachable cluster as an incomplete converge: its mutating plugin converge hooks are deferred (they act against a live cluster) and the command exits `1` until the cluster answers again, instead of returning a clean `0`.
 - Recover the kubeconfig through the control plane's real address (not the MagicDNS name) on clusters without Tailscale, matching the bootstrap path; `plan` reports a recovered cluster as up and completes, with scale-down and upgrade halting their kube-api reads until the worked-on kubeconfig exists.
 - Settle control-plane config applies quorum-safely: `apply_config` reports whether talos restarted the node (`--mode=auto`), so a no-op/live apply skips the settle wait, an unresolved grace-window expiry now refuses to advance instead of warn-and-continue, and a restarted control plane must pass `talosctl health` before the next one is touched.
 - Require Talos/etcd health between control-plane removals during scale-down: the kube-api fallback is refused (a responding VIP served by the survivors is no longer trusted), so a surviving control plane is never removed past a member that never left etcd.

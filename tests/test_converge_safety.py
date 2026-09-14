@@ -1329,6 +1329,7 @@ class _ExistingDownBackend(_SecretsBackend):
     def __init__(self, inventory):
         super().__init__(inventory)
         self.mutations: list[str] = []
+        self.plugin_converge: list[str] = []
 
     def default_node_tags(self):
         return {}
@@ -1380,7 +1381,10 @@ def _stub_converge_full(monkeypatch, tmp_path, state, backend, machine_cfg,
     monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
     monkeypatch.setattr(converge.talosctl, "gen_talosconfig", lambda *a, **k: "talosconfig")
     monkeypatch.setattr(converge.machineconfig, "build_configs", lambda *a, **k: machine_cfg)
-    monkeypatch.setattr(converge, "_run_plugins", lambda *a, **kw: 0)
+    monkeypatch.setattr(
+        converge, "_run_plugins",
+        lambda *a, **kw: backend.plugin_converge.append("converge") or 0,
+    )
     if stub_health:
         monkeypatch.setattr(converge, "_require_final_health", lambda *a, **k: None)
         monkeypatch.setattr(converge, "_wait_nodes_ready", lambda *a, **k: None)
@@ -1395,9 +1399,10 @@ def test_converge_does_not_recreate_existing_nodes_when_api_is_down(monkeypatch,
     """When machines already exist and a kubeconfig was written earlier but the
     kube-api does not answer after every retry, converge treats the cluster as
     existing (not fresh): it warns loudly, does NOT reconcile/create nodes as if
-    they were missing, and -- because health checks are meaningless on a cluster
-    known unreachable -- skips the health phase and returns cleanly instead of
-    hanging."""
+    they were missing, defers the mutating plugin converge hooks (which would
+    act against a cluster we cannot reach), skips the health phase (meaningless
+    on a cluster known unreachable), and reports an incomplete converge with a
+    nonzero exit instead of returning clean."""
     inventory = _cp_inventory("phoenix-controlplane-01")
     state = _FakeState(True, tmp_path / "talossecrets.yaml")
     backend = _ExistingDownBackend(inventory)
@@ -1425,12 +1430,14 @@ def test_converge_does_not_recreate_existing_nodes_when_api_is_down(monkeypatch,
     assert _stub_converge_full(
         monkeypatch, tmp_path, state, backend,
         {"phoenix-controlplane-01": "config"},
-    ) == 0  # clean exit -- the health phase really is skipped, not stubbed away
+    ) == 1  # an unreachable cluster is an incomplete converge, reported as failed
 
     assert backend.mutations == []  # reconcile_machines never ran -> no recreate
+    assert backend.plugin_converge == []  # mutating plugin converge hooks deferred
     joined = " ".join(warns)
     assert "machine(s) already exist" in joined
     assert "refusing to recreate nodes" in joined
+    assert "deferring plugin converge hooks" in joined
 
 
 def test_converge_rebootstraps_an_interrupted_first_run(monkeypatch, tmp_path):

@@ -59,10 +59,13 @@ from .talos import factory, machineconfig, talosctl
 
 
 def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
-    """Make the cluster match cluster.yaml. Returns a non-zero exit code only
-    when an installed plugin failed -- the cluster itself is already built by
-    then, so a downstream registration failure must not look like a converge
-    that did not happen."""
+    """Make the cluster match cluster.yaml. Returns a non-zero exit code when
+    an installed plugin failed, or when an existing cluster remains unreachable
+    -- an incomplete converge that must not read as a clean no-op. A plugin
+    failure happens only once the cluster itself is already built, so a
+    downstream registration failure must not look like a converge that did not
+    happen; an unreachable existing cluster is the reverse -- nothing was
+    reconciled, so it must not look like one that did."""
     cfg = load_config(root)
     secrets = load_secrets(root)
 
@@ -336,6 +339,16 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         infrastructure={"provider": backend.name, **provider_status},
         openstack=provider_status if backend.name == "openstack" else {},
     )
+    if existing_but_down and not dry_run():
+        # The plugin converge hooks mutate against a live cluster (deploy an
+        # ArgoCD App, reconcile Rancher membership), so they must not run
+        # against a cluster we cannot reach -- and this converge is incomplete,
+        # so it fails rather than reporting a clean exit until the cluster can
+        # be reconciled. Plan/dry-run leaves them in place so plan still shows
+        # what a successful converge would do.
+        warn("cluster is existing but unreachable: deferring plugin converge "
+             "hooks and reporting an incomplete converge")
+        return 1
     return _run_plugins(ctx, "converge", assume_yes=assume_yes)
 
 
