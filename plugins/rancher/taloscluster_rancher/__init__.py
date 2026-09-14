@@ -20,7 +20,7 @@ from taloscluster.config import CLUSTER_FILE, SECRETS_FILE
 from taloscluster.context import Context
 from taloscluster.scaffold import add_yaml_section
 
-from .config import rancher_configured
+from .config import rancher_configured, validate_rancher
 from .reconcile import check, converge, destroy, status
 
 try:
@@ -50,7 +50,7 @@ rancher:
   # token: token-xxxxx:yyyyyyyyyyyy
 """
 
-__all__ = ["AFTER", "check", "configured", "converge", "destroy", "init", "status"]
+__all__ = ["AFTER", "check", "configured", "converge", "destroy", "init", "status", "validate"]
 
 
 def init(root: Path) -> None:
@@ -64,3 +64,17 @@ def configured(ctx: Context) -> bool:
     section (the latter with url + token). A missing section in either means this
     cluster is not managed by Rancher and the plugin does nothing."""
     return rancher_configured(ctx.root)
+
+
+def validate(root: Path, ctx: Context) -> None:
+    """Reject a malformed or contradictory `rancher:` configuration.
+
+    Runs in core's converge validate phase, before any cluster mutation, so a
+    broken active `rancher:` section (admins/users that are not lists of
+    usernames, a member under both tiers, or credential values that are not
+    non-empty strings) stops the run while the cluster is still untouched
+    instead of failing the late reconcile hooks. A `rancher:` section that is
+    not a mapping never reaches here from core -- it makes the plugin inactive,
+    so the plugin is skipped rather than validated.
+    """
+    validate_rancher(root)

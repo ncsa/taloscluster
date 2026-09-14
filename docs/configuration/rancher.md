@@ -4,6 +4,8 @@ Back to the [configuration index](../configuration.md).
 
 The rancher plugin imports the cluster into a Rancher server, installs the cluster agent, and reconciles the members listed here. It is skipped, and shown as `not configured` by `taloscluster plugin list`, unless `cluster.yaml` has a `rancher` section and `secrets.yaml` has both `url` and `token`. See [Plugins](../concepts/plugins.md#how-plugins-run) for what converge, destroy and check do.
 
+During converge's validate phase, before any core change, the plugin refuses a malformed or contradictory `rancher:` section in an active config: `admins`/`users` that are not lists of usernames, a member under both tiers, or `url`/`token` values that are not non-empty strings (including null or empty) stops the run while the cluster is still untouched. A `rancher:` section that is not a mapping is treated as absent, so the plugin is inactive and the cluster is simply not managed by Rancher.
+
 ## cluster.yaml
 
 ```yaml
@@ -16,7 +18,7 @@ rancher:
 
 Optional · list of usernames · default empty
 
-Members granted the Rancher `cluster-owner` role. Usernames are resolved through Rancher's configured auth providers on an exact id match only; a short or misspelled netid cannot be resolved and is skipped with a warning. A name listed under both `admins` and `users` is ambiguous and rejected. Removing a name removes stale individual user bindings on the next converge. The creator-owner binding and group bindings are preserved, so access through those bindings remains.
+Members granted the Rancher `cluster-owner` role. Usernames are resolved through Rancher's configured auth providers on an exact id match only; a short or misspelled netid cannot be resolved and is skipped with a warning. A name listed under both `admins` and `users` is ambiguous and refused during converge's validate phase, before any core change. Removing a name removes stale individual user bindings on the next converge. The creator-owner binding and group bindings are preserved, so access through those bindings remains.
 
 ### `rancher.users`
 

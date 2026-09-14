@@ -45,6 +45,66 @@ def rancher_configured(root: Path) -> bool:
     return "url" in rancher_s and "token" in rancher_s
 
 
+def validate_rancher(root: Path) -> None:
+    """Refuse a malformed or contradictory `rancher:` configuration.
+
+    Called by core in converge's validate phase, before any cluster mutation, so
+    a broken active `rancher:` section (admins/users that are not lists of
+    usernames, secret credential values that are not non-empty strings, or a
+    member listed under both tiers) stops the run while the cluster is still
+    untouched instead of failing the late reconcile hooks. A `rancher:` section
+    that is not a mapping never reaches here from core -- it makes the plugin
+    inactive, so the plugin is skipped rather than validated. Raises ConfigError
+    on the first problem.
+    """
+    dc = read_yaml(root / CLUSTER_FILE)
+    ds = read_yaml(root / SECRETS_FILE)
+    clan_raw = dc.get("rancher")
+    sec_raw = ds.get("rancher")
+    if clan_raw is not None and not isinstance(clan_raw, dict):
+        raise ConfigError(f"{CLUSTER_FILE}: rancher must be a YAML mapping")
+    if sec_raw is not None and not isinstance(sec_raw, dict):
+        raise ConfigError(f"{SECRETS_FILE}: rancher must be a YAML mapping")
+    clan = clan_raw if isinstance(clan_raw, dict) else {}
+    sec = sec_raw if isinstance(sec_raw, dict) else {}
+
+    # member role lists must be lists of usernames. A bare string would iterate
+    # character by character when the reconciler flattens a tier.
+    for role in ("admins", "users"):
+        members = clan.get(role)
+        if members is not None and (
+            not isinstance(members, list)
+            or any(not isinstance(m, str) or not m.strip() for m in members)
+        ):
+            raise ConfigError(
+                f"{CLUSTER_FILE} (rancher.{role}) must be a list of usernames"
+            )
+
+    admins = tuple(clan.get("admins", []) or [])
+    users = tuple(clan.get("users", []) or [])
+    overlap = sorted(set(admins) & set(users))
+    if overlap:
+        raise ConfigError(
+            f"{CLUSTER_FILE} (rancher): member(s) listed under both 'admins' and "
+            f"'users': {', '.join(overlap)}; a membership tier is ambiguous, "
+            "list each member under exactly one of the two"
+        )
+
+    # the url/token feed the Rancher HTTP client, so they must be non-empty
+    # strings. A null or non-string credential would load cleanly and then crash
+    # the late HTTP client (NoneType.rstrip) after core mutation, matching the
+    # core _secret precedent of refusing null credentials up front. Only a key
+    # that is present is checked, so an absent key (an inactive section) passes.
+    for key in ("url", "token"):
+        if key not in sec:
+            continue
+        value = sec.get(key)
+        if not isinstance(value, str) or not value:
+            raise ConfigError(
+                f"{SECRETS_FILE} (rancher.{key}) must be a non-empty string"
+            )
+
+
 @dataclass(frozen=True)
 class Members:
     """Desired members, tier -> list of NCSA netids/usernames."""
