@@ -315,15 +315,94 @@ def _dry_run_summary(out: str) -> list[str]:
 
 
 _SECRET_KEY = re.compile(
-    r"^([-+ ]?\s*)([A-Za-z]*(?:key|secret|token|password)[A-Za-z]*):\s*\S.*$", re.I
+    r"^([-+ ]?\s*)([A-Za-z]*(?:key|secret|token|passwd|pwd|pass|password)[A-Za-z]*)\s*:\s*(\S.*)$",
+    re.I,
 )
 # `- TS_AUTHKEY=...` style environment entries (extension service configs).
 _SECRET_ENV = re.compile(
-    r"^([-+ ]?\s*-\s*)([A-Za-z_]*(?:key|secret|token|password)[A-Za-z_]*)=\S.*$", re.I
+    r"^([-+ ]?\s*-\s*)([A-Za-z_]*(?:key|secret|token|passwd|pwd|pass|password)[A-Za-z_]*)=\S.*$",
+    re.I,
+)
+# A `NAME=value` environment line whose NAME mentions key/secret/token/password,
+# with the dash made optional: a secret-named env fragment without a leading `- `
+# (a body line of a `machine.files` env file or an export-laden script) is a
+# secret no matter what its value looks like.
+_SECRET_ENV_NAME = re.compile(
+    r"^[A-Za-z_]*(?:key|secret|token|passwd|pwd|pass|password)[A-Za-z_]*=", re.I
 )
 # `content:`/`contents:` fields: machine.files file data and cluster.inlineManifests
 # bodies, either of which may be a `|` literal spanning many lines.
 _SECRET_CONTENT = re.compile(r"^([-+ ]?\s*(?:-\s*)?)(content|contents):\s*(\S.*)?$", re.I)
+# A public `KEY=value` environment entry (extension service configs). Only a
+# short bare identifier before `=` counts: a base64/PEM body blob such as
+# ``LS0tLS1CRUdJTiBQUklWQVRFIEtFWQo==`` is also an unbroken run of base64
+# characters ending in `=`, but its "key" is far longer than any real env var.
+_PUBLIC_ENV = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,23}=")
+
+
+_BLOCK_INDICATOR = ("|", ">")
+
+
+def _block_literal(value: str) -> bool:
+    """Whether ``value`` starts a `|`/`>` block scalar whose body follows.
+
+    The indicator may carry an explicit indentation hint (``|2``) or a trailing
+    comment (``| # apiVersion v1``); either way the scalar's body starts on the
+    following lines.
+    """
+    value = value.lstrip(" ")
+    if value[:1] not in _BLOCK_INDICATOR:
+        return False
+    rest = value[1:]
+    return (
+        not rest.strip()
+        or not rest.strip("-+0123456789")
+        or rest.lstrip().startswith("#")
+    )
+
+
+def _is_secret_value(value: str) -> bool:
+    """Whether a ``key: value``/``- value`` fragment's value looks like a body.
+
+    A mapping or array entry that cannot be tied to a public part of the machine
+    config is only safe to print while its value is recognisably public — a
+    path, hostname, port or plain word. A base64/PEM blob or long high-entropy
+    token is a secret body fragment (a certificate, key or token), no matter
+    what its key is called. Separators (``/``, ``.``, ``-``, ``:``, ``=``) break
+    a value into shorter runs, so a path or hostname is never flagged by the
+    10+ char run rule; but a long value that still mixes upper and lower case is
+    treated as a blob regardless of separators, since base64 can legitimately
+    contain ``/`` — over-redacting a mixed-case hostname is the safe direction.
+    An angle-bracket placeholder (``<base64>``) is treated as secret.
+    """
+    v = value.strip().strip("'\"")
+    if not v:
+        return False
+    if v.startswith("<") and v.endswith(">"):
+        return True
+    if len(v) < 10:
+        return False
+    # base64-encoded PEM (`LS0t` is the base64 of `-----`), base64 padding and
+    # the `+` base64 digit are strong blob signatures.
+    if v.startswith("LS0t") or v.endswith("=") or "+" in v:
+        return True
+    # The longest unbroken run of letters/digits. A single 10+ char run is
+    # high-entropy (a token such as `deadbeefcafe1234` or `3xMP1el3ak2Fo`),
+    # whatever its case; separators only split paths (`/etc/hosts`), hostnames
+    # (`Worker-01.example.edu`) and hyphenated words (`registry-user`) into
+    # short public terms.
+    runs = list(re.finditer(r"[A-Za-z0-9]+", v))
+    if runs and max(m.end() - m.start() for m in runs) >= 10:
+        return True
+    return any(c.isupper() for c in v) and any(c.islower() for c in v)
+
+
+# The deepest column at which a genuinely public mapping key (a bare `crt:`/
+# cert field, a top-level field) sits before we start value-checking it. A
+# `:`-bearing line indented deeper is treated as block body: file paths,
+# hostnames and plain words still pass the value check, while a base64/PEM/token
+# fragment — a manifest body no matter its key — is suppressed.
+_PUBLIC_KEY_DEPTH = 9
 
 
 def _redact(lines: Iterable[str]) -> list[str]:
@@ -332,13 +411,21 @@ def _redact(lines: Iterable[str]) -> list[str]:
     Redacts the value of any key whose name mentions key/secret/token/password
     (so a registry `password:`, a `machine.files`/`inlineManifests` field, ...),
     of any `VAR=...` environment entry whose name mentions key/secret/token/
-    password, and — as a whole region — the body of a `content:`/`contents:`
-    block literal (machine.files data, cluster.inlineManifests), redacting every
-    deeper-indented line until the block closes, whether the scalar is a `|`
-    literal or a `>` folded block.
+    password, and — as a whole region — the body of any block literal such a key
+    or a `content:`/`contents:` field opens (machine.files data,
+    cluster.inlineManifests, a multiline `password: |` credential), redacting
+    every deeper-indented line until the block closes, whether the scalar is a
+    `|` literal or a `>` folded block.
+
+    A change deep inside a long block body can arrive as a unified-diff hunk
+    that does not carry the `content:`/`contents:` header line at all (it sits
+    far above, outside the hunk's window). Such a line cannot be classified by
+    position, so any indented line — whether a `+`/`-` changed line or a
+    ` ` context line — that is not a recognisably public mapping/environment/
+    array entry is suppressed rather than printed verbatim.
     """
     out: list[str] = []
-    block: int | None = None  # key indentation of an open content/contents block
+    block: int | None = None  # key indentation of an open block scalar
     for line in lines:
         # Diff framing lines (file/hunk headers) must not disturb an open block:
         # a long block body split across two hunks keeps redacting past the second `@@`.
@@ -359,6 +446,11 @@ def _redact(lines: Iterable[str]) -> list[str]:
             continue
         match = _SECRET_KEY.match(line)
         if match is not None:
+            # A multiline credential is a block scalar: once we hide the header,
+            # the deeper body lines must be hidden as a region too, exactly like
+            # a `content:` field.
+            if _block_literal(match.group(3)):
+                block = indent + (2 if stripped.startswith("- ") else 0)
             out.append(f"{match.group(1)}{match.group(2)}: <redacted>")
             continue
         match = _SECRET_ENV.match(line)
@@ -371,16 +463,66 @@ def _redact(lines: Iterable[str]) -> list[str]:
             # dash column: sequence items (`- content: |`) have sibling keys
             # (`op:`, `path:`) at the key column, which must close the block.
             key_col = indent + (2 if stripped.startswith("- ") else 0)
-            value = (match.group(3) or "").lstrip(" ")
-            rest = value[1:]
-            # `|`/`>` may carry an explicit indentation indicator (`|2`) or a trailing
-            # comment; either way the scalar body starts on the following lines.
-            if value[:1] in ("|", ">") and (
-                not rest.strip() or not rest.strip("-+0123456789")
-                or rest.lstrip().startswith("#")
-            ):
+            if _block_literal(match.group(3) or ""):
                 block = key_col
             out.append(f"{match.group(1)}{match.group(2)}: <redacted>")
+            continue
+        # A changed or context line with no key/env/array marker that is indented
+        # cannot reliably be tied to a public piece of the machine config — its
+        # enclosing block (a `content:` or multiline credential) is out of the
+        # hunk. Treat a ` ` context line exactly like a `+`/`-` changed line and
+        # print nothing rather than expose a secret body fragment. A mapping
+        # (`key: value`) or array (`- value`) entry is kept only while its value
+        # looks public; a secret-shaped value (base64, PEM, long token) is
+        # suppressed for array entries and for mapping entries deep enough to be
+        # a manifest body (shallow `crt:`/`ca:` cert fields stay public).
+        if marker in ("+", "-", " ") and indent > 0 and stripped:
+            after_dash = stripped[2:].lstrip() if stripped.startswith("- ") else stripped
+            # environment entries (`KEY=value`) are public config, but a base64
+            # body fragment — whether a long PEM blob (`LS0t...==`) or the short
+            # padded tail line of one (`xk2m9pqw4v=`) — is also `X=...`-shaped,
+            # its "key" drawn from the base64 alphabet rather than a real env var.
+            # Keep an env entry only while its value is recognisably public;
+            # suppress it when the value is a token/blob or trailing `=` padding.
+            if _PUBLIC_ENV.match(after_dash) is not None:
+                name, _, env_value = after_dash.partition("=")
+                # An env line whose NAME mentions key/secret/token/password is a
+                # secret regardless of its value's shape — a `SECRET_KEY=`/`TOKEN=`
+                # env file body fragment without the leading `- ` still names a
+                # secret. Otherwise keep an env entry only while its value is
+                # recognisably public; suppress it when the value is a
+                # token/blob or trailing `=` padding, and when a single trailing
+                # `=` padding leaves an empty value but the NAME is itself
+                # blob-shaped (a genuinely public empty `NAME=` env entry stays).
+                if (
+                    _SECRET_ENV_NAME.match(after_dash) is not None
+                    or _is_secret_value(env_value)
+                    or (env_value and set(env_value) <= {"="})
+                    or (not env_value and _is_secret_value(name))
+                ):
+                    out.append(f"{marker}    <redacted>")
+                    continue
+                out.append(line)  # public `KEY=value` (hostname, path, word)
+                continue
+            if stripped.startswith("- "):
+                if _is_secret_value(stripped[2:].lstrip()):
+                    out.append(f"{marker}    <redacted>")
+                    continue
+                out.append(line)  # public array/sequence value
+                continue
+            if ":" in stripped:
+                # Shallow mapping keys are public config (a top-level `crt:`
+                # cert field); once the line is deep enough to be a manifest
+                # body, gate the value on whether it looks secret.
+                if (
+                    indent > _PUBLIC_KEY_DEPTH
+                    and _is_secret_value(stripped.partition(":")[2])
+                ):
+                    out.append(f"{marker}    <redacted>")
+                    continue
+                out.append(line)  # public mapping entry (path, word, hostname)
+                continue
+            out.append(f"{marker}    <redacted>")
             continue
         out.append(line)
     return out
