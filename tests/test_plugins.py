@@ -474,6 +474,113 @@ def test_direct_destroy_yes_skips_the_prompt(monkeypatch, tmp_path, make_config)
     assert seen == ["destroy"]
 
 
+# ---- standalone converge/plan run validation first -------------------------
+
+def test_validate_can_narrow_to_a_single_plugin(monkeypatch, ctx):
+    """The standalone plugin commands validate only the plugin being run, so a
+    malformed section on some other installed plugin does not block it."""
+    seen = []
+    install(
+        monkeypatch,
+        FakeEntryPoint("good", make_module(
+            "good", configured=lambda ctx: True,
+            validate=lambda root, ctx: seen.append(root))),
+        FakeEntryPoint("bad", make_module(
+            "bad", configured=lambda ctx: True,
+            validate=lambda root, ctx: pytest.fail("must not run"))),
+    )
+    plugins.validate(ctx, [p for p in plugins.discover() if p.name == "good"])
+    assert seen == [ctx.root]
+
+
+def test_direct_converge_rejects_bad_config_before_running(monkeypatch, tmp_path, make_config):
+    """`taloscluster plugin NAME converge` applies the same early validation
+    converge does: a plugin section that the `validate` hook rejects stops the
+    run with a non-zero exit before the mutating hook runs."""
+    from taloscluster import cli
+
+    make_config()
+    ran = []
+
+    def reject(root, ctx):
+        raise ConfigError("argocd.infra.url must be set together with git.url")
+
+    install(monkeypatch, FakeEntryPoint(
+        "argocd", make_module(
+            "argocd",
+            configured=lambda ctx: True,
+            validate=reject,
+            converge=lambda ctx, assume_yes=False: ran.append("converge"))))
+
+    assert cli.main(["plugin", "-C", str(tmp_path), "argocd", "converge"]) == 1
+    assert ran == []
+
+
+def test_direct_plan_rejects_bad_config_before_running(monkeypatch, tmp_path, make_config):
+    """`plugin NAME plan` (converge --dry-run) also validates first, so a lone
+    repository URL or unsupported override is refused while planning."""
+    from taloscluster import cli, output
+
+    make_config()
+    ran = []
+
+    def reject(root, ctx):
+        raise ConfigError("unsupported option")
+
+    install(monkeypatch, FakeEntryPoint(
+        "argocd", make_module(
+            "argocd",
+            configured=lambda ctx: True,
+            validate=reject,
+            converge=lambda ctx, assume_yes=False: ran.append("converge"))))
+
+    output.set_dry_run(True)
+    try:
+        assert cli.main(["plugin", "-C", str(tmp_path), "argocd", "plan"]) == 1
+    finally:
+        output.set_dry_run(False)
+    assert ran == []
+
+
+def test_direct_converge_runs_when_config_is_valid(monkeypatch, tmp_path, make_config):
+    """Passing validation is a precondition, not a block: a valid config still
+    reaches the mutating hook."""
+    from taloscluster import cli
+
+    make_config()
+    ran = []
+    install(monkeypatch, FakeEntryPoint(
+        "a", make_module(
+            "a",
+            configured=lambda ctx: True,
+            validate=lambda root, ctx: None,
+            converge=lambda ctx, assume_yes=False: ran.append("converge"))))
+
+    assert cli.main(["plugin", "-C", str(tmp_path), "a", "converge"]) == 0
+    assert ran == ["converge"]
+
+
+def test_direct_destroy_validates_before_teardown(monkeypatch, tmp_path, make_config):
+    """A standalone mutating destroy also validates before removing resources."""
+    from taloscluster import cli
+
+    make_config()
+    ran = []
+
+    def reject(root, ctx):
+        raise ConfigError("bad plugin config")
+
+    install(monkeypatch, FakeEntryPoint(
+        "a", make_module(
+            "a",
+            configured=lambda ctx: True,
+            validate=reject,
+            destroy=lambda ctx, assume_yes=False: ran.append("destroy"))))
+
+    assert cli.main(["plugin", "-C", str(tmp_path), "a", "destroy", "--yes"]) == 1
+    assert ran == []
+
+
 # ---- warning-only status/check errors --------------------------------------
 
 def test_direct_status_plugin_error_is_warning_only(monkeypatch, tmp_path, make_config, capsys):

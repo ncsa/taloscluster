@@ -133,31 +133,41 @@ def active(ctx: Context) -> list[Plugin]:
     return out
 
 
-def validate(ctx: Context) -> None:
-    """Run every installed plugin's optional ``validate`` hook, refusing bad config.
+def _validate_plugin(p: Plugin, ctx: Context) -> None:
+    """Run one plugin's optional ``validate`` hook, refusing bad config.
 
-    Used by converge in its validate phase, before any cluster mutation. Every
-    plugin that implements ``validate`` is consulted, whether or not it is active
-    for this cluster: a plugin whose configuration section is *supplied* but
+    A hook that raises aborts with a ``ConfigError`` naming the plugin, so an
+    invalid or contradictory plugin section stops the run while the cluster is
+    still untouched. A plugin without the hook has nothing to check.
+    """
+    fn = getattr(p.module, "validate", None)
+    if not callable(fn):
+        return
+    try:
+        fn(ctx.root, ctx)
+    except ConfigError as e:
+        raise ConfigError(f"plugin {p.name!r}: {e}") from e
+    except (Exception, Die) as e:  # a plugin that can't even validate must not mutate later
+        raise ConfigError(f"plugin {p.name!r}: invalid configuration: {e}") from e
+
+
+def validate(ctx: Context, only: list[Plugin] | None = None) -> None:
+    """Run the installed plugins' optional ``validate`` hook, refusing bad config.
+
+    Used by converge in its validate phase, before any cluster mutation, over
+    every plugin that implements ``validate`` -- whether or not it is active for
+    this cluster: a plugin whose configuration section is *supplied* but
     malformed, or that names an unsupported connection mode, must be reported
     even though it never activates (activation can silently discard an invalid
     section). It is the plugin's ``validate`` hook that distinguishes an absent
     section from invalid supplied configuration, so an entirely absent section
-    is a no-op. A hook that raises aborts with a ``ConfigError`` naming the
-    plugin, so an invalid or contradictory plugin section stops the run while
-    the cluster is still untouched. A plugin without the hook has nothing to
-    check.
+    is a no-op. ``only`` narrows the check to a specific plugin, which the
+    standalone ``plugin NAME converge``/``destroy`` commands use so a single
+    mutating/planning hook gets the same early validation converge applies
+    without consulting plugins that are not being run.
     """
-    for p in discover():
-        fn = getattr(p.module, "validate", None)
-        if not callable(fn):
-            continue
-        try:
-            fn(ctx.root, ctx)
-        except ConfigError as e:
-            raise ConfigError(f"plugin {p.name!r}: {e}") from e
-        except (Exception, Die) as e:  # a plugin that can't even validate must not mutate later
-            raise ConfigError(f"plugin {p.name!r}: invalid configuration: {e}") from e
+    for p in (only if only is not None else discover()):
+        _validate_plugin(p, ctx)
 
 
 def run(plugins: list[Plugin], hook: str, ctx: Context, **kw) -> int:

@@ -113,7 +113,7 @@ taloscluster plugin rancher check -o yaml
 
 `list` shows installed plugins in execution order and, when a cluster configuration is available, whether each is configured. It can run outside a cluster directory.
 
-With a plugin name, run only that plugin. A direct `destroy` prompts for the cluster name before it runs, exactly like the top-level `destroy`, unless `--yes` is supplied; a `--dry-run` lists what it would delete first. The action defaults to `converge`; `plan` runs its converge hook in dry-run mode. `-o text` or `-o yaml` selects output for `status` and `check`. An unconfigured plugin is skipped, while an unknown plugin or an unsupported hook is an error. See [Plugins](concepts/plugins.md) for installation, configuration, and hook behavior.
+With a plugin name, run only that plugin. A standalone `converge`, `plan` or `destroy` runs that plugin's `validate` hook before any mutation, so a malformed or contradictory section (an unsupported override, a lone repository URL, an unsupported apply target) is refused up front. A direct `destroy` prompts for the cluster name before it runs, exactly like the top-level `destroy`, unless `--yes` is supplied; a `--dry-run` lists what it would delete first. The action defaults to `converge`; `plan` runs its converge hook in dry-run mode. `-o text` or `-o yaml` selects output for `status` and `check`. An unconfigured plugin is skipped, while an unknown plugin or an unsupported hook is an error. See [Plugins](concepts/plugins.md) for installation, configuration, and hook behavior.
 
 ## Exit status
 

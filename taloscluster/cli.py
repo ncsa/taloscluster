@@ -98,11 +98,21 @@ def _cmd_plugin(args, root):
                   f"(installed: {', '.join(sorted(found)) or 'none'})")
 
     ctx = Context.load(root)
+    hook = "converge" if args.action == "plan" else args.action
+
+    if hook in ("converge", "destroy"):
+        # A standalone mutating/planning hook gets the same early validation
+        # converge applies. The plugin's `validate` hook distinguishes an absent
+        # section (nothing to check) from an invalid supplied one -- an
+        # unsupported override, a lone repository URL, an unsupported apply
+        # target -- so a bad section is refused even though it may not activate,
+        # instead of being silently ignored or applied to incomplete resources.
+        _plugins.validate(ctx, [plugin])
+
     if not plugin.configured(ctx):
         info(f"{args.name} is not configured for this cluster; nothing to do")
         return 0
 
-    hook = "converge" if args.action == "plan" else args.action
     if not plugin.has(hook):
         raise Die(f"plugin {args.name!r} does not implement {hook}")
 
