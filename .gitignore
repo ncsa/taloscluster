@@ -40,3 +40,4 @@ htmlcov/
 # local TODO helper logs and verdicts
 todo-looper.sh
 /todo-looper/
+todo.md
