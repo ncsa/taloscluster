@@ -229,6 +229,50 @@ def test_non_mapping_per_app_section_rejected(tmp_path):
         validate_argocd(tmp_path)
 
 
+# ---- unknown keys inside repository and credential blocks -------------------
+
+
+@pytest.mark.parametrize("repo", ["git", "infra"])
+def test_unknown_repository_key_rejected(tmp_path, repo):
+    _write(tmp_path, argocd_cluster={repo: {"url": "https://git.example.com/cluster.git",
+                                            "usl": "https://git.example.com/other.git"}})
+    with pytest.raises(ConfigError, match=f"argocd\\.{repo}\\).*unsupported key.*usl"):
+        validate_argocd(tmp_path)
+
+
+def test_misspelled_repository_url_key_rejected(tmp_path):
+    """`git.urre` is a typo for `git.url`; it must never be silently dropped."""
+    _write(tmp_path, argocd_cluster={"git": {"urre": "https://git.example.com/cluster.git"},
+                                     "infra": {"url": "https://git.example.com/infra.git"}})
+    with pytest.raises(ConfigError, match="argocd\\.git\\).*unsupported key.*urre"):
+        validate_argocd(tmp_path)
+
+
+def test_repository_branch_key_is_rejected(tmp_path):
+    """Only `url` is supported; a `branch` override is refused rather than ignored."""
+    _write(tmp_path, argocd_cluster={"git": {"url": "https://git.example.com/cluster.git",
+                                             "branch": "main"},
+                                     "infra": {"url": "https://git.example.com/infra.git"}})
+    with pytest.raises(ConfigError, match="argocd\\.git\\).*unsupported key.*branch"):
+        validate_argocd(tmp_path)
+
+
+def test_unknown_secrets_git_credential_key_rejected(tmp_path):
+    _write(tmp_path, argocd_cluster={"git": {"url": "https://git.example.com/cluster.git"},
+                                     "infra": {"url": "https://git.example.com/infra.git"}},
+            argocd_secrets={"git": {"username": "deploy", "tokn": "x"}})
+    with pytest.raises(ConfigError, match=r"argocd\.git\): unsupported option\(s\): tokn"):
+        validate_argocd(tmp_path)
+
+
+def test_unknown_secrets_section_key_rejected(tmp_path):
+    """A miscapped key in the `argocd:` secrets section is refused."""
+    _write(tmp_path, argocd_secrets={"kubeconfig": "../argocd-kubeconfig",
+                                     "kubeconfigg": "../other"})
+    with pytest.raises(ConfigError, match=r"argocd\): unsupported option\(s\): kubeconfigg"):
+        validate_argocd(tmp_path)
+
+
 # ---- unsupported options --------------------------------------------------
 
 

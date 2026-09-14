@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- Refuse a miscapped or unsupported key inside every fixed-schema section of `cluster.yaml` and `secrets.yaml` (core `talos`, `network`, `kubernetes`, `openstack`/`proxmox`, `tailscale` and pool keys, provider credential sections; Rancher `admins`/`users`/`url`/`token`; ArgoCD repository and apply-target/credential blocks) instead of silently ignoring it and falling back to a default, so `talos.extensons`, `network.dnss` or `openstack.regoin` no longer load quietly. Freeform maps (`tags`, security host labels, `config_patches`) are preserved.
+
 - Validate each plugin's `validate` hook for every installed plugin, not just active ones, so a supplied-but-malformed section (a non-mapping `argocd:`/`rancher:`, or a secrets `argocd.url`/`token` without a `kubeconfig`/`context`) is refused in the pre-mutation phase instead of being silently discarded by activation.
 - Validate an active Rancher config (admins/users lists of usernames with no member under both tiers, non-empty `url`/`token` strings) in the early plugin phase, so a contradictory section no longer slips past the core's preflight to fail only the late Rancher hook.
 - Recover a missing kubeconfig from the restored Talos identity before deciding an existing cluster is fresh, so a lost management machine's cluster is reconciled (scale-down, config apply, upgrade) instead of being re-bootstrapped; a scale-up in the same run still boots new nodes at the upgraded version.

@@ -1123,3 +1123,81 @@ def test_unknown_top_level_secrets_plugin_key_still_rejected(tmp_path):
     )
     with pytest.raises(ConfigError, match=r"unknown key\(s\): gitlab"):
         load_secrets(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# nested-key validation inside fixed-schema sections (typo / unsupported key)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "overrides, field",
+    [
+        ({"talos": {"extensons": ["siderolabs/foo"]}}, r"talos: unknown key\(s\): extensons"),
+        ({"network": {"dnss": ["9.9.9.9"]}}, r"network: unknown key\(s\): dnss"),
+        ({"openstack": {"regoin": "RegionTwo"}}, r"openstack: unknown key\(s\): regoin"),
+        ({"kubernetes": {"verson": "v1.31.0"}}, r"kubernetes: unknown key\(s\): verson"),
+        ({"tailscale": {"login_serer": "https://hs.example"}},
+         r"tailscale: unknown key\(s\): login_serer"),
+        ({"controlplane": {"count": 3, "flavor": "gp.medium", "disk": 40, "flavr": "x"}},
+         r"controlplane: unknown key\(s\): flavr"),
+        ({"workers": {"worker": {"count": 1, "flavor": "f", "disk": 20, "cors": 4}}},
+         r"workers.worker: unknown key\(s\): cors"),
+    ],
+)
+def test_unknown_nested_key_is_rejected(make_config, overrides, field):
+    """A miscapped or unsupported key inside a fixed-schema section no longer
+    loads and is silently ignored."""
+    with pytest.raises(ConfigError, match=field):
+        make_config(overrides)
+
+
+def test_typo_region_no_longer_silently_selects_regionone(make_config):
+    """A misspelled `openstack.regoin` is refused instead of silently selecting
+    the `RegionOne` default, which the region typo previously did."""
+    with pytest.raises(ConfigError, match=r"openstack: unknown key\(s\): regoin"):
+        make_config({"openstack": {"regoin": "RegionTwo"}})
+
+
+def test_pool_freeform_keys_are_preserved(make_config):
+    """`tags` (label maps) and `config_patches` (freeform YAML) stay accepted."""
+    cfg = make_config({
+        "tags": {"team": "platform", "x": "y"},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 20,
+                               "tags": {"workload": "gpu"},
+                               "config_patches": ["machine:\n  sysctls:\n    x: y"]}},
+    })
+    assert cfg.tags == {"team": "platform", "x": "y"}
+    assert cfg.machines["testcluster-worker-01"].tags["workload"] == "gpu"
+
+
+@pytest.mark.parametrize(
+    "secrets_overrides, field",
+    [
+        ({"openstack": {"credential_id": "a", "credential_secret": "b", "regoin": "x"}},
+         r"openstack: unknown key\(s\): regoin"),
+        ({"proxmox": {"token_id": "a", "token_secret": "b", "storag": "x"}},
+         r"proxmox: unknown key\(s\): storag"),
+    ],
+)
+def test_unknown_nested_secrets_provider_key_is_rejected(tmp_path, secrets_overrides, field):
+    """A miscapped key inside the selected provider's secrets.yaml section is refused."""
+    if "openstack" in secrets_overrides:
+        cluster_section = {"openstack": {"url": "https://os.example", "availability_zone": "z",
+                                         "external_net": "n"}}
+    else:
+        cluster_section = {"proxmox": {"url": "https://pve.example"}}
+    _write_provider_files(tmp_path, cluster_section, secrets_overrides)
+    with pytest.raises(ConfigError, match=field):
+        load_secrets(tmp_path)
+
+
+def test_unknown_nested_secrets_tailscale_key_is_rejected(tmp_path):
+    """A miscapped key inside the secrets.yaml `tailscale:` section is refused."""
+    _write_provider_files(
+        tmp_path,
+        {"proxmox": {"url": "https://pve.example"}},
+        {"proxmox": {"token_id": "a", "token_secret": "b"},
+         "tailscale": {"auth_key": "x", "authky": "y"}},
+    )
+    with pytest.raises(ConfigError, match=r"tailscale: unknown key\(s\): authky"):
+        load_secrets(tmp_path)

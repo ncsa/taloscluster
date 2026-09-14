@@ -25,6 +25,11 @@ ROLE_BY_TIER = {
     "users": "cluster-member",
 }
 
+# Direct keys the `rancher:` section of each file accepts; anything else is a
+# typo or an unsupported option and is refused rather than silently dropped.
+_RANCHER_CLAN_KEYS = {"admins", "users"}
+_RANCHER_SECRETS_KEYS = {"url", "token"}
+
 
 def rancher_configured(root: Path) -> bool:
     """True only when a `rancher:` section exists in BOTH cluster.yaml and
@@ -70,6 +75,20 @@ def validate_rancher(root: Path) -> None:
         raise ConfigError(f"{SECRETS_FILE}: rancher must be a YAML mapping")
     clan = clan_raw if isinstance(clan_raw, dict) else {}
     sec = sec_raw if isinstance(sec_raw, dict) else {}
+
+    # a miscapped or unsupported key inside the `rancher:` section is refused
+    # rather than silently ignored (the top-level core allowlist only sees the
+    # `rancher:` key itself, which the plugin owns).
+    for source, section, known in (
+        (CLUSTER_FILE, clan, _RANCHER_CLAN_KEYS),
+        (SECRETS_FILE, sec, _RANCHER_SECRETS_KEYS),
+    ):
+        unknown = sorted(set(section) - known)
+        if unknown:
+            raise ConfigError(
+                f"{source} (rancher): unsupported option(s): {', '.join(unknown)}; "
+                "the plugin does not use them"
+            )
 
     # member role lists must be lists of usernames. A bare string would iterate
     # character by character when the reconciler flattens a tier.

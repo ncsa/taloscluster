@@ -611,7 +611,7 @@ def test_converge_plan_recovers_without_stubbing_phase_functions(
         "controlplane": {"count": 1, "flavor": "f", "disk": 40},
         "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
         "kubernetes": {"version": "v1.36.4"},
-        "tailscale": {"enabled": True},
+        "tailscale": {},
     })
     backend = _ScaleUpAfterUpgradeBackend(
         InfrastructureInventory(

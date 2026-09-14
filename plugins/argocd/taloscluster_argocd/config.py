@@ -232,6 +232,13 @@ _PER_APP_KEYS = {
     "nfs": {"enabled", "servers", "version"},
     "monitoring": {"enabled", "version"},
 }
+#: Keys the `argocd:` secrets.yaml section accepts. Anything outside this set is
+#: a miscapped or unsupported option and is refused rather than silently dropped.
+_ARGOCD_SECRETS_KEYS = {"kubeconfig", "context", "url", "token", "git"}
+#: Keys each `argocd.git` / `argocd.infra` repository block accepts.
+_REPO_KEYS = {"url"}
+#: Keys the secrets `argocd.git` credentials block accepts.
+_GIT_CRED_KEYS = {"username", "token"}
 #: Apps whose `version:` is forwarded to the rendered chart. Setting `version`
 #: on any other app (`ingress`, `nfs`, `monitoring`) is silently ignored by the
 #: renderer today, so it is refused here instead; Traefik's pin lives at
@@ -272,6 +279,15 @@ def validate_argocd(root: Path) -> None:
     if sec_raw is not None and not isinstance(sec_raw, dict):
         raise ConfigError(f"{SECRETS_FILE}: argocd must be a YAML mapping")
 
+    # a miscapped or unsupported key inside the `argocd:` secrets section is
+    # refused rather than silently discarded by activation.
+    unknown = sorted(set(sec) - _ARGOCD_SECRETS_KEYS)
+    if unknown:
+        raise ConfigError(
+            f"{SECRETS_FILE} (argocd): unsupported option(s): {', '.join(unknown)}; "
+            "the plugin does not use them"
+        )
+
     # apply-target values feed the kubectl subprocess and the repository Secret,
     # so they must be plain strings (a list or number would corrupt the command).
     for key in ("kubeconfig", "context", "url", "token"):
@@ -297,6 +313,12 @@ def validate_argocd(root: Path) -> None:
     if sgit is not None and not isinstance(sgit, dict):
         raise ConfigError(f"{SECRETS_FILE} (argocd.git) must be a YAML mapping")
     if isinstance(sgit, dict):
+        cred_unknown = sorted(set(sgit) - _GIT_CRED_KEYS)
+        if cred_unknown:
+            raise ConfigError(
+                f"{SECRETS_FILE} (argocd.git): unsupported option(s): "
+                f"{', '.join(cred_unknown)}; the plugin does not use them"
+            )
         for key in ("username", "token"):
             if key in sgit and not isinstance(sgit[key], str):
                 raise ConfigError(
@@ -312,6 +334,17 @@ def validate_argocd(root: Path) -> None:
     for key in sorted(_MAPPING_KEYS & set(clan)):
         if not isinstance(clan[key], dict):
             raise ConfigError(f"{where} (argocd.{key}) must be a YAML mapping")
+
+    # each git/infra repository block accepts only `url`; a misspelled or
+    # unsupported key inside one is refused rather than silently dropped.
+    for repo in ("git", "infra"):
+        section = clan.get(repo)
+        if isinstance(section, dict):
+            repo_unknown = sorted(set(section) - _REPO_KEYS)
+            if repo_unknown:
+                raise ConfigError(
+                    f"{where} (argocd.{repo}): unsupported key(s): {', '.join(repo_unknown)}"
+                )
 
     # member role lists must be lists of full email addresses. A bare string
     # would iterate character by character when the renderer flattens it.

@@ -34,6 +34,32 @@ _CLUSTER_KEYS = {
 # Top-level `secrets.yaml` keys taloscluster reads (plus plugin sections).
 _SECRETS_KEYS = {"tailscale", "openstack", "proxmox"}
 
+# Direct keys each fixed-schema section of `cluster.yaml` accepts. These catch
+# a miscapped or unsupported key inside a section -- `talos.extensons`,
+# `network.dnss`, `openstack.regoin` -- that the top-level allowlist alone would
+# let load and be silently ignored. Freeform maps are deliberately not
+# enumerated here: `tags`/pool `tags` and security host labels are label maps,
+# and `config_patches` hold freeform YAML documents.
+_TALOS_KEYS = {"version", "extensions", "config_patches"}
+_NETWORK_KEYS = {"cidr", "dns", "ntp"}
+_KUBERNETES_KEYS = {"version"}
+_TAILSCALE_KEYS = {"login_server"}
+_PROVIDER_KEYS = {
+    "openstack": {"url", "availability_zone", "external_net", "region"},
+    "proxmox": {"url", "storage", "iso_storage", "cidata_storage",
+                "placement_strategy", "nodes", "tls_verify", "network"},
+}
+#: Keys a pool may carry; `tags` is a freeform label map and both `extensions` /
+#: `config_patches` are freeform lists, so only the structural keys are fixed.
+_POOL_KEYS = {"count", "flavor", "disk", "cores", "memory", "node",
+              "extensions", "config_patches", "tags"}
+#: Direct keys each `secrets.yaml` section accepts.
+_SECRETS_SECTION_KEYS = {
+    "openstack": {"credential_id", "credential_secret"},
+    "proxmox": {"token_id", "token_secret"},
+    "tailscale": {"auth_key"},
+}
+
 _NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 # `taloscluster init` scaffolds this placeholder into secrets.yaml; leaving it
 # in place must not survive loading, or the provider client fails deep in an
@@ -508,6 +534,7 @@ def _provider_config(d: dict[str, Any], where: str) -> ProviderConfig:
 
     name = selected[0]
     provider = _mapping(d[name], f"{where}: {name}")
+    _reject_unknown_keys(provider, f"{where}: {name}", _PROVIDER_KEYS[name])
     if name == "openstack":
         return OpenStackConfig(
             url=require(provider, "url", where=f"{where}: openstack"),
@@ -535,12 +562,22 @@ def load_config(root: Path) -> Config:
     _reject_unknown_keys(d, where, _CLUSTER_KEYS | _plugin_config_sections())
 
     talos = _mapping(d.get("talos"), f"{where}: talos")
+    _reject_unknown_keys(talos, f"{where}: talos", _TALOS_KEYS)
     controlplane = _mapping(require(d, "controlplane", where=where),
                             f"{where}: controlplane")
     workers = _mapping(d.get("workers"), f"{where}: workers")
+    _reject_unknown_keys(controlplane, f"{where}: controlplane", _POOL_KEYS)
+    for pool_name, p in workers.items():
+        if isinstance(p, dict):
+            _reject_unknown_keys(p, f"{where}: workers.{pool_name}", _POOL_KEYS)
     tags = _mapping(d.get("tags"), f"{where}: tags")
     security = _mapping(d.get("security"), f"{where}: security")
     tailscale = _mapping(d.get("tailscale"), f"{where}: tailscale")
+    _reject_unknown_keys(tailscale, f"{where}: tailscale", _TAILSCALE_KEYS)
+    _reject_unknown_keys(_mapping(d.get("network"), f"{where}: network"),
+                         f"{where}: network", _NETWORK_KEYS)
+    _reject_unknown_keys(_mapping(d.get("kubernetes"), f"{where}: kubernetes"),
+                         f"{where}: kubernetes", _KUBERNETES_KEYS)
     cfg = Config(
         name=require(d, "name", where=where),
         talos_version=require(d, "talos", "version", where=where),
@@ -590,6 +627,9 @@ def load_secrets(root: Path) -> Secrets:
             f"{where}: {provider_name} credentials must match the {CLUSTER_FILE} provider"
         )
     provider_data = _mapping(d[provider_name], f"{where}: {provider_name}")
+    _reject_unknown_keys(
+        provider_data, f"{where}: {provider_name}", _SECRETS_SECTION_KEYS[provider_name]
+    )
     if provider_name == "openstack":
         provider: ProviderSecrets = OpenStackSecrets(
             credential_id=_secret(
@@ -617,6 +657,7 @@ def load_secrets(root: Path) -> Secrets:
             ),
         )
     ts = _mapping(d.get("tailscale"), f"{where}: tailscale")
+    _reject_unknown_keys(ts, f"{where}: tailscale", _SECRETS_SECTION_KEYS["tailscale"])
     auth_key = ts.get("auth_key")
     return Secrets(
         provider=provider,

@@ -92,6 +92,46 @@ def test_member_under_both_admins_and_users_rejected(tmp_path):
         validate_rancher(tmp_path)
 
 
+# ---- unknown keys inside the rancher section ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "rancher_cluster, field",
+    [
+        ({"admins": ["alice"], "memers": ["bob"]},
+         r"unsupported option\(s\): memers"),
+        ({"owners": ["alice"]}, r"unsupported option\(s\): owners"),
+    ],
+)
+def test_unknown_cluster_key_rejected(tmp_path, rancher_cluster, field):
+    _write(tmp_path, rancher_cluster=rancher_cluster)
+    with pytest.raises(ConfigError, match=field):
+        validate_rancher(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "rancher_secrets, field",
+    [
+        ({"url": "https://r.example.com", "token": "t", "urll": "x"},
+         r"unsupported option\(s\): urll"),
+        ({"user": "x"}, r"unsupported option\(s\): user"),
+    ],
+)
+def test_unknown_secrets_key_rejected(tmp_path, rancher_secrets, field):
+    _write(tmp_path, rancher_secrets=rancher_secrets)
+    with pytest.raises(ConfigError, match=field):
+        validate_rancher(tmp_path)
+
+
+def test_unknown_rancher_key_refused_through_the_core_preflight(tmp_path):
+    """A miscapped `rancher:` key is refused by the core preflight, not silently
+    ignored by the plugin."""
+    _write(tmp_path, rancher_cluster={"admins": ["alice"], "memers": ["bob"]},
+            rancher_secrets={"url": "https://rancher.example.com", "token": "token-x:y"})
+    with pytest.raises(ConfigError, match=r"unsupported option\(s\): memers"):
+        preflight_validate(Context(root=tmp_path, cfg=None))
+
+
 # ---- credential types -------------------------------------------------------
 
 
