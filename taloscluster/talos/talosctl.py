@@ -224,6 +224,83 @@ def member_addresses(
     }
 
 
+def etcd_members(talosconfig: Path, endpoint: str) -> dict[str, str]:
+    """Authoritative live etcd membership (hostname -> member id), from
+    `talosctl etcd members` against a surviving real control plane.
+
+    This is the live etcd member list and is authoritative for "which nodes are
+    still etcd members", unlike `get members` (Talos discovery service data),
+    which can be stale and even drops entries that report no addresses. A node
+    therefore absent from discovery may still be an etcd member; callers that
+    must prove a control plane left etcd query this list instead.
+
+    Fails closed: a failed query, an unparseable reply, an empty member list, or
+    a member that cannot be identified by hostname all raise ``ReconcileError``
+    -- there is no authoritative evidence to trust, and a surviving control plane
+    always lists itself, so an empty list is missing/ambiguous evidence, not
+    proof a node left.
+    """
+    rc, out, err = _run_nocheck(
+        _talos(talosconfig, endpoint, endpoint, "etcd", "members")
+    )
+    if rc != 0:
+        raise ReconcileError(
+            f"could not read etcd membership from control plane {endpoint} "
+            f"(rc={rc}): {(err or out).strip()}; refusing to delete an addressless "
+            "control plane without authoritative proof it left etcd"
+        )
+    found = _parse_etcd_members(out, endpoint)
+    if not found:
+        raise ReconcileError(
+            f"etcd membership query against control plane {endpoint} returned no "
+            "members; a surviving control plane always lists itself, so an empty "
+            "member list is missing/ambiguous evidence -- refusing to delete an "
+            "addressless control plane without authoritative proof it left etcd"
+        )
+    return found
+
+
+def _parse_etcd_members(out: str, endpoint: str) -> dict[str, str]:
+    """Parse the `talosctl etcd members` tabwriter table into hostname -> id.
+
+    The command has no `-o`/`--output` flag; it prints a header naming the
+    columns and then one row per member, each cell space-padded by tabwriter to
+    the column's width. The header's `ID` and `HOSTNAME` columns locate the two
+    we need, so the parse survives versions that add a leading `NODE` column
+    (v1.13+) or omit it (earlier). No cell contains whitespace, so splitting a
+    line on runs of whitespace recovers the cells; a member whose row does not
+    reach the hostname column cannot be positively identified and raises.
+    """
+    header: list[str] | None = None
+    rows: list[list[str]] = []
+    for line in out.splitlines():
+        cells = line.split()
+        if not cells:
+            continue
+        if "HOSTNAME" in cells:
+            header = cells
+            continue
+        rows.append(cells)
+    if header is None or "ID" not in header or "HOSTNAME" not in header:
+        raise ReconcileError(
+            f"could not parse etcd membership from control plane {endpoint}: "
+            "unrecognised `etcd members` output; refusing to delete an addressless "
+            "control plane without authoritative proof it left etcd"
+        )
+    id_idx = header.index("ID")
+    host_idx = header.index("HOSTNAME")
+    found: dict[str, str] = {}
+    for cells in rows:
+        if len(cells) <= host_idx or not cells[host_idx]:
+            raise ReconcileError(
+                f"etcd membership from control plane {endpoint} contains a member "
+                "without a hostname; cannot positively confirm any addressless "
+                "control plane has left etcd"
+            )
+        found[cells[host_idx]] = cells[id_idx]
+    return found
+
+
 def dashboard(talosconfig: Path, endpoint: str, nodes: list[str]) -> None:
     """Replace this process with `talosctl dashboard` (it owns the terminal)."""
     args = _talos(talosconfig, endpoint, ",".join(nodes), "dashboard")

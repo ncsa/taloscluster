@@ -273,13 +273,18 @@ def test_scale_down_aborts_addressless_control_plane_when_still_a_member(monkeyp
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
-    # the failed-reset node is still an (unreachable) etcd member
+    # the node is addressless: discovery reports no reachable address for it
     monkeypatch.setattr(
         converge.talosctl, "member_addresses",
         lambda *_a, **_k: {"testcluster-controlplane-03": ""},
     )
+    # the failed-reset node is still a live etcd member on the surviving control plane
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-03": "8eb052c9"},
+    )
 
-    with pytest.raises(ReconcileError, match="not established"):
+    with pytest.raises(ReconcileError, match="still an etcd member"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
             talosconfig, Path("kubeconfig"), assume_yes=True,
@@ -288,9 +293,50 @@ def test_scale_down_aborts_addressless_control_plane_when_still_a_member(monkeyp
     assert mutations == []
 
 
-def test_scale_down_aborts_addressless_control_plane_when_discovery_empty(monkeypatch):
-    """Without a member list we cannot positively establish that an addressless
-    control plane left etcd, so relying on NotReady alone must abort."""
+def test_scale_down_aborts_addressless_cp_absent_from_discovery_but_in_etcd(monkeypatch, tmp_path):
+    """A node absent from `get members` discovery data is NOT proof it left etcd:
+    discovery is not etcd membership and can drop the node entirely. The node
+    must be checked against the surviving control plane's live etcd member list,
+    which still lists it -- so scale-down must abort, not delete."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
+    monkeypatch.setattr(
+        converge.kubectl, "node_names", lambda _kc: ["testcluster-controlplane-03"]
+    )
+    monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: False)
+    monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
+    # discovery (member_addresses) drops the addressless node, so an
+    # addressless-only check would wrongly conclude it left -- but the surviving
+    # control plane's authoritative etcd member list still has it.
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses",
+        lambda *_a, **_k: {"testcluster-controlplane-02": "192.0.2.2"},
+    )
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {
+            "testcluster-controlplane-02": "9eb1f01d",
+            "testcluster-controlplane-03": "8eb052c9",
+        },
+    )
+
+    with pytest.raises(ReconcileError, match="still an etcd member"):
+        converge._scale_down(
+            FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
+            talosconfig, Path("kubeconfig"), assume_yes=True,
+        )
+
+    assert mutations == []
+
+
+def test_scale_down_aborts_addressless_control_plane_when_etcd_query_fails(monkeypatch):
+    """Without an etcd member list we cannot positively establish that an
+    addressless control plane left etcd, so relying on NotReady alone must
+    abort (fail closed on missing evidence)."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
     mutations: list[str] = []
     monkeypatch.setattr(
@@ -301,7 +347,13 @@ def test_scale_down_aborts_addressless_control_plane_when_discovery_empty(monkey
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
 
-    with pytest.raises(ReconcileError, match="not established"):
+    def fail_etcd(*_a, **_k):
+        raise ReconcileError(
+            "could not read etcd membership from control plane ep"
+        )
+    monkeypatch.setattr(converge.talosctl, "etcd_members", fail_etcd)
+
+    with pytest.raises(ReconcileError, match="could not read etcd membership"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
             Path("talosconfig"), Path("kubeconfig"), assume_yes=True,
@@ -314,7 +366,8 @@ def test_scale_down_deletes_addressless_control_plane_when_removal_established(
     monkeypatch, tmp_path
 ):
     """An addressless NotReady control plane whose node is confirmed absent from
-    the member list has positively left etcd and can be deleted."""
+    the surviving control plane's AUTHORITATIVE etcd member list has positively
+    left etcd and can be deleted."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
     mutations: list[str] = []
     talosconfig = tmp_path / "talosconfig"
@@ -326,10 +379,16 @@ def test_scale_down_deletes_addressless_control_plane_when_removal_established(
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
-    # discovery works and the removed node is not among the current members
+    # discovery works and reports the surviving control planes -- not the node
+    # under removal, which is addressless and must be confirmed via etcd instead
     monkeypatch.setattr(
         converge.talosctl, "member_addresses",
         lambda *_a, **_k: {"testcluster-controlplane-02": "192.0.2.2"},
+    )
+    # the surviving control plane's live etcd membership no longer lists the node
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-02": "9eb1f01d"},
     )
 
     converge._scale_down(

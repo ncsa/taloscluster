@@ -227,6 +227,78 @@ def test_is_tailscale_covers_the_full_cgnat_range():
     assert not talosctl._is_tailscale("not-an-ip")
 
 
+# A realistic `talosctl etcd members` tabwriter table: `-o`/`--output` does not
+# exist on the subcommand, so this is how the authoritative live etcd member
+# list is actually served by a surviving control plane. tabwriter space-pads
+# each column to the header's width (padding=3); cells never contain whitespace.
+ETCD_MEMBERS_OUTPUT = """\
+NODE     ID        HOSTNAME          PEER URLS             CLIENT URLS           LEARNER
+10.0.0.1 9eb1f01d  controlplane-01   https://192.0.2.1:2380 https://192.0.2.1:2379 false
+10.0.0.1 8eb052c9  controlplane-03   https://192.0.2.3:2380 https://192.0.2.3:2379 false
+"""
+
+# The 5-column layout (no leading NODE column) used by earlier Talos releases;
+# the header still tells the parser where ID and HOSTNAME sit.
+ETCD_MEMBERS_OUTPUT_NO_NODE = """\
+ID        HOSTNAME          PEER URLS             CLIENT URLS           LEARNER
+9eb1f01d  controlplane-01   https://192.0.2.1:2380 https://192.0.2.1:2379 false
+"""
+
+
+def test_etcd_members_parses_live_member_hostnames(monkeypatch):
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (0, ETCD_MEMBERS_OUTPUT, ""))
+    assert talosctl.etcd_members(Path("talosconfig"), "cp-01") == {
+        "controlplane-01": "9eb1f01d",
+        "controlplane-03": "8eb052c9",
+    }
+
+
+def test_etcd_members_parses_without_a_node_column(monkeypatch):
+    """The `ID`/`HOSTNAME` columns are located from the header, so a version
+    that omits the leading `NODE` column is parsed the same way."""
+    monkeypatch.setattr(
+        talosctl, "_run_nocheck",
+        lambda *a, **k: (0, ETCD_MEMBERS_OUTPUT_NO_NODE, ""),
+    )
+    assert talosctl.etcd_members(Path("talosconfig"), "cp-01") == {
+        "controlplane-01": "9eb1f01d",
+    }
+
+
+def test_etcd_members_raises_on_empty_membership(monkeypatch):
+    """A surviving control plane always lists itself, so an empty member list is
+    missing/ambiguous evidence -- the helper must fail closed, not delete."""
+    header_only = "NODE  ID  HOSTNAME  PEER URLS  CLIENT URLS  LEARNER\n"
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (0, header_only, ""))
+    with pytest.raises(ReconcileError, match="returned no members"):
+        talosctl.etcd_members(Path("talosconfig"), "cp-01")
+
+
+def test_etcd_members_raises_when_query_fails(monkeypatch):
+    """A failed `etcd members` query means there is no authoritative evidence a
+    node left etcd, so the helper must fail closed rather than return {}."""
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (1, "", "no route"))
+    with pytest.raises(ReconcileError, match="could not read etcd membership"):
+        talosctl.etcd_members(Path("talosconfig"), "cp-01")
+
+
+def test_etcd_members_raises_on_unparseable_output(monkeypatch):
+    out = "not an etcd members table\n"
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (0, out, ""))
+    with pytest.raises(ReconcileError, match="could not parse etcd membership"):
+        talosctl.etcd_members(Path("talosconfig"), "cp-01")
+
+
+def test_etcd_members_raises_when_a_member_has_no_hostname(monkeypatch):
+    """A member whose row is too short to carry a hostname cannot be identified:
+    it could be the addressless node under scrutiny, so the helper must fail
+    closed."""
+    stream = "NODE  ID  HOSTNAME  PEER URLS  CLIENT URLS  LEARNER\n10.0.0.1  8eb052c9\n"
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (0, stream, ""))
+    with pytest.raises(ReconcileError, match="member without a hostname"):
+        talosctl.etcd_members(Path("talosconfig"), "cp-01")
+
+
 # ---- apply-config under plan ------------------------------------------------
 
 def test_plan_apply_config_runs_talosctl_dry_run_and_prints_the_diff(tmp_path, monkeypatch, capsys):

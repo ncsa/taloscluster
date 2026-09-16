@@ -1122,16 +1122,26 @@ def _scale_down(
             # NotReady alone does not prove a control plane left etcd: a failed
             # or timed-out reset leaves a dead member, and deleting the VM would
             # bypass the reset-failure protection. Require positive proof the
-            # member left: discovery returned a member list AND this node is
-            # absent from it. Otherwise abort and keep the VM.
-            if is_cp and (not discovered or node in discovered):
-                raise ReconcileError(
-                    f"no address for control plane {node} and membership removal is not "
-                    f"established (node still a talos etcd member, or discovery "
-                    f"returned no member list); NotReady does not prove it left etcd, "
-                    "aborting rather than delete a member that could cost quorum"
+            # member left: query the surviving control plane's AUTHORITATIVE etcd
+            # member list -- NOT `get members` discovery data, which is not etcd
+            # membership and even drops addressless entries. `etcd_members` fails
+            # closed (raises) on a failed/ambiguous query, and otherwise we abort
+            # unless the node is affirmatively absent from the live member list.
+            if is_cp:
+                etcd = talosctl.etcd_members(talosconfig, endpoint)
+                if node in etcd:
+                    raise ReconcileError(
+                        f"no address for control plane {node} and it is still an "
+                        f"etcd member (id {etcd[node]} on control plane {endpoint}); "
+                        "NotReady does not prove it left etcd, aborting rather than "
+                        "delete a member that could cost quorum"
+                    )
+                info(
+                    f"no address for control plane {node} but it is absent from the "
+                    f"surviving control plane's etcd member list; deleting"
                 )
-            warn(f"no address for {node} (node is NotReady, likely already reset); deleting")
+            else:
+                warn(f"no address for {node} (node is NotReady, likely already reset); deleting")
         kubectl.delete_node(kubeconfig, node)
         backend.delete_machine(node, inv)
         removed += 1
