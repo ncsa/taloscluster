@@ -62,3 +62,14 @@ def test_guide_recovery_is_cross_referenced_from_the_failure_message():
     text = GUIDE.read_text()
     assert "refuses to proceed" in text
     assert "cannot be regenerated" in text
+
+
+def test_client_config_removal_scopes_to_the_converge_directory():
+    # The "delete the derived client files" example must remove the files from
+    # the same directory converge is told to work on (-C mycluster). A bare
+    # `rm -f talosconfig kubeconfig` in the current directory alongside a
+    # `-C mycluster` converge would delete nothing that converge regenerates.
+    text = GUIDE.read_text()
+    assert "rm -f mycluster/talosconfig mycluster/kubeconfig" in text
+    rm_block = text.split("rm -f ", 1)[1].split("```", 1)[0]
+    assert "taloscluster converge -C mycluster" in rm_block

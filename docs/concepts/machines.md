@@ -42,7 +42,7 @@ Verify the path with `taloscluster status`, check the endpoint `converge` printe
 
 ```bash
 taloscluster status
-talosctl -n mycluster-controlplane-01 version
+talosctl --talosconfig talosconfig -n mycluster-controlplane-01 version
 ```
 
 ### Path B: direct access to real node addresses without Tailscale
@@ -60,7 +60,7 @@ Verify the path with `taloscluster status` and confirm the control plane answers
 
 ```bash
 taloscluster status
-talosctl -n 192.0.2.11 version
+talosctl --talosconfig talosconfig -n 192.0.2.11 version
 ```
 
 ### Headscale

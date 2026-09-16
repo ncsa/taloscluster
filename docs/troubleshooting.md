@@ -60,7 +60,7 @@ Lowering a pool's `count` (or removing a control plane during a scale-down) make
 drain of mycluster-worker-02 failed and node is Ready; aborting to protect a potentially live node
 ```
 
-Diagnostics say the node is left intact and running; nothing was removed. Find what refuses eviction with `kubectl describe pod` for pod-eviction errors and `kubectl get pdb` for a PodDisruptionBudget that will not go below `minAvailable`. Only a too-tight PDB and a bare (controller-less) pod truly block a drain while the node is Ready; everything else (too few replicas, no eligible node, pinned storage) still evicts and the replacement comes up `Pending`.
+Diagnostics say the node is left intact and running; nothing was removed. Find what refuses eviction with `kubectl --kubeconfig kubeconfig describe pod` for pod-eviction errors and `kubectl --kubeconfig kubeconfig get pdb` for a PodDisruptionBudget that will not go below `minAvailable`. Only a too-tight PDB and a bare (controller-less) pod truly block a drain while the node is Ready; everything else (too few replicas, no eligible node, pinned storage) still evicts and the replacement comes up `Pending`.
 
 Recovery: make the pods evictable, then re-run `taloscluster plan` and `taloscluster converge`; the scale-down retries the drain now that eviction can proceed. For a tight PDB, lower `minAvailable` or raise `maxUnavailable` so one node can be evicted (raising `minAvailable` only makes eviction harder), or add replicas above the PDB floor, give a bare pod a controller, and add eligible capacity for scheduling or storage. See [Blocked drain](maintenance.md#blocked-drain-what-you-see-and-the-resolution). A drain that fails on a node already `NotReady` is not blocked — converge warns and continues, because there is nothing left to protect.
 
@@ -70,9 +70,9 @@ Talos cordons the node it is upgrading and uncordons it when it finishes, but th
 
 A control-plane upgrade or reboot interrupted before the node rejoins etcd is more serious. Converge requires an upgraded control plane to pass `talosctl health` — the only signal that it rejoined etcd — before advancing the rollout, and it refuses the kube-api VIP as proof of health. A node that never comes back aborts the rollout rather than move on and risk quorum.
 
-Diagnostics: `taloscluster check` names cordoned nodes with a `SchedulingDisabled` marker and warns that nothing schedules there and `talosctl health` fails on them; `taloscluster status` shows the same marker. For a half-upgraded control plane, `talosctl -n NODE health` fails while the node is still down and the VIP keeps answering (which is not evidence the node rejoined).
+Diagnostics: `taloscluster check` names cordoned nodes with a `SchedulingDisabled` marker and warns that nothing schedules there and `talosctl health` fails on them; `taloscluster status` shows the same marker. For a half-upgraded control plane, `talosctl --talosconfig talosconfig -n NODE health` fails while the node is still down and the VIP keeps answering (which is not evidence the node rejoined).
 
-Recovery: re-run `taloscluster converge`. It lifts stale cordons on its own (or run `kubectl uncordon NODE` by hand), and it picks the safe reconciliation from wherever the run stopped: it waits a half-done control-plane operation out rather than progress past something that could cost quorum. Investigate with `taloscluster status` first, and re-run converge once the affected node is back. See [Day 2: operate](concepts/lifecycle.md#day-2-operate) and [Backup and recovery](backup.md#recovery-interrupted-bootstrap).
+Recovery: re-run `taloscluster converge`. It lifts stale cordons on its own (or run `kubectl --kubeconfig kubeconfig uncordon NODE` by hand), and it picks the safe reconciliation from wherever the run stopped: it waits a half-done control-plane operation out rather than progress past something that could cost quorum. Investigate with `taloscluster status` first, and re-run converge once the affected node is back. See [Day 2: operate](concepts/lifecycle.md#day-2-operate) and [Backup and recovery](backup.md#recovery-interrupted-bootstrap).
 
 ## An installed plugin does not run
 

@@ -118,10 +118,28 @@ def test_interrupted_upgrade_matches_stale_cordon_behavior():
     # converge lifts stale cordons and hands kubectl uncordon as the fallback.
     text = GUIDE.read_text()
     assert "SchedulingDisabled" in text
-    assert "kubectl uncordon" in text
+    assert "lifts stale cordons on its own" in text
     stale = "leftover from the upgrade" in CONVERGE.read_text()
     watch = "client-side watch dies" in KUBECTL.read_text()
     assert stale and watch
+
+
+def test_guide_kubectl_commands_use_the_generated_kubeconfig():
+    # The drain diagnostics and the uncordon fallback run kubectl; each must
+    # point at `./kubeconfig`, not a bare kubectl reading the environment or
+    # home cluster config.
+    text = GUIDE.read_text()
+    assert "kubectl --kubeconfig kubeconfig describe pod" in text
+    assert "kubectl --kubeconfig kubeconfig get pdb" in text
+    assert "kubectl --kubeconfig kubeconfig uncordon NODE" in text
+
+
+def test_guide_talosctl_health_uses_the_generated_talosconfig():
+    # The half-upgraded-control-plane diagnostic runs `talosctl ... health` and
+    # must point at `./talosconfig`, not a bare talosctl reaching the
+    # environment or home config.
+    text = GUIDE.read_text()
+    assert "talosctl --talosconfig talosconfig -n NODE health" in text
 
 
 def test_no_stale_unavailable_data_can_pass_claims():

@@ -109,3 +109,25 @@ def test_guide_covers_the_four_blocker_categories():
     assert "nodeSelector" in text.lower() or "scheduling" in text
     assert "storage" in text
     assert "blocked drain" in text
+
+
+def test_guide_kubectl_commands_use_the_generated_kubeconfig():
+    # Every kubectl command in the guide must point at `./kubeconfig`, otherwise
+    # bare kubectl reads the cluster kubeconfig from the environment or home. The
+    # drain-abort how-to and the maintenance checklist both run kubectl.
+    text = GUIDE.read_text()
+    assert "kubectl --kubeconfig kubeconfig describe pod" in text
+    assert "kubectl --kubeconfig kubeconfig get pdb" in text
+    assert "kubectl --kubeconfig kubeconfig uncordon NODE" in text
+    assert "kubectl --kubeconfig kubeconfig get pods -A -o wide" in text
+    assert "kubectl --kubeconfig kubeconfig get pdb --all-namespaces" in text
+
+
+def test_guide_has_no_bare_kubectl_commands():
+    # A kubectl invocation without `--kubeconfig` establishes no KUBECONFIG and
+    # hits the environment or home cluster by default, so the guide must not
+    # hand the operator a bare one. Only prose references to `kubectl` (no flag
+    # and no verb) are allowed.
+    text = GUIDE.read_text()
+    for word in ("get ", "describe ", "uncordon ", "drain "):
+        assert f"`kubectl {word}" not in text, f"bare kubectl found: `kubectl {word}`"

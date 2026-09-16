@@ -107,7 +107,7 @@ It tells you the node is left intact and running; nothing was removed. (A drain 
 
 Unblock the drain by making the pods evictable, then re-run converge starting with what actually blocks eviction:
 
-1. Find what is refusing eviction — `kubectl describe pod` for pod-eviction errors and `kubectl get pdb` for a PDB that refuses to go below `minAvailable`.
+1. Find what is refusing eviction — `kubectl --kubeconfig kubeconfig describe pod` for pod-eviction errors and `kubectl --kubeconfig kubeconfig get pdb` for a PDB that refuses to go below `minAvailable`.
 2. Only two things really block a drain, so check them first:
    - **PDB too tight**: raise `replicas` above the PDB floor, or lower `minAvailable`/raise `maxUnavailable`, so one node can leave.
    - **Bare pod**: a pod not backed by a controller (no ReplicaSet/StatefulSet/etc.) errors the drain without `--force`; give it a controller so it is rescheduled.
@@ -117,7 +117,7 @@ Unblock the drain by making the pods evictable, then re-run converge starting wi
    - **Storage pinned**: make the workload's storage reachable on another eligible node (topology-aware StorageClass, shared/remote volume, or RWO per-replica volumes).
 4. Run `taloscluster plan` to review, then `taloscluster converge` again. The scale-down retries the drain now that the pods can be evicted, then resets and removes the node.
 
-A node cordoned for an upgrade (left `SchedulingDisabled` by an interrupted run) blocks scheduling but is a different, gentler condition: `taloscluster converge` lifts those stale cordons on its own, or you can `kubectl uncordon NODE`. See [Troubleshooting](troubleshooting.md) for diagnostics.
+A node cordoned for an upgrade (left `SchedulingDisabled` by an interrupted run) blocks scheduling but is a different, gentler condition: `taloscluster converge` lifts those stale cordons on its own, or you can `kubectl --kubeconfig kubeconfig uncordon NODE`. See [Troubleshooting](troubleshooting.md) for diagnostics.
 
 ## Plan your maintenance
 
@@ -126,8 +126,8 @@ Before opening a maintenance window, confirm the cluster can survive it:
 ```bash
 taloscluster check            # versions, leftover cordons, plugin health
 taloscluster status           # endpoints, nodes, who is Ready
-kubectl get pods -A -o wide   # where replicas actually run, and how many
-kubectl get pdb --all-namespaces
+kubectl --kubeconfig kubeconfig get pods -A -o wide   # where replicas actually run, and how many
+kubectl --kubeconfig kubeconfig get pdb --all-namespaces
 ```
 
 A node survives a failed scale-down drain intact, so a blocked maintenance window costs only the run that stalled. Verify each workload's headroom (replicas over PDB floor, an eligible + storage-compatible spare node) before you start, and the drain clears on the next converge.

@@ -39,7 +39,7 @@ Back up `talossecrets.yaml` immediately after the first `converge` that bootstra
 `talosconfig` and `kubeconfig` are derived client configs, not backup-class artifacts. `converge` rewrites `talosconfig` (from `talossecrets.yaml` and controlplane-01's endpoint) and the kubeconfig, so deleting them costs nothing but the next unscheduled reconcile. Doing it by hand:
 
 ```bash
-rm -f talosconfig kubeconfig
+rm -f mycluster/talosconfig mycluster/kubeconfig
 taloscluster converge -C mycluster
 ```
 

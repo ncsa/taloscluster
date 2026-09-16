@@ -104,3 +104,22 @@ def test_guide_allowlists_include_the_management_network():
     assert "`kubernetes` and `talos` rules" in text
     assert "`100.64.0.0/10`" in text
     assert "UDP/41641" in text
+
+
+def test_guide_verify_commands_use_the_generated_talosconfig():
+    # Both paths' verify `talosctl ... version` commands must point at the
+    # generated `./talosconfig`, otherwise talosctl falls back to the
+    # environment or home config and may reach nothing. Pin each one.
+    text = GUIDE.read_text()
+    assert text.count("talosctl --talosconfig talosconfig -n") == 2
+    assert "talosctl --talosconfig talosconfig -n mycluster-controlplane-01 version" in text
+    assert "talosctl --talosconfig talosconfig -n 192.0.2.11 version" in text
+
+
+def test_guide_verify_commands_have_no_bare_talosctl():
+    # A `talosctl -n ... version` without `--talosconfig` defaults to the
+    # environment or home config rather than `./talosconfig`, so the guide must
+    # never hand the operator a bare talosctl verify command.
+    for line in GUIDE.read_text().splitlines():
+        if "version" in line and "talosctl -n" in line:
+            assert "--talosconfig talosconfig" in line
