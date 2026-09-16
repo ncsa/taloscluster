@@ -28,6 +28,7 @@ import subprocess
 from pathlib import Path
 
 from taloscluster.context import Context
+from taloscluster.errors import ConfigError
 from taloscluster.output import action, dry_run, info, log, warn
 
 from .client import Client
@@ -89,6 +90,36 @@ def downstream_rancher_id(root: Path) -> str | None:
     return None
 
 
+def _resolve_members(client: Client, cfg: Config) -> dict[str, tuple[str, str]]:
+    """principal id -> (netid, tier) for every configured member that resolves.
+
+    Raises ConfigError when two distinct configured netids from different tiers
+    resolve to the same principal (e.g. `alice` and `alice@example.com`, whose
+    email suffix resolve_principal strips), because that membership is ambiguous
+    and would flap between cluster-owner and cluster-member on alternating runs.
+    Unresolvable netids are skipped (they read as missing members downstream).
+    """
+    by_pid: dict[str, tuple[str, str]] = {}
+    for tier in TIERS:
+        for netid in cfg.members.netids_for(tier):
+            principal = client.resolve_principal(netid)
+            if principal is None:
+                warn(f"could not resolve principal for {netid!r} (tier {tier}); skipping")
+                continue
+            pid = principal["id"]
+            existing = by_pid.get(pid)
+            if existing:
+                other_netid, other_tier = existing
+                raise ConfigError(
+                    f"{netid!r} and {other_netid!r} both resolve to the same Rancher "
+                    f"principal ({pid}) but sit in different tiers ('{tier}' and "
+                    f"'{other_tier}'); the membership would flap between roles, so "
+                    "use canonical netids for both"
+                )
+            by_pid[pid] = (netid, tier)
+    return by_pid
+
+
 def ensure_members(client: Client, cid: str, cfg: Config) -> list[dict[str, str]]:
     """Reconcile cluster members to the configured admins/users.
 
@@ -98,19 +129,10 @@ def ensure_members(client: Client, cid: str, cfg: Config) -> list[dict[str, str]
     `<cluster>:creator-cluster-owner` binding -- is always preserved.
     """
     owner_binding = f"{cid}:creator-cluster-owner"
+    resolved = _resolve_members(client, cfg)  # pid -> (netid, tier)
     desired_by_role: dict[str, set[str]] = {role: set() for role in ROLE_BY_TIER.values()}
-    display: dict[str, tuple[str, str]] = {}  # pid -> (netid, tier) for messages
-
-    for tier in TIERS:
-        role = ROLE_BY_TIER[tier]
-        for netid in cfg.members.netids_for(tier):
-            principal = client.resolve_principal(netid)
-            if principal is None:
-                warn(f"could not resolve principal for {netid!r} (tier {tier}); skipping")
-                continue
-            pid = principal["id"]
-            desired_by_role[role].add(pid)
-            display[pid] = (netid, tier)
+    for pid, (_netid, tier) in resolved.items():
+        desired_by_role[ROLE_BY_TIER[tier]].add(pid)
 
     bindings = client.list_member_bindings(cid)
     current = _by_principal_role(bindings)
@@ -121,7 +143,7 @@ def ensure_members(client: Client, cid: str, cfg: Config) -> list[dict[str, str]
         for pid in pids:
             desired_role_for[pid] = role
             if (pid, role) in current:
-                netid, _ = display[pid]
+                netid, _ = resolved[pid]
                 info(f"{netid} ({pid}) already {role}")
             else:
                 client.add_member(cid, pid, role)
@@ -144,7 +166,7 @@ def ensure_members(client: Client, cid: str, cfg: Config) -> list[dict[str, str]
             client.remove_member(b.id)
 
     return [
-        {"netid": display[pid][0], "role": role}
+        {"netid": resolved[pid][0], "role": role}
         for pid, role in sorted(desired_role_for.items())
     ]
 
@@ -258,15 +280,13 @@ def _desired_members(client: Client, cfg: Config) -> dict[str, str]:
     """principal id -> role for every member cluster.yaml declares.
 
     Unresolvable netids are skipped (they are reported by converge/check), so a
-    typo shows up as a missing member rather than an exception.
+    typo shows up as a missing member rather than an exception. Cross-tier
+    aliases that resolve to the same principal are refused (_resolve_members).
     """
-    out: dict[str, str] = {}
-    for tier in TIERS:
-        for netid in cfg.members.netids_for(tier):
-            principal = client.resolve_principal(netid)
-            if principal is not None:
-                out[principal["id"]] = ROLE_BY_TIER[tier]
-    return out
+    return {
+        pid: ROLE_BY_TIER[tier]
+        for pid, (netid, tier) in _resolve_members(client, cfg).items()
+    }
 
 
 def status(ctx: Context) -> dict:

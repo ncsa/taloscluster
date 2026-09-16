@@ -153,3 +153,19 @@ def test_netid_listed_as_both_admin_and_user_is_rejected(cluster_dir, wire):
     }))
     with pytest.raises(ConfigError, match="'admins' and 'users'"):
         _converge.check(Context(root=cluster_dir, cfg=None))
+
+
+def test_alias_that_resolves_to_same_principal_is_rejected(cluster_dir, wire):
+    """`alice` (admin) and `alice@example.com` (user) pass the literal overlap
+    check but strip to the same Rancher principal, which would flap; refuse it."""
+    (cluster_dir / "cluster.yaml").write_text(yaml.safe_dump({
+        "name": "testcluster",
+        "rancher": {"admins": ["alice"], "users": ["alice@example.com"]},
+    }))
+    wire(FakeClient(
+        bindings=[binding(ALICE, "cluster-owner", "b-1"),
+                  binding(ALICE, "cluster-member", "b-2"), OWNER],
+        principals={"alice": ALICE, "alice@example.com": ALICE},
+    ))
+    with pytest.raises(ConfigError, match="both resolve to the same Rancher principal"):
+        _converge.check(Context(root=cluster_dir, cfg=None))
