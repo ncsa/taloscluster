@@ -10,9 +10,11 @@ string. These tests pin the guide to the actual messages raised or printed by
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 GUIDE = Path(__file__).resolve().parent.parent / "docs" / "troubleshooting.md"
+MAINTENANCE = Path(__file__).resolve().parent.parent / "docs" / "maintenance.md"
 USAGE = Path(__file__).resolve().parent.parent / "docs" / "usage.md"
 QUICKSTART = Path(__file__).resolve().parent.parent / "docs" / "quickstart.md"
 CONVERGE = Path(__file__).resolve().parent.parent / "taloscluster" / "converge.py"
@@ -68,6 +70,26 @@ def test_drain_recovery_cross_references_maintenance():
     assert "maintenance.md#blocked-drain-what-you-see-and-the-resolution" in text
     assert "PodDisruptionBudget" in text
     assert "bare" in text
+
+
+def test_tight_pdb_resolution_loosens_eviction():
+    # A PDB that refuses to go below `minAvailable` is unblocked by making
+    # eviction easier, never harder: lower `minAvailable` or raise
+    # `maxUnavailable` so one node can leave, or add replicas above the PDB
+    # floor. The guide must not recommend raising `minAvailable`, which only
+    # tightens the budget and blocks the drain further. The same resolution is
+    # given in maintenance.md and matches the Kubernetes PDB definition.
+    text = GUIDE.read_text()
+    assert "lower `minAvailable`" in text
+    assert "raise `maxUnavailable`" in text
+    assert "add replicas above the PDB floor" in text
+    # raising minAvailable makes eviction harder - it must never be advised
+    assert "Raise `minAvailable`" not in text
+    assert not re.search(r"raise `?minAvailable", text, re.IGNORECASE)
+    # maintenance.md documents the same loosening resolution
+    maint = MAINTENANCE.read_text()
+    assert "raise `replicas` above the PDB floor" in maint
+    assert "lower `minAvailable`/raise `maxUnavailable`" in maint
 
 
 def test_incomplete_check_matches_the_reasons():

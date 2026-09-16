@@ -62,7 +62,7 @@ drain of mycluster-worker-02 failed and node is Ready; aborting to protect a pot
 
 Diagnostics say the node is left intact and running; nothing was removed. Find what refuses eviction with `kubectl describe pod` for pod-eviction errors and `kubectl get pdb` for a PodDisruptionBudget that will not go below `minAvailable`. Only a too-tight PDB and a bare (controller-less) pod truly block a drain while the node is Ready; everything else (too few replicas, no eligible node, pinned storage) still evicts and the replacement comes up `Pending`.
 
-Recovery: make the pods evictable, then re-run `taloscluster plan` and `taloscluster converge`; the scale-down retries the drain now that eviction can proceed. Raise `minAvailable`/`maxUnavailable` or `replicas` for a tight PDB, give a bare pod a controller, and add eligible capacity for scheduling or storage. See [Blocked drain](maintenance.md#blocked-drain-what-you-see-and-the-resolution). A drain that fails on a node already `NotReady` is not blocked — converge warns and continues, because there is nothing left to protect.
+Recovery: make the pods evictable, then re-run `taloscluster plan` and `taloscluster converge`; the scale-down retries the drain now that eviction can proceed. For a tight PDB, lower `minAvailable` or raise `maxUnavailable` so one node can be evicted (raising `minAvailable` only makes eviction harder), or add replicas above the PDB floor, give a bare pod a controller, and add eligible capacity for scheduling or storage. See [Blocked drain](maintenance.md#blocked-drain-what-you-see-and-the-resolution). A drain that fails on a node already `NotReady` is not blocked — converge warns and continues, because there is nothing left to protect.
 
 ## An interrupted upgrade leaves a node cordoned
 
