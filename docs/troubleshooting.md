@@ -32,10 +32,6 @@ Check FRR, IP forwarding, BGP and VXLAN firewall rules, the exit nodes’ routed
 
 Read the report, or use `taloscluster check -o yaml`. Exit status 1 can mean an available version update, a node running a different version, a leftover cordon, a plugin needing changes, or an error. It is not by itself evidence that the cluster is down. See [`check`](commands.md#check).
 
-## `check` succeeds while version data is unavailable
-
-An upstream lookup failure is a warning, and unknown node versions do not count as drift. A zero exit status therefore does not guarantee that all releases and nodes were checked. Inspect warnings, empty upstream version fields, and the reported node list.
-
 ## `check` is incomplete
 
 A check that could not verify everything is reported as incomplete rather than current. The text output warns `check incomplete: <reason>` for each one, and YAML output carries `incomplete: true` with an `incomplete_reasons` list. The known reasons are a newest release (or newest patch of the pinned minor) that could not be fetched from `factory.talos.dev` or `dl.k8s.io`, a running node whose Talos or Kubernetes version is unknown, a configured machine that shows up in neither Talos discovery nor the Kubernetes node list (an existing cluster missing a node), and a cluster that should exist (a `talosconfig` or `kubeconfig` is present) but answered nothing — `cluster unreachable; no node versions known`. An incomplete check exits `1`, so it never passes a CI gate with unverified data.

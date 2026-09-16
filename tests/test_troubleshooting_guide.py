@@ -13,6 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 
 GUIDE = Path(__file__).resolve().parent.parent / "docs" / "troubleshooting.md"
+USAGE = Path(__file__).resolve().parent.parent / "docs" / "usage.md"
+QUICKSTART = Path(__file__).resolve().parent.parent / "docs" / "quickstart.md"
 CONVERGE = Path(__file__).resolve().parent.parent / "taloscluster" / "converge.py"
 PLUGINS = Path(__file__).resolve().parent.parent / "taloscluster" / "plugins.py"
 KUBECTL = Path(__file__).resolve().parent.parent / "taloscluster" / "k8s" / "kubectl.py"
@@ -98,3 +100,31 @@ def test_interrupted_upgrade_matches_stale_cordon_behavior():
     stale = "leftover from the upgrade" in CONVERGE.read_text()
     watch = "client-side watch dies" in KUBECTL.read_text()
     assert stale and watch
+
+
+def test_no_stale_unavailable_data_can_pass_claims():
+    # An incomplete check (unreachable upstream, unknown node version, missing
+    # or unreachable nodes) is not a clean bill of health: it exits 1 rather
+    # than passing a CI gate with unverified data. The guide and usage must not
+    # drift back to the old claim that unavailable data can still exit 0, and
+    # the superseded "check succeeds while version data is unavailable" section
+    # must stay gone.
+    guide = GUIDE.read_text()
+    usage = USAGE.read_text()
+    assert "check` succeeds while version data is unavailable" not in guide
+    for doc in (guide, usage):
+        assert "Unavailable upstream or node-version data can still yield exit status 0" not in doc
+    # the aligned contract: nothing unverifiable passes as current
+    assert "An incomplete check exits `1`" in guide
+    assert "incomplete" in usage and "exits 1" in usage
+
+
+def test_quickstart_has_no_prequisite_plugin_workaround():
+    # Plugins are configured from the start; their planning hooks run in dry-run
+    # and report work that needs the cluster/kubeconfig as deferred until
+    # converge bootstraps the cluster. The old "leave plugins inactive until the
+    # cluster exists" workaround is obsolete now that pre-bootstrap plugin
+    # planning work is deferred.
+    text = QUICKSTART.read_text().lower()
+    assert "leave plugins inactive" not in text
+    assert "deferred until converge bootstraps the cluster" in text

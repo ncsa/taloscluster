@@ -8,7 +8,7 @@ After the [Quickstart](quickstart.md), the normal workflow is to edit `cluster.y
 taloscluster check
 ```
 
-`check` compares the versions pinned in `cluster.yaml` against the newest upstream releases, both the latest patch of the same minor and the latest minor overall, and against what the nodes actually run. It also reports nodes left cordoned. It exits 1 for detected updates, drift, cordons, or unsuccessful plugin checks, so it fits in a cron job or a CI schedule. Use `-o yaml` for machine-readable output. Unavailable upstream or node-version data can still yield exit status 0; inspect warnings and empty fields before treating the report as complete.
+`check` compares the versions pinned in `cluster.yaml` against the newest upstream releases, both the latest patch of the same minor and the latest minor overall, and against what the nodes actually run. It also reports nodes left cordoned. It exits 1 for detected updates, drift, cordons, unsuccessful plugin checks, or anything it could not verify, so it fits in a cron job or a CI schedule without passing an unverified cluster. Use `-o yaml` for machine-readable output. A check that could not verify everything is reported as incomplete (`incomplete: true` with an `incomplete_reasons` list) and exits 1; inspect warnings, empty fields, and the incomplete reasons before treating the report as complete.
 
 ## See what a change would do
 

@@ -40,7 +40,7 @@ taloscluster plan
 taloscluster converge
 ```
 
-Review the plan before running converge. Leave plugins inactive until the first cluster and kubeconfig exist if their planning hooks require that kubeconfig; then configure them and review another plan. Converge prepares the image and network, creates the machines, bootstraps the control plane, writes client configuration, waits for healthy nodes, and runs configured plugins.
+Review the plan before running converge. Configure plugins with the cluster from the start; their planning hooks run in dry-run, and work that needs the cluster or kubeconfig is deferred until converge bootstraps the cluster. Converge prepares the image and network, creates the machines, bootstraps the control plane, writes client configuration, waits for healthy nodes, and runs configured plugins.
 
 ## Verify and connect
 
