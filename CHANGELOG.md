@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- Report a configured machine that shows up in neither Talos discovery nor the Kubernetes node list as an incomplete `check` (exit `1`) when the cluster already exists, so a node missing from both sources is flagged instead of silently passing as current; checks before a cluster exists still report the pinned versions only. See the [version check](taloscluster/converge.py).
 - Reject Rancher memberships where two netids across different tiers resolve to the same principal (e.g. `alice` in `admins` and `alice@example.com` in `users`, whose email suffix is stripped during resolution) in converge and check before any binding changes, instead of flapping the user between `cluster-owner` and `cluster-member` on alternating runs.
 - Refuse a miscapped or unsupported key inside every fixed-schema section of `cluster.yaml` and `secrets.yaml` (core `talos`, `network`, `kubernetes`, `openstack`/`proxmox`, `tailscale` and pool keys, provider credential sections; Rancher `admins`/`users`/`url`/`token`; ArgoCD repository and apply-target/credential blocks) instead of silently ignoring it and falling back to a default, so `talos.extensons`, `network.dnss` or `openstack.regoin` no longer load quietly. Freeform maps (`tags`, security host labels, `config_patches`) are preserved.
 

@@ -64,7 +64,7 @@ taloscluster check -C mycluster -o yaml
 
 Compare pinned Talos and Kubernetes versions with upstream releases and the versions nodes actually run. Report the latest patch of the pinned minor separately from the newest release overall, version drift, and leftover cordons. Configured plugins also report whether they need changes. This command reports updates; it does not install them.
 
-Exit status is `1` when an update, drift, cordon, unsuccessful plugin check, or an incomplete check is reported. A check is incomplete when upstream releases could not be fetched or a node's version is unknown, so it never passed unverified: the report carries `incomplete: true` and an `incomplete_reasons` list, and text output warns for each reason. Nothing is assumed current in that case. `check` can also inspect pinned versions before a cluster exists.
+Exit status is `1` when an update, drift, cordon, unsuccessful plugin check, or an incomplete check is reported. A check is incomplete when upstream releases could not be fetched, a node's version is unknown, or a configured machine is missing from both Talos discovery and the Kubernetes node list, so it never passes unverified: the report carries `incomplete: true` and an `incomplete_reasons` list, and text output warns for each reason. Nothing is assumed current in that case. `check` can also inspect pinned versions before a cluster exists, where missing machines are expected rather than reported.
 
 ## `dashboard`
 

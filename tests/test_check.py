@@ -43,7 +43,8 @@ def upstream(monkeypatch):
     monkeypatch.setattr(versions, "talos_versions", lambda: state["talos"])
     monkeypatch.setattr(versions, "latest_kubernetes", lambda: state["k8s_latest"])
     monkeypatch.setattr(
-        versions, "latest_kubernetes_patch",
+        versions,
+        "latest_kubernetes_patch",
         lambda minor: state["k8s_patch"] if minor == "1.35" else "",
     )
     return state
@@ -65,7 +66,7 @@ def test_updates_available_exit_1(cluster_dir, upstream, nodes, capsys):
     rc = converge.check(cluster_dir, output="yaml")
     report = _report(capsys)
     talos, k8s = report["components"]
-    assert talos["latest_patch"] == "v1.13.9"      # not the v1.14.0-rc.1
+    assert talos["latest_patch"] == "v1.13.9"  # not the v1.14.0-rc.1
     assert talos["patch_available"] and not talos["minor_available"]
     # kubernetes: a newer patch of 1.35 AND a newer minor exist; both reported
     assert k8s["latest_patch"] == "v1.35.8"
@@ -78,8 +79,9 @@ def test_updates_available_exit_1(cluster_dir, upstream, nodes, capsys):
 def test_up_to_date_exit_0(cluster_dir, upstream, nodes, capsys):
     upstream["talos"] = ["v1.13.8"]
     upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
-    nodes["nodes"] = [{"name": "testcluster-controlplane-01",
-                       "talos": "v1.13.8", "kubernetes": "v1.35.2"}]
+    nodes["nodes"] = [
+        {"name": "testcluster-controlplane-01", "talos": "v1.13.8", "kubernetes": "v1.35.2"}
+    ]
     rc = converge.check(cluster_dir, output="yaml")
     report = _report(capsys)
     assert report["up_to_date"] is True
@@ -147,7 +149,8 @@ def test_cluster_unreachable_when_expected_is_incomplete(cluster_dir, upstream, 
 
 
 def test_unreachable_cluster_with_only_kubeconfig_is_incomplete(
-        cluster_dir, upstream, nodes, capsys):
+    cluster_dir, upstream, nodes, capsys
+):
     """kubeconfig alone records that a cluster was set up, so when the Kubernetes
     API does not answer and no node versions come back the check must not pass
     as clean -- even without a talosconfig."""
@@ -173,6 +176,7 @@ def test_kubelet_build_suffix_is_not_drift(cluster_dir, upstream, nodes, capsys)
 def test_upstream_unreachable_reports_config_only(cluster_dir, nodes, monkeypatch, capsys):
     """A lookup failure must warn and still print, not raise, and must not pass
     as a clean check: we never confirmed what the newest releases are."""
+
     def boom(*a, **k):
         raise converge.requests.RequestException("no route to host")
 
@@ -197,11 +201,67 @@ def test_cordoned_node_is_reported(cluster_dir, upstream, nodes, capsys):
     comparison, so `check` has to call it out (and fail)."""
     upstream["talos"] = ["v1.13.8"]
     upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
-    nodes["nodes"] = [{"name": "cp-01", "talos": "v1.13.8", "kubernetes": "v1.35.2",
-                       "cordoned": True}]
+    nodes["nodes"] = [
+        {"name": "cp-01", "talos": "v1.13.8", "kubernetes": "v1.35.2", "cordoned": True}
+    ]
     rc = converge.check(cluster_dir, output="yaml")
     report = _report(capsys)
     assert report["cordoned"] == ["cp-01"]
-    assert report["drift"] == []          # versions are right; scheduling is not
+    assert report["drift"] == []  # versions are right; scheduling is not
     assert report["up_to_date"] is False
     assert rc == 1
+
+
+def test_missing_configured_nodes_are_incomplete(cluster_dir, upstream, nodes, capsys):
+    """An existing cluster that reports only some of its configured machines is
+    incomplete: nodes missing from both Talos discovery and Kubernetes have
+    unverifiable versions, so check must not pass as current."""
+    upstream["talos"] = ["v1.13.8"]
+    upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
+    # three configured control planes; only one shows up in either source
+    (cluster_dir / "cluster.yaml").write_text(
+        yaml.safe_dump(
+            {
+                **CLUSTER,
+                "controlplane": {"count": 3, "flavor": "gp.medium", "disk": 40},
+            }
+        )
+    )
+    (cluster_dir / "talosconfig").write_text("dummy")
+    nodes["nodes"] = [
+        {"name": "testcluster-controlplane-03", "talos": "v1.13.8", "kubernetes": "v1.35.2"}
+    ]
+    rc = converge.check(cluster_dir, output="yaml")
+    report = _report(capsys)
+    assert report["incomplete"] is True
+    assert report["incomplete_reasons"] == [
+        "node testcluster-controlplane-01 is missing from both Talos discovery and Kubernetes",
+        "node testcluster-controlplane-02 is missing from both Talos discovery and Kubernetes",
+    ]
+    assert report["up_to_date"] is False
+    assert rc == 1
+
+
+def test_missing_machines_not_reported_before_creation(cluster_dir, upstream, nodes, capsys):
+    """Before a cluster exists there is no talosconfig/kubeconfig, so check
+    reports the pinned versions only and a node that never answered is expected
+    rather than flagged as missing."""
+    upstream["talos"] = ["v1.13.8"]
+    upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
+    (cluster_dir / "cluster.yaml").write_text(
+        yaml.safe_dump(
+            {
+                **CLUSTER,
+                "controlplane": {"count": 3, "flavor": "gp.medium", "disk": 40},
+            }
+        )
+    )
+    nodes["nodes"] = [
+        {"name": "testcluster-controlplane-03", "talos": "v1.13.8", "kubernetes": "v1.35.2"}
+    ]
+    rc = converge.check(cluster_dir, output="yaml")
+    report = _report(capsys)
+    assert report["incomplete"] is False
+    assert report["incomplete_reasons"] == []
+    assert report["up_to_date"] is True
+    assert rc == 0
