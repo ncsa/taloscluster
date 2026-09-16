@@ -16,6 +16,10 @@ tests so the drift they caught cannot come back silently:
   anchor is given, at a header whose MkDocs slug matches.
 - Every subcommand the CLI registers (including its ``sync``/``apply`` aliases)
   must have a matching section in ``docs/commands.md``.
+- Every absolute GitHub Pages link in ``README.md`` must resolve to a page the
+  current ``mkdocs.yml`` nav publishes (and a fragment to that page's heading),
+  and the established ``concepts/`` URLs must survive the documentation
+  reorganization rather than silently moving and breaking old links.
 """
 
 from __future__ import annotations
@@ -33,6 +37,9 @@ DOCS = ROOT / "docs"
 COMMANDS = DOCS / "commands.md"
 CONFIGURATION = DOCS / "configuration.md"
 CLI = ROOT / "taloscluster" / "cli.py"
+README = ROOT / "README.md"
+MKDOCS = ROOT / "mkdocs.yml"
+SITE_URL = "https://ncsa.github.io/taloscluster/"
 
 SCAFFOLD_PLACEHOLDER = "CHANGE-ME"
 
@@ -183,3 +190,75 @@ def test_command_reference_covers_every_cli_command():
     # the converge aliases are documented under the converge section
     for alias in aliases:
         assert alias in text, f"commands.md does not mention the `{alias}` alias"
+
+
+# --------------------------------------------------------------------------- #
+# 4. README links must match the published (deployed) site, and the
+#    reorganized docs must keep the established concepts/ URLs.
+# --------------------------------------------------------------------------- #
+
+
+def _nav_pages() -> dict[str, str]:
+    """Map a deployed-site page URL to the markdown source that publishes it.
+
+    MkDocs publishes ``docs/<path>.md`` at ``https://ncsa.github.io/taloscluster/<path>/``
+    (``docs/index.md`` at the site root). Only pages reachable from ``mkdocs.yml``
+    ``nav`` are built and deployed, so a link matching nothing here would 404.
+    """
+    nav = yaml.safe_load(MKDOCS.read_text())["nav"]
+    pages: dict[str, str] = {}
+
+    def walk(entries) -> None:
+        for entry in entries:
+            for _title, value in entry.items():
+                if isinstance(value, str):
+                    src = value.strip()
+                    url = "/" if src == "index.md" else "/" + src[:-3] + "/"
+                    pages[url] = src
+                else:
+                    walk(value)
+
+    walk(nav)
+    return pages
+
+
+def test_readme_links_point_at_published_pages():
+    # The README advertises the deployed docs by absolute GitHub Pages URLs; each
+    # must resolve to a page the current mkdocs nav actually publishes (and, when
+    # it carries a fragment, to a heading on that page), so a reorganization that
+    # relocates or drops a page fails here instead of breaking the live site.
+    pages = _nav_pages()
+    broken: list[str] = []
+    for m in re.finditer(r"\]\(" + re.escape(SITE_URL) + r"[^)\s]*\)", README.read_text()):
+        url = m.group(0).lstrip("](").rstrip(")")
+        remainder = url[len(SITE_URL):]
+        pagepath, _, anchor = remainder.partition("#")
+        page_url = "/" if not pagepath else (pagepath if pagepath.startswith("/") else f"/{pagepath}")  # noqa: E501
+        if page_url not in pages:
+            broken.append(f"{url} (not a published page)")
+            continue
+        if anchor:
+            src = pages[page_url]
+            if anchor not in _headers(DOCS / src):
+                broken.append(f"{url} (missing anchor on {src})")
+    assert not broken, "README links to non-published sites: " + "; ".join(broken)
+
+
+def test_reorganized_docs_preserve_concepts_urls():
+    # The concepts/ pages carried stable public URLs before the 2026-09-07
+    # documentation reorganization and must keep them, so bookmarks, search
+    # engines, and links in the wild do not break. If a page genuinely has to
+    # move later, relocate it and add a redirect instead of removing the URL.
+    pages = _nav_pages()
+    stable = {
+        "/concepts/talos/",
+        "/concepts/machines/",
+        "/concepts/lifecycle/",
+        "/concepts/plugins/",
+    }
+    missing = sorted(stable - set(pages))
+    assert not missing, (
+        "reorganized docs dropped established concepts/ URL(s): "
+        + ", ".join(missing)
+        + "; preserve the URL or add a redirect"
+    )
