@@ -32,7 +32,7 @@ An application credential or API token is created and scoped by the cloud, not b
 
 `talossecrets.yaml` is the cluster's cryptographic identity. Losing it means no tool, including taloscluster itself, can authenticate to the existing nodes — the Talos API only accepts mutual TLS with the cluster's own certificates, and the machine configs nodes run were built with these secrets. It cannot be regenerated. This is why converge hard-fails with "restore it from backup" when the file is missing but the cluster's machines already exist, rather than silently minting a fresh identity against a live cluster.
 
-Back up `talossecrets.yaml` immediately after the first `converge` that bootstraps the cluster writes it (see [Day 1](concepts/lifecycle.md#day-1-build)). A backup that predates the bootstrap is not the current identity; only identities that match the running cluster's certificates are useful.
+Back up `talossecrets.yaml` as soon as the first `converge` writes it (see [Day 1](concepts/lifecycle.md#day-1-build)). `converge` mints the identity in the secrets phase, before it creates the network, creates the machines or bootstraps the cluster, and configures the nodes from that same bundle; bootstrap never replaces it. A backup that predates the bootstrap is therefore already the current identity — take it as soon as the file appears in the cluster directory, not after the cluster finishes building.
 
 ## Client configuration
 
@@ -83,7 +83,7 @@ If `talossecrets.yaml` was lost, converge refuses to proceed once it sees the cl
 
 ## Recovery: interrupted bootstrap
 
-A `converge` interrupted between creating machines and bootstrapping etcd is not a broken cluster — it is an unfinished first run, and converge self-heals. The create phases (image, network, machines) are idempotent re-runs, and because a never-bootstrapped cluster has no `kubeconfig`, converge recognizes there was no bootstrap and completes it on the next run rather than trying to recreate the machines or mint a new identity. See [Day 1](concepts/lifecycle.md#day-1-build).
+A `converge` interrupted between creating machines and bootstrapping etcd is not a broken cluster — it is an unfinished first run, and converge self-heals. The create phases (image, network, machines) are idempotent re-runs, and because a never-bootstrapped cluster has no `kubeconfig`, converge recognizes there was no bootstrap and completes it on the next run rather than trying to recreate the machines or mint a new identity. See [Day 1](concepts/lifecycle.md#day-1-build). That interrupted first run already generated `talossecrets.yaml` in its secrets phase, so keep the backup you took of that pre-bootstrap identity: the re-run bootstraps the cluster from the same bundle without re-minting it, so the pre-bootstrap backup matches the running cluster.
 
 ```bash
 taloscluster converge -C mycluster   # re-run after an interruption

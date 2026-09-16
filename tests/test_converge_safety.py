@@ -1471,6 +1471,45 @@ def test_converge_rebootstraps_an_interrupted_first_run(monkeypatch, tmp_path):
     assert "NOT a fresh cluster" not in joined
 
 
+def test_converge_does_not_replace_the_prebootstrap_identity_through_bootstrap(
+    monkeypatch, tmp_path
+):
+    """An interrupted first run mints talossecrets.yaml in the secrets phase --
+    before the network, compute or bootstrap phases -- and bootstrap never
+    replaces it. So the identity a backup predating the bootstrap captured is the
+    running identity: when converge re-runs to bootstrap the unfinished cluster,
+    it must not re-mint the secrets, leaving that preserved pre-bootstrap backup
+    byte-identical and valid (see docs/backup.md)."""
+    secrets_path = tmp_path / "talossecrets.yaml"
+    backup = "cluster-CA-and-tokens-captured-after-the-interrupted-run\n"
+    secrets_path.write_text(backup)
+    writes: list[str] = []
+
+    class _PersistingState(_FakeState):
+        def write_secrets(self, contents):
+            writes.append(contents)
+            secrets_path.write_text(contents)
+
+    state = _PersistingState(True, secrets_path)
+    backend = _ExistingDownBackend(_cp_inventory("phoenix-controlplane-01"))
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    events: list[str] = []
+    monkeypatch.setattr(converge, "_wait_reachable", lambda *a, **k: events.append("reachable"))
+    monkeypatch.setattr(converge.talosctl, "bootstrap", lambda *a, **k: events.append("bootstrap"))
+    monkeypatch.setattr(
+        converge.talosctl, "kubeconfig", lambda *a, **k: events.append("kubeconfig")
+    )
+
+    assert _stub_converge_full(
+        monkeypatch, tmp_path, state, backend,
+        {"phoenix-controlplane-01": "config"}, stub_health=True,
+    ) == 0
+
+    assert "bootstrap" in events  # the re-run bootstraps the unfinished cluster
+    assert writes == []  # bootstrap never re-minted / replaced the identity
+    assert secrets_path.read_text() == backup  # pre-bootstrap backup is current
+
+
 def _stub_converge(monkeypatch, tmp_path, state, backend):
     """Wire converge() so the state phase runs against fakes."""
     cfg = SimpleNamespace(
