@@ -1,0 +1,185 @@
+"""Keep the docs' own audit checks maintained.
+
+The 2026-09-07 documentation audit leaned on three ad-hoc checks that keep the
+published site honest: a complete documented cluster example must actually load
+with a matching secrets file, every internal link and header anchor must resolve
+to a real target, and the command reference must cover every command the CLI
+registers. These tests turn those one-off audit checks into permanent regression
+tests so the drift they caught cannot come back silently:
+
+- The complete ``cluster.yaml`` + ``secrets.yaml`` examples in
+  ``docs/configuration.md`` must load through the real ``load_config`` /
+  ``load_secrets`` once the ``CHANGE-ME`` scaffold placeholders are replaced with
+  real credential strings.
+- Every ``[text](path.md#anchor)`` / ``[text](path.md)`` / ``[text](#anchor)``
+  link across ``docs/`` must point at an existing markdown file and, when an
+  anchor is given, at a header whose MkDocs slug matches.
+- Every subcommand the CLI registers (including its ``sync``/``apply`` aliases)
+  must have a matching section in ``docs/commands.md``.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import yaml
+from markdown.extensions.toc import slugify_unicode
+
+from taloscluster.config import CLUSTER_FILE, SECRETS_FILE, load_config, load_secrets
+
+ROOT = Path(__file__).resolve().parent.parent
+DOCS = ROOT / "docs"
+COMMANDS = DOCS / "commands.md"
+CONFIGURATION = DOCS / "configuration.md"
+CLI = ROOT / "taloscluster" / "cli.py"
+
+SCAFFOLD_PLACEHOLDER = "CHANGE-ME"
+
+
+def _yaml_blocks(text: str) -> list[str]:
+    """Return the bodies of every fenced ```yaml ... ``` block in ``text``."""
+    return re.findall(r"```yaml\n(.*?)```", text, re.S)
+
+
+def _headers(path: Path) -> set[str]:
+    """MkDocs slugs for every heading in ``path``."""
+    slugs: set[str] = set()
+    for line in path.read_text().splitlines():
+        if re.match(r"^#{1,6} ", line):
+            header = re.sub(r"^#{1,6}\s*", "", line).strip()
+            slugs.add(slugify_unicode(header, "-"))
+    return slugs
+
+
+def _internal_link_targets(path: Path) -> list[tuple[str, str | None]]:
+    """(target-path, anchor|None) for every internal markdown link in ``path``."""
+    found: list[tuple[str, str | None]] = []
+    for m in re.finditer(r"\[[^\]]*\]\(([^)]+)\)", path.read_text()):
+        target = m.group(1)
+        if target.startswith(("http://", "https://", "mailto:", "//")):
+            continue
+        target = target.split(' "', 1)[0].strip()
+        if "&lt;" in target or "<" in target:
+            continue
+        if "#" in target:
+            filepart, anchor = target.rsplit("#", 1)
+        else:
+            filepart, anchor = target, None
+        filepart = filepart.strip()
+        if not filepart:
+            # same-file anchor
+            found.append(("", anchor))
+            continue
+        if not filepart.endswith(".md"):
+            continue
+        found.append((filepart, anchor))
+    return found
+
+
+# --------------------------------------------------------------------------- #
+# 1. The complete documented example must load with matching secrets.
+# --------------------------------------------------------------------------- #
+
+
+def _replace_scaffold(value):
+    """Recursively swap ``CHANGE-ME`` scaffold placeholders for real strings."""
+    if isinstance(value, dict):
+        return {k: _replace_scaffold(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_replace_scaffold(v) for v in value]
+    if value == SCAFFOLD_PLACEHOLDER:
+        return "a-real-placeholder-credential"
+    return value
+
+
+def test_complete_documented_example_loads(tmp_path):
+    # The full worked example on the configuration overview page must stay a
+    # complete, loadable cluster: one `cluster.yaml` block that carries every
+    # required key and one `secrets.yaml` block for the same provider. The
+    # examples use `CHANGE-ME` scaffold placeholders (which `load_secrets`
+    # deliberately refuses), so substitute real credential strings first, then
+    # run the real loaders -- a doc example that drifts out of the schema would
+    # fail here.
+    blocks = _yaml_blocks(CONFIGURATION.read_text())
+    cluster_blocks = [b for b in blocks if "controlplane:" in b]
+    secrets_blocks = [b for b in blocks if "token_id:" in b or "credential_id:" in b]
+
+    assert cluster_blocks, "configuration.md must keep a complete cluster.yaml example"
+    assert secrets_blocks, "configuration.md must keep a matching secrets.yaml example"
+
+    cluster = yaml.safe_load(cluster_blocks[0])
+    secrets = yaml.safe_load(secrets_blocks[0])
+
+    (tmp_path / CLUSTER_FILE).write_text(yaml.safe_dump(cluster))
+    (tmp_path / SECRETS_FILE).write_text(yaml.safe_dump(_replace_scaffold(secrets)))
+
+    cfg = load_config(tmp_path)
+    assert cfg.name
+    assert cfg.provider_name in ("openstack", "proxmox")
+    # the secrets must match the chosen provider (exactly one block present)
+    secrets = load_secrets(tmp_path)
+    assert secrets.provider is not None
+
+
+# --------------------------------------------------------------------------- #
+# 2. Internal links and anchors must resolve.
+# --------------------------------------------------------------------------- #
+
+
+def test_internal_links_point_at_existing_files():
+    broken: list[str] = []
+    for page in DOCS.rglob("*.md"):
+        for filepart, _anchor in _internal_link_targets(page):
+            if not filepart:
+                continue
+            resolved = (page.parent / filepart).resolve()
+            if not resolved.is_file():
+                broken.append(f"{page.relative_to(ROOT)} -> {filepart}")
+    assert not broken, "broken internal markdown link(s): " + "; ".join(broken)
+
+
+def test_internal_anchor_targets_resolve():
+    broken: list[str] = []
+    for page in DOCS.rglob("*.md"):
+        slugs = _headers(page)
+        for filepart, anchor in _internal_link_targets(page):
+            if not anchor:
+                continue
+            if filepart:
+                target = (page.parent / filepart).resolve()
+                if not target.is_file():
+                    continue  # already reported by the existence check
+                target_slugs = _headers(target)
+            else:
+                target_slugs = slugs
+            if anchor not in target_slugs:
+                broken.append(f"{page.relative_to(ROOT)} -> {filepart}#{anchor}")
+    assert not broken, "broken internal anchor link(s): " + "; ".join(broken)
+
+
+# --------------------------------------------------------------------------- #
+# 3. The command reference must cover the CLI.
+# --------------------------------------------------------------------------- #
+
+
+def test_command_reference_covers_every_cli_command():
+    cli = CLI.read_text()
+    registered = set(re.findall(r'sub\.add_parser\(\s*"([a-zA-Z]+)"', cli))
+    aliases: set[str] = set()
+    for m in re.finditer(r"aliases=\[([^\]]*)\]", cli):
+        aliases.update(a.strip(' "') for a in m.group(1).split(",") if a.strip())
+    assert registered, "failed to read the CLI subcommands from cli.py"
+
+    text = COMMANDS.read_text()
+    headings = set()
+    for line in text.splitlines():
+        if line.startswith("## "):
+            headings.add(re.sub(r"^##\s*", "", line).strip().strip("`"))
+
+    # every real command gets a dedicated `## command` reference section
+    missing = sorted(c for c in registered if c not in headings)
+    assert not missing, f"commands.md has no `##` section for CLI command(s): {', '.join(missing)}"
+    # the converge aliases are documented under the converge section
+    for alias in aliases:
+        assert alias in text, f"commands.md does not mention the `{alias}` alias"
