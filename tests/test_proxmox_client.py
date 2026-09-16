@@ -145,3 +145,27 @@ def test_malformed_warnings_exit_status_is_still_a_failure():
 
     with pytest.raises(ReconcileError, match="WARNINGS: nope"):
         client.mutate("POST", "nodes/pve001/qemu")
+
+
+def test_wait_task_rejects_an_invalid_upid():
+    client = ProxmoxClient("https://pve", "id", "secret", session=Session([]))
+
+    with pytest.raises(ReconcileError, match="invalid Proxmox task id"):
+        client.wait_task("not-a-upid")
+
+
+def test_wait_task_raises_when_the_task_never_stops(monkeypatch):
+    monkeypatch.setattr("taloscluster.proxmox.client.time.sleep", lambda _delay: None)
+    session = Session([Response(200, {"status": "running"})])
+    client = ProxmoxClient(
+        "https://pve", "id", "secret", session=session, task_timeout=5, poll_interval=0
+    )
+    clock = iter([0.0, 0.0, 6.0])  # in-deadline sample, then timeout at 0 + 5
+    monkeypatch.setattr("taloscluster.proxmox.client.time.monotonic", lambda: next(clock))
+
+    with pytest.raises(TimeoutError, match="did not finish within 5s"):
+        client.wait_task("UPID:pve001:1:2:3:qmcreate:800:user@pve:")
+
+    # The task was polled at least once before the deadline expired, and the
+    # "running" status response was consumed.
+    assert "/tasks/" in session.calls[0][1]

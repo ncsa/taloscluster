@@ -398,3 +398,56 @@ def test_wait_version_times_out_when_the_schematic_never_matches(monkeypatch):
     with pytest.raises(TimeoutError, match="v1.13.9/sch-123"):
         converge._wait_version(Path("talosconfig"), "ep", "cp-01", "v1.13.9",
                                want_schematic="sch-123", timeout_s=60)
+
+
+# ---------------------------------------------------------------------------
+# _upgrade: kube-api must come back before the k8s version steps
+# ---------------------------------------------------------------------------
+
+def test_upgrade_aborts_when_kube_api_never_stabilizes(monkeypatch):
+    """A k8s upgrade is refused if the api server never comes back after the
+    machine-config apply (12 probes of 2 consecutive answering probes)."""
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8")
+    machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses", lambda *_a, **_kw: {"cp-01": "192.0.2.1"}
+    )
+    # running 1.34.2 means the kube-api branch (not the early return) runs
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.34.2")
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda *_a: False)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+
+    with pytest.raises(ReconcileError, match="did not stabilize before k8s upgrade"):
+        converge._upgrade(
+            cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
+            {("base",): "sch-123"}, Path("talosconfig"), Path("kubeconfig"),
+        )
+
+
+def test_upgrade_aborts_when_kube_api_stabilizes_but_version_is_still_unknown(monkeypatch):
+    """Two consecutive healthy probes are not enough: the version must be
+    readable before stepping, or the upgrade is refused rather than guessed."""
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8")
+    machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses", lambda *_a, **_kw: {"cp-01": "192.0.2.1"}
+    )
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda *_a: True)
+    calls = {"n": 0}
+
+    def fake_version(*_a):
+        calls["n"] += 1
+        return "v1.34.2" if calls["n"] == 1 else None
+
+    monkeypatch.setattr(converge.kubectl, "server_version", fake_version)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+
+    with pytest.raises(ReconcileError, match="server version is still unavailable"):
+        converge._upgrade(
+            cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
+            {("base",): "sch-123"}, Path("talosconfig"), Path("kubeconfig"),
+        )

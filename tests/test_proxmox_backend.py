@@ -14,7 +14,13 @@ from taloscluster.infrastructure import Endpoint
 from taloscluster.output import set_dry_run
 from taloscluster.proxmox import cidata
 from taloscluster.proxmox import talos as proxmox_talos
-from taloscluster.proxmox.backend import ProxmoxBackend, _boot_iso_name, _memory_mib
+from taloscluster.proxmox.backend import (
+    ProxmoxBackend,
+    _boot_iso_name,
+    _cidata_name,
+    _memory_mib,
+)
+from taloscluster.proxmox.inventory import ProxmoxInventory
 from taloscluster.proxmox.permissions import requirements
 from taloscluster.talos import factory
 
@@ -595,6 +601,35 @@ def test_vm_create_adds_external_nic_with_firewall(make_config, monkeypatch):
     assert "firewall=1" in payload["net1"]
     assert "vmbr1" in payload["net1"]
     assert "tag=1691" in payload["net1"]
+
+
+def test_vm_create_cleans_up_the_cidata_iso_when_creation_fails(proxmox_cfg, monkeypatch):
+    """A failed VM create must not leave the cidata ISO behind (the config it
+    carries may embed cluster identity material)."""
+    data = _data()
+    data["cluster/nextid"] = 801
+    client = FakeClient(data)
+    backend = _backend(proxmox_cfg, client)
+    removed: list[tuple] = []
+    monkeypatch.setattr(
+        ProxmoxBackend, "_remove_iso_if_present",
+        lambda _self, node, storage, name: removed.append((node, storage, name)),
+    )
+    monkeypatch.setattr(cidata, "build", lambda _src, dst, _h, _c: dst.write_text(""))
+
+    def fail_create(method, path, **kwargs):
+        if method == "POST" and path.endswith("/qemu"):
+            raise ReconcileError("qemu create failed")
+
+    client.mutate = fail_create  # only the VM create fails, keeping setup stubs
+
+    machine = next(iter(proxmox_cfg.machines.values()))
+    with pytest.raises(ReconcileError, match="qemu create failed"):
+        backend._create_vm(
+            ProxmoxInventory(), machine, "pve001", "isos:iso/talos.iso", "config"
+        )
+
+    assert removed == [("pve001", "local", _cidata_name("testcluster", machine.name))]
 
 
 def test_firewall_matches_openstack_security_group(make_config, monkeypatch):
@@ -1216,6 +1251,71 @@ def test_sdn_second_converge_makes_no_mutations(sdn_cfg):
     backend.reconcile_network(sdn_cfg.machines, inventory)
 
     assert client.mutations == []
+
+
+def test_sdn_zone_drift_updates_in_place_without_reseeding(sdn_cfg, capsys):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    # the applied zone echoes advertise-subnets unset (an operator flipped it
+    # out-of-band); the desired zone insists on SNAT so a single in-place PUT
+    # must correct it, never a re-stage
+    data["cluster/sdn/zones"][0]["advertise-subnets"] = 0
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert [(method, path) for method, path, _payload in client.mutations] == [
+        ("PUT", f"cluster/sdn/zones/{ZONE_ID}"),
+        ("PUT", "cluster/sdn"),
+    ]
+    zone = client.mutations[0][2]
+    assert zone["advertise-subnets"] == 1
+    assert "update SDN zone" in capsys.readouterr().out
+
+
+def test_sdn_vnet_drift_updates_in_place_without_reseeding(sdn_cfg, capsys):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    # an operator re-tagged the vnet out-of-band; the desired tag must win via
+    # a single PUT on the object, with no create POST and no controller/zone
+    # churn
+    data["cluster/sdn/vnets"][0]["tag"] = 60000
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert [(method, path) for method, path, _payload in client.mutations] == [
+        ("PUT", f"cluster/sdn/vnets/{VNET_ID}"),
+        ("PUT", "cluster/sdn"),
+    ]
+    vnet = client.mutations[0][2]
+    assert vnet["tag"] == backend.sdn.tag
+    assert "update SDN vnet" in capsys.readouterr().out
+
+
+def test_sdn_subnet_drift_updates_in_place_without_reseeding(sdn_cfg, capsys):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    # the applied subnet has SNAT disabled; the desired subnet enables it via a
+    # single PUT on the object whose id is url-quoted
+    data[f"cluster/sdn/vnets/{VNET_ID}/subnets"][0]["snat"] = 0
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(sdn_cfg.machines, inventory)
+
+    assert [(method, path) for method, path, _payload in client.mutations] == [
+        ("PUT", f"cluster/sdn/vnets/{VNET_ID}/subnets/{ZONE_ID}-192.168.0.0-21"),
+        ("PUT", "cluster/sdn"),
+    ]
+    subnet = client.mutations[0][2]
+    assert subnet["snat"] == 1
+    assert "update SDN subnet" in capsys.readouterr().out
 
 
 def test_sdn_converged_run_still_verifies_bridges(sdn_cfg):

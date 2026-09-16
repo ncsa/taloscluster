@@ -14,9 +14,20 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import requests
 
 from taloscluster_rancher.client import Client, _error_detail
+from taloscluster_rancher.errors import RancherError
+
+
+@pytest.fixture(autouse=True)
+def _force_not_dry_run(monkeypatch):
+    """Pin the real HTTP path: another test file leaves the global dry-run flag
+    set, which would silently turn add/remove/delete into no-ops here."""
+    from taloscluster_rancher import client as cmod
+
+    monkeypatch.setattr(cmod, "dry_run", lambda: False)
 
 
 def _client(principals_for):
@@ -105,3 +116,123 @@ def test_error_detail_falls_back_to_raw_text_for_empty_body():
 
 def test_error_detail_non_json_body_returns_raw_text():
     assert _error_detail(_resp(text="<html>gateway error</html>")) == "<html>gateway error</html>"
+
+
+# ---------------------------------------------------------------------------
+# HTTP verbs that drive ensure_members / destroy
+# ---------------------------------------------------------------------------
+
+def _http_client(get=None, post=None, delete=None):
+    client = Client("https://rancher.example.com", "token-x:y")
+    if get is not None:
+        client._get = get
+    if post is not None:
+        client._post = post
+    if delete is not None:
+        client._delete = delete
+    return client
+
+
+def test_resolve_principal_strips_an_email_suffix():
+    client = _client({"alice": [{"id": USER.format(uid="alice"), "principalType": "user"}]})
+    assert client.resolve_principal("alice@example.com")["id"] == USER.format(uid="alice")
+
+
+def test_resolve_principal_skips_principals_without_an_id():
+    client = _client(
+        {
+            "alice": [
+                {"principalType": "user"},
+                {"id": USER.format(uid="alice"), "principalType": "user"},
+            ]
+        }
+    )
+    assert client.resolve_principal("alice")["id"] == USER.format(uid="alice")
+
+
+def test_find_cluster_queries_by_name_filter():
+    seen = {}
+
+    def fake_get(path, **kw):
+        seen.update(kw)
+        return {"data": [{"id": "c-1", "name": "example", "state": "active"}]}
+
+    cluster = _http_client(get=fake_get).find_cluster("example")
+    assert seen["params"] == {"filter": "name=example"}
+    assert cluster.id == "c-1"
+    assert cluster.state == "active"
+
+
+def test_find_cluster_returns_none_when_absent():
+    got = _http_client(get=lambda path, **kw: {"data": []}).find_cluster("example")
+    assert got is None
+
+
+def test_find_cluster_refuses_ambiguous_names():
+    data = {
+        "data": [
+            {"id": "c-1", "name": "example", "state": "active"},
+            {"id": "c-2", "name": "example", "state": "active"},
+        ]
+    }
+    with pytest.raises(RancherError, match="multiple Rancher clusters named 'example'"):
+        _http_client(get=lambda path, **kw: data).find_cluster("example")
+
+
+def test_list_member_bindings_parses_rows():
+    data = {
+        "data": [
+            {"id": "b-1", "userPrincipalId": "ldap://alice", "roleTemplateId": "cluster-owner"},
+            {"id": "b-2", "groupPrincipalId": "ldap://team", "roleTemplateId": "cluster-member"},
+            {"id": "b-3"},
+        ]
+    }
+    bindings = _http_client(get=lambda path, **kw: data).list_member_bindings("c-1")
+    assert bindings[0].id == "b-1"
+    assert bindings[0].userPrincipalId == "ldap://alice"
+    assert bindings[0].roleTemplateId == "cluster-owner"
+    assert bindings[1].userPrincipalId is None and bindings[1].groupPrincipalId == "ldap://team"
+    assert bindings[2].roleTemplateId == ""
+
+
+def test_add_member_posts_the_binding():
+    posted = {}
+    client = _http_client(post=lambda path, body: posted.update({path: body}) or {})
+    client.add_member("c-1", "ldap://alice", "cluster-owner")
+    assert posted == {
+        "/v3/clusterroletemplatebindings": {
+            "clusterId": "c-1",
+            "userPrincipalId": "ldap://alice",
+            "roleTemplateId": "cluster-owner",
+        }
+    }
+
+
+def test_remove_member_deletes_the_binding():
+    deleted = []
+    client = _http_client(delete=lambda path, **kw: deleted.append(path))
+    client.remove_member("binding-9")
+    assert deleted == ["/v3/clusterroletemplatebindings/binding-9"]
+
+
+def test_delete_cluster_deletes_via_the_api():
+    deleted = []
+    client = _http_client(delete=lambda path, **kw: deleted.append(path))
+    client.delete_cluster("c-7")
+    assert deleted == ["/v3/clusters/c-7"]
+
+
+def test_member_mutations_are_noops_in_dry_run(monkeypatch):
+    from taloscluster_rancher import client as cmod
+
+    monkeypatch.setattr(cmod, "dry_run", lambda: True)
+    client = _http_client()
+    hits: list[str] = []
+    client._delete = lambda path, **kw: hits.append(path)
+    client._post = lambda path, body: hits.append(path)
+
+    client.add_member("c-1", "ldap://alice", "cluster-owner")
+    client.remove_member("binding-9")
+    client.delete_cluster("c-7")
+
+    assert hits == []

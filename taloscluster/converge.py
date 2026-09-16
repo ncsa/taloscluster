@@ -232,24 +232,9 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # Before the upgrade phase on purpose: cluster.extraManifests lives in the
     # machine config, and `talosctl upgrade-k8s` refuses to finish until every
     # bootstrap manifest reconciles -- so a manifest fix has to land first.
-    if up and configs and moving_from and not dry_run():
-        # control planes first, settled one at a time; then a kubeconfig for the
-        # new endpoint -- the old one dies with the old VIP, and the worker pass
-        # needs kubectl to see the nodes
-        _apply_configs(
-            cfg,
-            machines,
-            inv,
-            refs,
-            configs,
-            talosconfig_path,
-            kubeconfig_path,
-            settle=True,
-            roles=("controlplane",),
-        )
-        _finish_endpoint_move(cfg, refs, inv, talosconfig_path, kubeconfig_path)
-        _apply_configs(
-            cfg, machines, inv, refs, configs, talosconfig_path, kubeconfig_path, roles=("worker",)
+    if up and configs and not dry_run():
+        _apply_existing_configs(
+            cfg, machines, inv, refs, configs, talosconfig_path, kubeconfig_path, moving_from
         )
     elif up and configs:
         _apply_configs(cfg, machines, inv, refs, configs, talosconfig_path, kubeconfig_path)
@@ -1171,6 +1156,38 @@ def _scale_down(
 
 
 _SETTLE_GRACE_S = 120
+
+
+def _apply_existing_configs(
+    cfg: Config,
+    machines: dict[str, Machine],
+    inv: InfrastructureInventory,
+    refs: NetworkResult,
+    configs: dict[str, str],
+    talosconfig: Path,
+    kubeconfig: Path,
+    moving_from: str,
+) -> None:
+    """Push machine config to existing nodes, sequencing a kube-api endpoint move.
+
+    When `moving_from` records an old endpoint, the control planes are
+    reconfigured first and settled one at a time, then the kubeconfig is
+    regenerated from a control plane (`_finish_endpoint_move`) -- the old
+    endpoint dies with the old VIP, and the worker pass needs kubectl to see the
+    nodes on the new one. Without a move, a single apply covers control planes
+    and workers.
+    """
+    if moving_from:
+        _apply_configs(
+            cfg, machines, inv, refs, configs, talosconfig, kubeconfig,
+            settle=True, roles=("controlplane",),
+        )
+        _finish_endpoint_move(cfg, refs, inv, talosconfig, kubeconfig)
+        _apply_configs(
+            cfg, machines, inv, refs, configs, talosconfig, kubeconfig, roles=("worker",)
+        )
+    else:
+        _apply_configs(cfg, machines, inv, refs, configs, talosconfig, kubeconfig)
 
 
 def _apply_configs(

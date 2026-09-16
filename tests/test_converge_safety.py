@@ -11,6 +11,7 @@ import pytest
 from taloscluster import converge
 from taloscluster.errors import ConfigError, ReconcileError, StateError
 from taloscluster.infrastructure import (
+    Endpoint,
     InfrastructureInventory,
     InfrastructureMachine,
     NetworkAttachment,
@@ -51,6 +52,30 @@ def test_scale_down_decline_happens_before_mutation(monkeypatch):
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
             Path("talosconfig"),
             Path("kubeconfig"), assume_yes=False,
+        )
+
+    assert mutations == []
+
+
+def test_scale_down_refuses_even_controlplane_count(monkeypatch):
+    """Removing a control plane when the desired count is even would break etcd
+    quorum, so scale-down must refuse before prompting or mutating."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 2})
+    mutations: list[str] = []
+    monkeypatch.setattr(
+        converge.kubectl, "node_names", lambda _kc: ["testcluster-controlplane-03"]
+    )
+    monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
+
+    with pytest.raises(
+        ReconcileError,
+        match="refusing to remove controlplane testcluster-controlplane-03",
+    ):
+        converge._scale_down(
+            FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
+            Path("talosconfig"), Path("kubeconfig"), assume_yes=True,
         )
 
     assert mutations == []
@@ -822,6 +847,118 @@ def test_unchanged_or_unknown_kubeapi_endpoint_is_not_a_move(tmp_path):
     assert converge._endpoint_move(path, "phoenix", "203.0.113.79") == ""
     assert converge._endpoint_move(path, "phoenix", "") == ""  # endpoint still pending
     assert converge._endpoint_move(tmp_path / "missing", "phoenix", "203.0.113.77") == ""
+
+
+def _endpoint_move_refs():
+    host = "phoenix-controlplane-01"
+    return host, NetworkResult(
+        kubernetes=Endpoint(advertised_address="203.0.113.77"),
+        machine_attachments={host: (NetworkAttachment(name="cluster", address="192.168.100.11"),)},
+    ), InfrastructureInventory(
+        machines={
+            host: InfrastructureMachine(
+                name=host, attachments=(NetworkAttachment(name="cluster", address="10.0.0.248"),)
+            )
+        }
+    )
+
+
+def test_finish_endpoint_move_writes_a_new_kubeconfig_and_waits(monkeypatch, tmp_path):
+    """After the machine configs carry the new endpoint the move finishes with a
+    fresh kubeconfig fetched from a control plane and a wait for the api."""
+    host, refs, inv = _endpoint_move_refs()
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("old")
+    reached: list[str] = []
+    monkeypatch.setattr(
+        converge, "_wait_reachable", lambda _tc, e, n: reached.append(n) or None
+    )
+    fetched: list[str] = []
+    monkeypatch.setattr(
+        converge.talosctl, "kubeconfig",
+        lambda _tc, e, _n, kc: fetched.append(e) or kc.write_text("new"),
+    )
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+
+    converge._finish_endpoint_move(_no_tailscale_cfg(), refs, inv, tmp_path / "t", kubeconfig)
+
+    assert reached == ["192.168.100.11"]
+    assert fetched == ["192.168.100.11"]  # fetched from a real control plane, not the VIP
+    assert kubeconfig.read_text() == "new"
+
+
+def test_finish_endpoint_move_raises_when_kube_api_never_answers(monkeypatch, tmp_path):
+    host, refs, inv = _endpoint_move_refs()
+    kubeconfig = tmp_path / "kubeconfig"
+    monkeypatch.setattr(converge, "_wait_reachable", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        converge.talosctl, "kubeconfig",
+        lambda *_a, **_k: kubeconfig.write_text("new"),
+    )
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    clock = iter([0.0, 301.0])
+    monkeypatch.setattr(converge.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(ReconcileError, match="203.0.113.77"):
+        converge._finish_endpoint_move(
+            _no_tailscale_cfg(), refs, inv, tmp_path / "totalsconfig", kubeconfig
+        )
+
+
+def test_apply_existing_configs_serializes_an_endpoint_move(monkeypatch):
+    """On a kube-api endpoint move the control planes are re-configured first
+    and settled one at a time, then the kubeconfig is regressed from a control
+    plane, before the worker pass runs -- the old endpoint dies with the old
+    VIP, and the workers need kubectl to see the nodes on the new one."""
+    machines, inv, configs = _apply_configs_fixtures()
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        converge, "_apply_configs",
+        lambda cfg, m, i, r, c, t, k, **kw: calls.append(
+            ("apply", kw.get("roles"), kw.get("settle"))
+        ),
+    )
+    monkeypatch.setattr(
+        converge, "_finish_endpoint_move", lambda *_a, **_k: calls.append(("move", None))
+    )
+
+    converge._apply_existing_configs(
+        SimpleNamespace(name="phoenix", tailscale_enabled=True),
+        machines, inv, NetworkResult(), configs,
+        Path("talosconfig"), Path("kubeconfig"), moving_from="203.0.113.5",
+    )
+
+    # control planes settle one at a time, the kubeconfig is regressed, and only
+    # then are the workers applied in a single pass
+    assert calls == [
+        ("apply", ("controlplane",), True),
+        ("move", None),
+        ("apply", ("worker",), None),
+    ]
+
+
+def test_apply_existing_configs_without_a_move_applies_all_roles(monkeypatch):
+    """An unchanged endpoint takes the plain single apply over both roles with
+    the default settle -- no endpoint-mode three-phase sequencing."""
+    machines, inv, configs = _apply_configs_fixtures()
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        converge, "_apply_configs",
+        lambda cfg, m, i, r, c, t, k, **kw: calls.append(("apply", kw.get("roles"))),
+    )
+    monkeypatch.setattr(
+        converge, "_finish_endpoint_move",
+        lambda *_a, **_k: calls.append(("move", None)) or pytest.fail("no move expected"),
+    )
+
+    converge._apply_existing_configs(
+        SimpleNamespace(name="phoenix", tailscale_enabled=True),
+        machines, inv, NetworkResult(), configs,
+        Path("talosconfig"), Path("kubeconfig"), moving_from="",
+    )
+
+    assert calls == [("apply", None)]  # default roles, settle left on
 
 
 # ---- talosctl endpoint: a real control plane, never the VIP -----------------

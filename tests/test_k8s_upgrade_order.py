@@ -660,3 +660,36 @@ def test_converge_plan_recovers_without_stubbing_phase_functions(
 
     assert not kubeconfig.exists()  # dry-run wrote no client file
     assert not backend.applied  # nothing reached reconcile_machines (no configs)
+
+
+# ---------------------------------------------------------------------------
+# _k8s_upgrade_path: step one minor at a time, stone-patch hops
+# ---------------------------------------------------------------------------
+
+def test_upgrade_path_steps_through_intermediate_minors(monkeypatch):
+    monkeypatch.setattr(
+        converge.versions, "latest_kubernetes_patch", lambda minor: f"v{minor}.9"
+    )
+    assert converge._k8s_upgrade_path("v1.34.1", "v1.36.2") == ["v1.35.9", "v1.36.2"]
+
+
+def test_upgrade_path_is_direct_for_adjacent_minors():
+    assert converge._k8s_upgrade_path("v1.34.5", "v1.35.0") == ["v1.35.0"]
+
+
+def test_upgrade_path_at_target_returns_only_the_target():
+    assert converge._k8s_upgrade_path("v1.36.2", "v1.36.2") == ["v1.36.2"]
+
+
+def test_upgrade_path_falls_back_to_minor_point_zero_when_lookup_fails(monkeypatch, capsys):
+    def boom(_minor):
+        raise OSError("dl.k8s.io unreachable")
+
+    monkeypatch.setattr(converge.versions, "latest_kubernetes_patch", boom)
+    assert converge._k8s_upgrade_path("v1.34.1", "v1.36.2") == ["v1.35.0", "v1.36.2"]
+    assert "using 1.35.0" in capsys.readouterr().err
+
+
+def test_upgrade_path_unknown_current_is_a_direct_attempt(monkeypatch, capsys):
+    assert converge._k8s_upgrade_path("", "v1.36.2") == ["v1.36.2"]
+    assert "direct upgrade" in capsys.readouterr().err
