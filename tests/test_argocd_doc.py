@@ -48,3 +48,24 @@ def test_intro_matches_the_reconcile_code():
     # The concepts page already states the standalone path reads the downstream
     # agent id; the configuration page must not contradict it.
     assert "cattle-cluster-agent" in plugins
+
+
+def test_yaml_serializer_sentence_lives_in_the_intro():
+    # The YAML-serializer guarantee now opens the page: every scalar the plugin
+    # renders round-trips on one physical line. It must live in the intro, not
+    # under the git-credentials section (it is not specific to credentials).
+    text = GUIDE.read_text()
+    assert "emitted through a YAML serializer" in text
+    assert "round-trips exactly" in text
+    assert "YAML serializer" in text.split("## ")[0]
+    assert "one physical line" in text.split("## ")[0]
+
+
+def test_git_section_does_not_enumerate_every_scalar():
+    # The serialization paragraph sat at the end under `argocd.git.username`/
+    # `token` but covered repo URLs, servers, emails and Helm values. The long
+    # enumeration is gone; the git section only names the credential itself.
+    text = GUIDE.read_text()
+    assert "spec.source.repoURL" not in text
+    assert "AppProject role member emails" not in text
+    assert "kubeconfig `server` in the cluster Secret and AppProject" not in text

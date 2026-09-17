@@ -123,3 +123,22 @@ def test_guide_verify_commands_have_no_bare_talosctl():
     for line in GUIDE.read_text().splitlines():
         if "version" in line and "talosctl -n" in line:
             assert "--talosconfig talosconfig" in line
+
+
+def test_guide_states_vip_exclusion_once_in_path_b():
+    # The kube-api VIP is excluded from node-address selection, and that rule is
+    # stated once in the Path B intro rather than repeated in step 4.
+    text = GUIDE.read_text()
+    assert text.count("excluded from guest-agent and Talos discovery") == 1
+    assert "rather than the VIP" in text
+    # the step-4 restatement is gone: "never select the kube-api VIP"
+    assert "never select the kube-api VIP" not in text
+
+
+def test_guide_describes_duplicate_vm_name_collision():
+    # Proxmox keys machines by VM name: a name shared with a cluster-managed
+    # VM aborts converge/destroy, while collisions among unmanaged VMs are ignored.
+    text = GUIDE.read_text()
+    assert "a VM name shared with a cluster-managed machine aborts converge and destroy" in text
+    assert "collisions among unmanaged VMs are ignored" in text
+    assert "one managed by this cluster or two" not in text

@@ -31,7 +31,7 @@ A converge or destroy hook failure is reported, the other plugins still run, and
 
 ## Plugins depend on each other
 
-Plugins run in a defined order and can pass information forward. A plugin declares the names it wants to run after, and whatever it returns — a converge result or a `check`/`status` report — is stored for the plugins that follow. The rancher plugin publishes the Rancher cluster id it resolved; the argocd plugin runs after it and stamps that id on the ArgoCD cluster Secret so the two systems point at the same cluster. The dependency is soft: a name that is not installed is ignored, and a plugin must treat an earlier plugin's output as optional.
+Plugins run in a defined order and can pass information forward: a plugin declares the names it wants to run after, and whatever it returns — a converge result or a `check`/`status` report — is stored for the plugins that follow, where an earlier result is read from `ctx.results` (see [Writing a plugin](#writing-a-plugin)). The rancher plugin publishes the Rancher cluster id it resolved; the argocd plugin runs after it and stamps that id on the ArgoCD cluster Secret so the two systems point at the same cluster. The dependency is soft: a name that is not installed is ignored, and a plugin must treat an earlier plugin's output as optional.
 
 ## Rancher
 
