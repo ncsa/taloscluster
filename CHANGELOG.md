@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- Fold the Proxmox SDN shared-controller pending scan into one guard shared by converge and teardown, so the two rules cannot drift.
 - Move the downstream Rancher cluster-id parsing into a shared `taloscluster.k8s.rancher` core helper, so the argocd and rancher plugins resolve the `cattle-cluster-agent` id through one implementation instead of two copies that could drift.
 - Publish the downstream `cattle-cluster-agent` id (or none) as the Rancher `check` cluster id on an identity mismatch, so ArgoCD stamps the cluster a converge would attach to instead of the unrelated Rancher cluster bearing the name.
 - Bring the Unreleased section back to the house rules: merge and shorten the new entries (the two ArgoCD serializer bullets, the `proxmox.network` validation bullet into the fixed-schema one, and the dry-run version exception into the refusal it qualifies) into one terse, single-list summary, and correct the documented kube-proxy tag — the bug was a missing leading `v`, not an untagged image — and a trailing space in the troubleshooting guide.

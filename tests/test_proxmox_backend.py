@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -1752,12 +1753,18 @@ def test_sdn_destroy_refuses_pending_destructive_state_on_shared_controller(
 ):
     backend_probe = _backend(sdn_cfg, FakeClient({}))
     data = _sdn_converged_data(backend_probe.sdn)
+    controller = data["cluster/sdn/controllers"][0]["controller"]
     data["cluster/sdn/controllers"][0]["state"] = state
     client = FakeClient(data)
     backend = _backend(sdn_cfg, client)
     inventory = backend.load_inventory()
 
-    with pytest.raises(ReconcileError, match="never deletes the controller"):
+    message = (
+        "refusing to commit pending SDN state on the shared controller "
+        f"{controller} ({state}); teardown never deletes the controller and "
+        "its staged edits are cluster-wide, so apply or revert them first"
+    )
+    with pytest.raises(ReconcileError, match=re.escape(message)):
         backend.destroy_resources(inventory)
 
     assert client.mutations == []

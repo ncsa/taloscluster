@@ -481,7 +481,10 @@ class ProxmoxBackend:
 
         _scan("zones", "zone", self.sdn.name)
         _scan("vnets", "vnet", self.sdn.name)
-        _scan("controllers", "controller", self.sdn.controller)
+
+        shared = self._shared_controller_destructive_pending(state)
+        if shared:
+            dangerous.append(shared)
 
         for item in state["vnets"]:
             if str(item.get("vnet")) != self.sdn.name:
@@ -514,17 +517,33 @@ class ProxmoxBackend:
         other clusters that use it. Only `new` can be a resumable leftover.
         """
         assert self.sdn is not None
+        shared = self._shared_controller_destructive_pending(state)
+        if shared:
+            raise ReconcileError(
+                "refusing to commit pending SDN state on the shared "
+                f"{shared}; teardown never deletes the controller and its "
+                "staged edits are cluster-wide, so apply or revert them first"
+            )
+
+    def _shared_controller_destructive_pending(
+        self, state: dict[str, list[dict[str, Any]]]
+    ) -> str | None:
+        """Detect a pending `deleted`/`changed` on the shared controller.
+
+        Shared by the converge and teardown guards so they cannot drift: the
+        shared controller is the one object both the own-scan (resumable) and
+        the teardown rule treat specially, and only `new` is a resumable
+        leftover there as anywhere else. Returns a descriptor of the offending
+        object, or `None` when the shared controller bears no pending edits.
+        """
+        assert self.sdn is not None
         for item in state["controllers"]:
             if str(item.get("controller")) != self.sdn.controller:
                 continue
             pending = str(item.get("state") or "")
             if pending and pending != "new":
-                raise ReconcileError(
-                    f"refusing to commit pending SDN state on the shared "
-                    f"controller {self.sdn.controller} ({pending}); teardown "
-                    "never deletes the controller and its staged edits are "
-                    "cluster-wide, so apply or revert them first"
-                )
+                return f"controller {self.sdn.controller} ({pending})"
+        return None
 
     def _refuse_sdn_destroy(self) -> None:
         """Refuse teardown before any mutation when SDN apply would be unsafe.

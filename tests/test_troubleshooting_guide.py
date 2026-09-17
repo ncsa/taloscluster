@@ -218,12 +218,19 @@ def test_duplicate_proxmox_vm_names_matches_backend():
 
 def test_sdn_shared_controller_pending_matches_backend():
     # SDN teardown refuses a pending `deleted`/`changed` on the shared controller
-    # before any VM or pool is deleted; the guide quotes the refusal.
+    # before any VM or pool is deleted; the guide quotes the refusal verbatim,
+    # including the pending state the code must keep on the descriptor.
     text = GUIDE.read_text()
     backend = PROXMOX_BACKEND.read_text()
-    assert "refusing to commit pending SDN state on the shared controller" in text
+    assert (
+        "refusing to commit pending SDN state on the shared controller "
+        "controller-01 (changed); teardown never deletes the controller and "
+        "its staged edits are cluster-wide, so apply or revert them first"
+    ) in text
+    # the teardown message embeds the shared-controller descriptor verbatim, so
+    # it keeps the `(<state>)` the guide quotes; dropping the state must fail.
     assert "refusing to commit pending SDN state on the shared" in backend
-    assert "apply or revert them first" in text
+    assert '"{shared}; teardown never deletes the controller' in backend
     assert "apply or revert them first" in backend
 
 
