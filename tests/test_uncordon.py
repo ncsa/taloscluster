@@ -451,3 +451,31 @@ def test_upgrade_aborts_when_kube_api_stabilizes_but_version_is_still_unknown(mo
             cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
             {("base",): "sch-123"}, Path("talosconfig"), Path("kubeconfig"),
         )
+
+
+def test_upgrade_noop_for_unprefixed_kubernetes_pin(make_config, monkeypatch):
+    """An unprefixed `kubernetes.version: 1.31.0` pin must be canonicalized to
+    `v1.31.0` so converge does not schedule an upgrade against a server already
+    reporting `v1.31.0` on every run. `make_config` loads through `load_config`,
+    which applies the normalization, so any upgrade-k8s call here is a bug."""
+    cfg = make_config({"kubernetes": {"version": "1.31.0"}})
+    assert cfg.kubernetes_version == "v1.31.0"
+    machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses", lambda *_a, **_kw: {"cp-01": "192.0.2.1"}
+    )
+    # make_config builds a real Config (tailscale_enabled = False), so the
+    # endpoint lookup would read a CWD talosconfig that a clean checkout lacks
+    # and fail; stub it like the neighbors/machinery discovery above.
+    monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_kw: "ep")
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.31.0")
+    monkeypatch.setattr(converge.talosctl, "upgrade_k8s", lambda *_a, **_kw: pytest.fail(
+        "converged unprefixed pin must not schedule a kubernetes upgrade"
+    ))
+
+    converge._upgrade(
+        cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
+        {("base",): "sch-123"}, Path("talosconfig"), Path("kubeconfig"),
+    )

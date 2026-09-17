@@ -60,4 +60,4 @@ Freeform machine-config patches applied to every node. Pool-level `config_patche
 
 Required · `vMAJOR.MINOR.PATCH`
 
-Kubernetes release to run. Upgrade one minor at a time; converge steps through skipped minors itself with `talosctl upgrade-k8s`. A version older than what the cluster runs is refused. When bumping Talos and Kubernetes together, converge upgrades Talos first.
+Kubernetes release to run; use the canonical `vMAJOR.MINOR.PATCH` form. A missing `v` prefix is normalized to the canonical form during load, so an unprefixed pin is never compared verbatim against the running cluster's version or rendered into an untagged component image. Upgrade one minor at a time; converge steps through skipped minors itself with `talosctl upgrade-k8s`. A version older than what the cluster runs is refused. When bumping Talos and Kubernetes together, converge upgrades Talos first.

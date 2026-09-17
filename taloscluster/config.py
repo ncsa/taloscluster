@@ -601,12 +601,17 @@ def load_config(root: Path) -> Config:
         raw=d,
     )
     _validate(cfg)
-    # Normalize the canonical `v` prefix: an unprefixed value passes the
-    # version regex but would otherwise be compared verbatim against talosctl
-    # output and baked into factory URLs, judging every node outdated forever.
-    # This runs after _validate so a non-string version still raises ConfigError.
+    # Normalize the canonical `v` prefix on both component versions: an
+    # unprefixed value passes the version regex but would otherwise be compared
+    # verbatim against talosctl/kubeconfig output and rendered into image tags
+    # and factory URLs, judging every node outdated forever (the server's
+    # `v1.31.0` never equals a `1.31.0` pin) and producing an untagged
+    # kube-proxy image reference. This runs after _validate so a non-string
+    # version still raises ConfigError.
     if not cfg.talos_version.startswith("v"):
         cfg.talos_version = f"v{cfg.talos_version}"
+    if not cfg.kubernetes_version.startswith("v"):
+        cfg.kubernetes_version = f"v{cfg.kubernetes_version}"
     return cfg
 
 

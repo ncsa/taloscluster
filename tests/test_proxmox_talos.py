@@ -187,6 +187,42 @@ def test_return_path_pod_selects_external_nic_by_mac(make_config):
     assert "volumes" not in pod["spec"]
 
 
+def test_return_path_pod_image_tag_carries_v_for_unprefixed_pin(make_config):
+    """A `kubernetes.version: 1.31.0` pin must render the kube-proxy tag with the
+    required `v` -- and the same image as the prefixed form -- instead of an
+    unprefixed tag that the registry cannot resolve."""
+    def build(k8s_version):
+        overrides = {
+            "kubernetes": {"version": k8s_version},
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "workers": {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"bridge": "vmbr0"},
+                    "external": {
+                        "bridge": "vmbr1",
+                        "cidr": "203.0.113.0/24",
+                        "gateway": "203.0.113.1",
+                        "anchor_cidr": "169.254.40.0/24",
+                        "kubeapi_vip": "203.0.113.10",
+                        "ingress_pool": "203.0.113.20-203.0.113.40",
+                    },
+                },
+            },
+        }
+        return make_config(overrides, remove=("openstack",))
+
+    def image(cfg):
+        m = cfg.machines["testcluster-worker-01"]
+        return talos.return_path_pod(m, cfg)["spec"]["containers"][0]["image"]
+
+    assert image(build("1.31.0")) == "registry.k8s.io/kube-proxy:v1.31.0"
+    assert image(build("v1.31.0")) == "registry.k8s.io/kube-proxy:v1.31.0"
+
+
 def test_external_network_docs_controlplane_has_vip_and_routes(make_config):
     cfg = _proxmox_external_cfg(make_config)
     m = cfg.machines["testcluster-controlplane-01"]

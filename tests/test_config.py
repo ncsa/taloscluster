@@ -236,6 +236,23 @@ def test_non_string_talos_version_raises_config_error_not_attribute_error(make_c
         make_config({"talos": {"version": 1.13}})
 
 
+def test_unprefixed_kubernetes_version_is_normalized(make_config):
+    cfg = make_config({"kubernetes": {"version": "1.31.0"}})
+    assert cfg.kubernetes_version == "v1.31.0"
+
+
+def test_prefixed_kubernetes_version_is_kept(make_config):
+    cfg = make_config({"kubernetes": {"version": "v1.31.0"}})
+    assert cfg.kubernetes_version == "v1.31.0"
+
+
+def test_non_string_kubernetes_version_raises_config_error_not_attribute_error(make_config):
+    # An unquoted `1.31` parses as a float; normalization must not run before
+    # validation or it raises AttributeError instead of ConfigError.
+    with pytest.raises(ConfigError):
+        make_config({"kubernetes": {"version": 1.31}})
+
+
 # ---------------------------------------------------------------------------
 # validate_warnings
 # ---------------------------------------------------------------------------
