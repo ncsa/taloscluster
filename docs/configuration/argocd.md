@@ -2,7 +2,7 @@
 
 Back to the [configuration index](../configuration.md).
 
-The argocd plugin registers this cluster with an ArgoCD instance running elsewhere. It renders a cluster Secret (built from this cluster's own `kubeconfig`), an AppProject with `admin` and `user` roles, and, when the repositories are set, an app-of-apps Application whose values carry the per-cluster settings below. It is skipped unless `secrets.yaml` names a way to reach the ArgoCD cluster. During a shared converge it runs after Rancher and adds the Rancher cluster-id annotation when that hook returned an id. Running ArgoCD alone has no preceding Rancher result. See [Plugins](../concepts/plugins.md#argocd) for integration details.
+The argocd plugin registers this cluster with an ArgoCD instance running elsewhere. It renders a cluster Secret (built from this cluster's own `kubeconfig`), an AppProject with `admin` and `user` roles, and, when the repositories are set, an app-of-apps Application whose values carry the per-cluster settings below. It is skipped unless `secrets.yaml` names a way to reach the ArgoCD cluster. It adds a Rancher cluster-id annotation to the cluster Secret so ArgoCD and Rancher point at the same cluster. During a shared converge it runs after Rancher and takes the id from that hook's result; standalone runs, which never ran rancher, read the same id off the downstream cluster's own `cattle-cluster-agent`, so both paths resolve the same identity. See [Plugins](../concepts/plugins.md#argocd) for integration details.
 
 ## cluster.yaml
 
