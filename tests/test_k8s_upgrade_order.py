@@ -44,9 +44,36 @@ def test_fresh_cluster_uses_target(monkeypatch):
     assert converge._config_kubernetes_version(CFG, Path("kc"), up=False) == "v1.36.4"
 
 
-def test_unknown_running_version_falls_back_to_target(monkeypatch):
+def test_unknown_running_version_aborts_instead_of_falling_back_to_target(monkeypatch):
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "")
-    assert converge._config_kubernetes_version(CFG, Path("kc"), up=True) == "v1.36.4"
+    with pytest.raises(ReconcileError, match="could not determine the running"):
+        converge._config_kubernetes_version(CFG, Path("kc"), up=True)
+
+
+def test_plan_with_a_missing_kubeconfig_keeps_the_target(monkeypatch, tmp_path):
+    """`plan` (dry-run) on a recovered machine has no kubeconfig on disk, so the
+    running version cannot be read; it must keep the target and complete rather
+    than abort the whole plan (mirrors `_upgrade`'s dry-run guard)."""
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    # an empty read is exactly what kubectl returns against a missing kubeconfig
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "")
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    kubeconfig = tmp_path / "kubeconfig"  # absent, never written in dry-run
+    assert converge._config_kubernetes_version(CFG, kubeconfig, up=True) == "v1.36.4"
+
+
+def test_version_read_is_retried_before_aborting(monkeypatch, capsys):
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    reads: list[str] = ["", "", "v1.34.4"]
+
+    def fake_version(*_a):
+        return reads.pop(0)
+
+    monkeypatch.setattr(converge.kubectl, "server_version", fake_version)
+    assert converge._config_kubernetes_version(CFG, Path("kc"), up=True) == "v1.34.4"
+    out = capsys.readouterr().out
+    assert "retrying" in out
 
 
 def test_downgrade_is_refused(monkeypatch):
@@ -437,6 +464,63 @@ def test_converge_scales_up_nodes_at_the_upgraded_version(
     assert backend.applied.get(existing) == f"config/{existing}"
 
 
+def test_converge_aborts_when_reachable_cluster_version_cannot_be_read(
+    make_config, monkeypatch, tmp_path
+):
+    """A reachable cluster whose kubernetes version read fails must abort before
+    any config mutation -- never fall back to the target version.
+
+    The machine config carries kubelet/control-plane images; baking the target
+    into it and pushing it through `_apply_existing_configs` would skip every
+    minor in between. With the cluster answering `cluster_up` (reachable) but
+    `server_version` returning empty on every retry, `_config_kubernetes_version`
+    raises before `build_configs`/`_apply_existing_configs` run, so no target
+    version reaches the backend."""
+    cfg = make_config({
+        "controlplane": {"count": 2, "flavor": "f", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
+        "kubernetes": {"version": "v1.36.4"},  # target that skips minors from v1.34
+    })
+    backend = _ScaleUpAfterUpgradeBackend(
+        InfrastructureInventory(
+            machines={
+                "testcluster-controlplane-01": InfrastructureMachine(
+                    "testcluster-controlplane-01"
+                )
+            }
+        )
+    )
+    state = _ExistingSecretsState(tmp_path)
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+
+    monkeypatch.setattr(machineconfig, "build_configs",
+                        lambda *a, **k: pytest.fail("must not build configs"))
+    monkeypatch.setattr(converge, "_apply_configs",
+                        lambda *a, **k: pytest.fail("must not apply configs"))
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    # reachable cluster that never answers the version read
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "")
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(
+        converge, "load_secrets", lambda _root: SimpleNamespace(tailscale_auth_key=None)
+    )
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    with pytest.raises(ReconcileError, match="could not determine the running"):
+        converge.converge(tmp_path)
+
+    assert not backend.applied  # no config reached the provider
+
+
 def test_converge_recovers_a_missing_kubeconfig_and_keeps_upgrade_before_scale_up(
     make_config, monkeypatch, tmp_path
 ):
@@ -641,7 +725,9 @@ def test_converge_plan_recovers_without_stubbing_phase_functions(
     # so keep those probes from shelling out
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
-    # a missing kubeconfig reports an empty/unknown server version, like real kubectl
+    # dry-run recovery prognoses the cluster UP with no kubeconfig on disk, so
+    # the running version read is empty -- exactly what kubectl returns against
+    # a missing file. The plan must complete rather than abort.
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "")
     monkeypatch.setattr(converge, "dry_run", lambda: True)
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)

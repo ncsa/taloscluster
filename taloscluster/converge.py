@@ -864,8 +864,13 @@ def _config_kubernetes_version(cfg: Config, kubeconfig: Path, up: bool) -> str:
     want = cfg.kubernetes_version
     if not up:
         return want
-    cur = kubectl.server_version(kubeconfig)
-    if not cur or cur == want:
+    cur = _running_kubernetes_version(kubeconfig)
+    if cur is None:
+        # dry-run plan on a recovered machine: the running version is unknown
+        # because no kubeconfig is on disk, but a real run recovers it and steps
+        # the minors -- keep the target so the plan completes (see `_upgrade`).
+        return want
+    if cur == want:
         return want
     if versions.is_older(want, cur):
         raise ReconcileError(
@@ -874,6 +879,40 @@ def _config_kubernetes_version(cfg: Config, kubeconfig: Path, up: bool) -> str:
         )
     info(f"machine configs keep kubernetes {cur}; upgrade-k8s moves the cluster to {want}")
     return cur
+
+
+def _running_kubernetes_version(kubeconfig: Path) -> str | None:
+    """The running cluster's kubernetes version, retrying a transient read.
+
+    A reachable cluster answering an empty `kubectl version` is a strong sign of
+    a transient probe failure, not that the version is unknown for good --
+    reading it as the target version would push target kubelet/control-plane
+    images through `_apply_existing_configs` and skip the minor-by-minor
+    upgrade. Retry the read and, if it still cannot be established, abort
+    before any config mutation. The one exception is a dry-run plan on a
+    recovered management machine, which prognoses the cluster up without
+    writing a kubeconfig: there is nothing to read, so return None and let
+    `_config_kubernetes_version` keep the target instead of aborting the plan
+    (mirrors `_upgrade`'s guard).
+    """
+    if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
+        # plan prognosed the recovered cluster as up but wrote no kubeconfig;
+        # the running version cannot be read, and a real run recovers it and
+        # steps the minors -- nothing for a dry run to mutate
+        info("kubernetes version unknown (missing kubeconfig); skipped in plan")
+        return None
+    for attempt in range(1, 4):
+        cur = kubectl.server_version(kubeconfig)
+        if cur:
+            return cur
+        if attempt < 3:
+            info(f"kubernetes version read failed (attempt {attempt}/3); retrying...")
+            time.sleep(2)
+    raise ReconcileError(
+        "could not determine the running cluster's kubernetes version while "
+        "the kube-api is up; refusing to generate machine configs against an "
+        "unknown version. Retry converge or investigate the cluster health."
+    )
 
 
 def _new_node_configs(
