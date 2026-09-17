@@ -25,6 +25,7 @@ def test_matches_uses_kubectl_diff(monkeypatch, tmp_path, returncode, matches):
     target = ApplyTarget(context="argocd")
 
     assert kube.matches(target, tmp_path, "kind: Secret\n") is matches
+    assert seen["args"][0] == kube.kubectl.BIN
     assert seen["args"][-3:] == ["diff", "-f", "-"]
     assert seen["input"] == "kind: Secret\n"
 

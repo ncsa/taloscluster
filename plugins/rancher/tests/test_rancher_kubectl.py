@@ -52,7 +52,7 @@ def test_kubectl_helper_turns_a_timeout_into_rancher_error(wire):
     seen = wire(raise_timeout=True)
     with pytest.raises(RancherError, match="timed out.*investigate"):
         reconcile._kubectl(Path("/root"), "get", "ns", "cattle-system")
-    assert seen["args"][:1] == ["kubectl"]
+    assert seen["args"][:1] == [kubectl.BIN]
 
 
 def test_kubectl_helper_still_returns_none_on_a_negative_answer(wire):

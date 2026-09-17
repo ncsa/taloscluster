@@ -70,7 +70,7 @@ def _kubectl(root: Path, *args: str) -> str | None:
     """
     try:
         proc = kubectl._run(
-            ["kubectl", "--kubeconfig", str(root / "kubeconfig"), *args],
+            [kubectl.BIN, "--kubeconfig", str(root / "kubeconfig"), *args],
             capture=True, check=False,
         )
     except subprocess.TimeoutExpired as e:
@@ -226,7 +226,7 @@ def install_agent(root: Path, client: Client, cluster, agent_installed: bool = F
     action("installing cattle-cluster-agent into the cluster via kubectl")
     try:
         kubectl._run(
-            ["kubectl", "--kubeconfig", str(root / "kubeconfig"), "apply", "-f", "-"],
+            [kubectl.BIN, "--kubeconfig", str(root / "kubeconfig"), "apply", "-f", "-"],
             input=command, capture=True, check=True, timeout=kubectl.MANIFEST_TIMEOUT,
         )
     except subprocess.CalledProcessError as e:

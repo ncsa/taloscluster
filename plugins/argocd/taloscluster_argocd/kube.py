@@ -25,7 +25,7 @@ def _timed_out(command: str) -> str:
 
 
 def _base_args(target: ApplyTarget, root: Path) -> list[str]:
-    args = ["kubectl"]
+    args = [kubectl.BIN]
     if target.kubeconfig:
         kc = (root / target.kubeconfig).resolve()
         args += ["--kubeconfig", str(kc)]
@@ -41,7 +41,7 @@ def _downstream_args(root: Path) -> list[str]:
     this cluster (for example the Cinder cloud.conf Secret in the ``cinder-csi``
     namespace), so a provider credential never has to pass through ArgoCD.
     """
-    return ["kubectl", "--kubeconfig", str((root / "kubeconfig").resolve())]
+    return [kubectl.BIN, "--kubeconfig", str((root / "kubeconfig").resolve())]
 
 
 def exists(target: ApplyTarget, root: Path, manifest: str) -> bool:
