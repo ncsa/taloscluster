@@ -24,9 +24,33 @@ The permission preflight reports missing privileges with their ACL paths. Compar
 
 Use `taloscluster plan --reboot`, then `taloscluster converge --reboot`, to review and apply the needed VM restarts. A reboot inside the guest, including a Talos upgrade, does not replace the Proxmox VM process that holds pending CPU and memory settings. Disk growth needs a reboot for Talos to extend its partition; the grow is listed as pending on every run until a `--reboot` converge restarts the node. See [Changing a Proxmox cluster](providers/proxmox.md#changing-a-proxmox-cluster-after-it-exists).
 
+## Duplicate Proxmox VM names abort converge or destroy
+
+The provider inventory keys Proxmox machines by VM name, so two VMIDs sharing a name that involves a cluster-managed machine are ambiguous and refused before any change:
+
+```
+duplicate Proxmox VM names among cluster-managed machines: mycluster-worker-01; the inventory keys machines by name, so rename the VMs so every managed name is unique
+```
+
+Diagnostics: both `converge` and `destroy` refuse up front, before mutating anything. Only a collision involving a cluster-managed machine aborts; same-named VMs where neither belongs to this cluster are left alone.
+
+Recovery: rename the VMs so every cluster-managed name is unique, then re-run `taloscluster converge` or `taloscluster destroy`. See [Proxmox](providers/proxmox.md).
+
 ## Managed SDN nodes have no egress or transfers stall
 
 Check FRR, IP forwarding, BGP and VXLAN firewall rules, the exit nodes’ routed uplinks, and VXLAN offload settings against the [managed SDN prerequisites](providers/proxmox.md#managed-evpn-sdn). An available zone alone does not establish that BGP is connected. Resolve other administrators’ pending SDN changes before retrying a run that refuses to apply them.
+
+## Destroy refuses while shared SDN controller changes are pending
+
+Teardown never deletes the shared SDN controller, but a pending `deleted` or `changed` state on it would be committed by teardown’s cluster-wide SDN apply and affect other clusters. Destroy (and `plan`) refuse before deleting any VM or the resource pool:
+
+```
+refusing to commit pending SDN state on the shared controller controller-01 (changed); teardown never deletes the controller and its staged edits are cluster-wide, so apply or revert them first
+```
+
+Diagnostics: destroy aborts before any VM or the pool is deleted; nothing is mutated. `plan` reports the same refusal instead of showing a teardown it would refuse to perform.
+
+Recovery: clear the pending state on the shared controller — apply or revert the staged SDN change — then re-run `taloscluster plan` and `taloscluster destroy`. See [Managed SDN](providers/proxmox.md#managed-evpn-sdn).
 
 ## `check` exits with status 1
 
@@ -39,6 +63,18 @@ A check that could not verify everything is reported as incomplete rather than c
 Diagnostics: `taloscluster check -o yaml` shows which upstream fields are empty and which node versions are `(unknown)`; the `incomplete_reasons` line names the exact gap. 
 
 Recovery: restore what was missing and re-run `check` until it exits `0`. If the factory or `dl.k8s.io` was unreachable, retry once your network can reach them. If a node's version is unknown, confirm the node is up and reachable on port 50000 and that the management network is in the [`security`](configuration/security.md) allowlist, then re-run. If a configured machine is missing from both discovery sources, converge it (or scale the pool down in `cluster.yaml` if the node was removed on purpose) and re-run. If the cluster answered nothing, investigate why the API is unreachable (see [A node cannot be reached](#a-node-cannot-be-reached)) rather than assuming it is current. See [`check`](commands.md#check).
+
+## Converge refuses to run against a cluster whose Kubernetes version it cannot read
+
+To generate or apply machine configs, converge must know the running cluster's Kubernetes version, because configs are baked at the running version so an upgrade steps through every minor. When the kube-api is up but will not answer a version query (empty `kubectl version`) after retries, converge aborts before any config mutation:
+
+```
+could not determine the running cluster's kubernetes version while the kube-api is up; refusing to generate machine configs against an unknown version. Retry converge or investigate the cluster health.
+```
+
+Diagnostics: converge stops before applying any machine config, and no node is changed. The kube-api answers `kubectl get nodes` (via the VIP or a control plane) but `kubectl version` returns nothing.
+
+Recovery: re-run `taloscluster plan` and `taloscluster converge` once the version query works again; if the API stays non-responsive, investigate why it is unreachable (see [A node cannot be reached](#a-node-cannot-be-reached)) rather than converge past an unknown version.
 
 ## Missing Talos secrets
 
@@ -74,6 +110,20 @@ Diagnostics: `taloscluster check` names cordoned nodes with a `SchedulingDisable
 
 Recovery: re-run `taloscluster converge`. It lifts stale cordons on its own (or run `kubectl --kubeconfig kubeconfig uncordon NODE` by hand), and it picks the safe reconciliation from wherever the run stopped: it waits a half-done control-plane operation out rather than progress past something that could cost quorum. Investigate with `taloscluster status` first, and re-run converge once the affected node is back. See [Day 2: operate](concepts/lifecycle.md#day-2-operate) and [Backup and recovery](backup.md#recovery-interrupted-bootstrap).
 
+## Converge refuses to remove a control plane that is still an etcd member
+
+Scaling a control plane down resets each one gracefully. If the graceful reset fails, or the node's address is known but the node is wiped or powered off, converge refuses to delete the machine unless the surviving control plane's authoritative `talosctl etcd members` list confirms the node left etcd:
+
+```
+reset of control plane mycluster-controlplane-03 failed (address 192.0.2.30 is known but the node did not reset) and it is still an etcd member (id 1a2b3c4d on control plane mycluster-controlplane-01); refusing to delete a member that could cost quorum
+```
+
+An addressless control plane that is merely `NotReady` in Kubernetes is not proof it left etcd either; converge refuses unless the live member list shows it gone.
+
+Diagnostics: the node's VM is left in place; nothing is reset or deleted. This protects quorum — removing a half-reset control plane would let a later removal lose quorum. Talos discovery service data (`talosctl get members`) is not proof of etcd membership and can drop addressless entries, so absence from discovery never licenses a deletion.
+
+Recovery: confirm whether the node actually left etcd. If it is still a member, restore the node or make converge's reset succeed, then re-run `taloscluster converge`; if it is genuinely gone (the surviving control plane's `etcd members` list no longer names it), the rerun deletes the VM on its own. See [Day 2: operate](concepts/lifecycle.md#day-2-operate).
+
 ## An installed plugin does not run
 
 Use `taloscluster plugin list` to distinguish a missing package from an unconfigured plugin. Install the needed extra in the same tool environment as taloscluster, then fill in the plugin's configuration and secrets. Running `init` again adds missing plugin sections while preserving existing configuration. See [Plugins](concepts/plugins.md).
@@ -90,3 +140,27 @@ Diagnostics separate the failure classes:
 - **Runtime registration failure** — a `converge` or `destroy` hook error after the cluster was changed (`plugin <name> failed during <hook>: <detail>`). The cluster side of the run is intact; re-run just that plugin with `taloscluster plugin NAME converge`.
 
 Recovery depends on the class above: install, configure, or fix the section, then re-run the affected plugin or the whole converge. A broken plugin is visible in `check`/`status` reports rather than silent, so an `ok: false` names the plugin to fix. See [How plugins run](concepts/plugins.md#how-plugins-run).
+
+## Rancher cannot resolve a configured member
+
+If a configured admin or user cannot be resolved (renamed or removed in Rancher), converge refuses rather than delete that user's existing binding as stale:
+
+```
+could not resolve Rancher principals for configured member(s): 'alice' (tier admins); refusing to change memberships so an existing binding is not removed as stale
+```
+
+Diagnostics: membership reconciliation stops before any binding changes. `check` reports the unresolved usernames and exits `1` instead of `ok`.
+
+Recovery: fix the netid in `cluster.yaml` so every configured member resolves in Rancher, then re-run `taloscluster converge` or `taloscluster plugin rancher converge`. See [Rancher](concepts/plugins.md).
+
+## Rancher cluster id no longer matches the downstream agent
+
+When the downstream `cattle-cluster-agent` id matches no Rancher cluster bearing the configured name (the cluster was renamed or deleted in the Rancher UI while the agent still carries the old id), converge refuses the registration instead of creating a fresh import cluster that can never match the agent. `check`/`status` report the mismatch with `id_match: false` and an `id_mismatch_reason` naming both ids:
+
+```
+Rancher cluster 'mycluster' (c-new) does not match the downstream cluster (c-old); converge refuses this registration
+```
+
+Diagnostics: `taloscluster check -o yaml` shows `cluster_id`, `downstream_id`, `id_match: false`, and the `id_mismatch_reason`. Members bound to that cluster stay `pending`, and a later `destroy` refuses the same way.
+
+Recovery: make the downstream agent and the Rancher cluster agree — either fix the configured cluster name in `cluster.yaml` or re-point the agent at the intended Rancher cluster — so `cluster_id` and `downstream_id` match, then re-run `taloscluster converge`. See [Rancher](concepts/plugins.md).

@@ -37,7 +37,7 @@ kubernetes:
 
 ## Scale
 
-Change a pool's `count` and converge. Raising it adds nodes with the next free numbers. Lowering it drains and removes the highest-numbered nodes, after a confirmation. Add a new pool, for example a GPU pool with its own [extensions](configuration/pools.md#extensions), the same way. Extensions activate on install or upgrade; review the [extension limitations](configuration/general.md#talosextensions) and verify what the nodes actually run.
+Change a pool's `count` and converge. Raising it adds nodes with the next free numbers. Lowering it drains and removes the highest-numbered nodes, after a confirmation. Scale-down also removes owned machines that never joined Kubernetes (a worker whose first boot failed) or whose VM delete failed on an earlier run, so an owned VM is never stranded — re-run `taloscluster converge` to pick them up. Add a new pool, for example a GPU pool with its own [extensions](configuration/pools.md#extensions), the same way. Extensions activate on install or upgrade; review the [extension limitations](configuration/general.md#talosextensions) and verify what the nodes actually run.
 
 ## Resize or change access
 

@@ -20,6 +20,15 @@ QUICKSTART = Path(__file__).resolve().parent.parent / "docs" / "quickstart.md"
 CONVERGE = Path(__file__).resolve().parent.parent / "taloscluster" / "converge.py"
 PLUGINS = Path(__file__).resolve().parent.parent / "taloscluster" / "plugins.py"
 KUBECTL = Path(__file__).resolve().parent.parent / "taloscluster" / "k8s" / "kubectl.py"
+PROXMOX_BACKEND = Path(__file__).resolve().parent.parent / "taloscluster" / "proxmox" / "backend.py"
+RANCHER_RECONCILE = (
+    Path(__file__).resolve().parent.parent
+    / "plugins"
+    / "rancher"
+    / "taloscluster_rancher"
+    / "reconcile.py"
+)
+LIFECYCLE = Path(__file__).resolve().parent.parent / "docs" / "concepts" / "lifecycle.md"
 
 
 def test_guide_exists_and_is_linked_from_nav():
@@ -35,6 +44,16 @@ def test_guide_covers_all_five_topics():
     assert "check` is incomplete" in text
     assert "plugin fails" in text
     assert "interrupted upgrade" in text
+
+
+def test_guide_covers_the_new_fail_closed_topics():
+    text = GUIDE.read_text().lower()
+    assert "still an etcd member" in text
+    assert "kubernetes version it cannot read" in text
+    assert "duplicate proxmox vm names" in text
+    assert "cannot resolve a configured member" in text
+    assert "cluster id no longer matches the downstream agent" in text
+    assert "shared sdn controller changes are pending" in text
 
 
 def test_missing_secrets_quotes_the_converge_refusal():
@@ -168,3 +187,74 @@ def test_quickstart_has_no_prequisite_plugin_workaround():
     text = QUICKSTART.read_text().lower()
     assert "leave plugins inactive" not in text
     assert "deferred until converge bootstraps the cluster" in text
+
+
+def test_etcd_member_control_plane_refusal_quotes_converge():
+    # A control-plane removal whose reset failed (known address, dead/wiped
+    # node) or whose address is gone refuses to delete a member that could cost
+    # quorum; the guide must quote the same language as the converge refusal.
+    assert "still an etcd member" in GUIDE.read_text()
+    assert "could cost quorum" in GUIDE.read_text()
+    assert "delete a member that could cost quorum" in CONVERGE.read_text()
+
+
+def test_unknown_k8s_version_refusal_matches_converge():
+    # A reachable kube-api that will not answer a version query aborts config
+    # mutation; the guide quotes the exact refusal.
+    message = "could not determine the running cluster's kubernetes version"
+    assert message in GUIDE.read_text()
+    assert message in CONVERGE.read_text()
+    assert "refusing to generate machine configs against an unknown version" in GUIDE.read_text()
+
+
+def test_duplicate_proxmox_vm_names_matches_backend():
+    # Two VMIDs sharing a name that involves a cluster-managed machine are
+    # refused before any mutation; the guide quotes the inventory refusal.
+    # The backend composes the message across source lines; pin the shared
+    # fragment that lands on a single line in both the guide and the code.
+    assert "duplicate Proxmox VM names among" in GUIDE.read_text()
+    assert "duplicate Proxmox VM names among" in PROXMOX_BACKEND.read_text()
+
+
+def test_sdn_shared_controller_pending_matches_backend():
+    # SDN teardown refuses a pending `deleted`/`changed` on the shared controller
+    # before any VM or pool is deleted; the guide quotes the refusal.
+    text = GUIDE.read_text()
+    backend = PROXMOX_BACKEND.read_text()
+    assert "refusing to commit pending SDN state on the shared controller" in text
+    assert "refusing to commit pending SDN state on the shared" in backend
+    assert "apply or revert them first" in text
+    assert "apply or revert them first" in backend
+
+
+def test_rancher_unresolved_member_matches_reconcile():
+    # A configured member that cannot be resolved refuses the reconciliation
+    # rather than removing an existing binding as stale; the guide quotes it.
+    text = GUIDE.read_text()
+    reconcile = RANCHER_RECONCILE.read_text()
+    assert "could not resolve Rancher principals for configured member(s)" in text
+    assert "could not resolve Rancher principals for configured member(s)" in reconcile
+    assert "not removed as stale" in text
+    assert "removed as stale" in reconcile
+
+
+def test_rancher_id_mismatch_matches_reconcile():
+    # A downstream cattle-cluster-agent whose id matches no Rancher cluster is
+    # refused by converge and reported with id_match/id_mismatch_reason by
+    # check/status; the guide names id_mismatch_reason and quotes the reason.
+    text = GUIDE.read_text()
+    assert "id_mismatch_reason" in text
+    assert "id_match: false" in text
+    assert "does not match the downstream cluster" in text
+    assert "does not match the downstream cluster" in RANCHER_RECONCILE.read_text()
+
+
+def test_scale_down_removes_unjoined_or_failed_delete_machines():
+    # Scale-down reconciles from the owned provider inventory, so owned machines
+    # that never joined Kubernetes or whose VM delete failed on an earlier run
+    # are removed on the next converge. Usage must say so, matching lifecycle.
+    usage = USAGE.read_text()
+    lifecycle = LIFECYCLE.read_text()
+    assert "never joined kubernetes" in usage.lower()
+    assert "vm delete failed" in usage.lower()
+    assert "never registered" in lifecycle and "delete failed" in lifecycle
