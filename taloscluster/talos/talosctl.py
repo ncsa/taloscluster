@@ -275,31 +275,42 @@ def _parse_etcd_members(out: str, endpoint: str) -> dict[str, str]:
     columns and then one row per member, each cell space-padded by tabwriter to
     the column's width. The header's `ID` and `HOSTNAME` columns locate the two
     we need, so the parse survives versions that add a leading `NODE` column
-    (v1.13+) or omit it (earlier). No cell contains whitespace, so splitting a
-    line on runs of whitespace recovers the cells; a member whose row does not
-    reach the hostname column cannot be positively identified and raises.
+    (v1.13+) or omit it (earlier). tabwriter pads every row to the same column
+    shape as the header, so each cell's byte offset is located once from the
+    header line and each data row is sliced at those offsets -- recovering cells
+    verbatim instead of splitting on whitespace. A member whose hostname cell is
+    empty (an etcd member that was added but never started, which also reports no
+    client URLs) is therefore seen as missing rather than silently shifted under
+    its peer URL, and cannot be positively identified and raises.
     """
-    header: list[str] | None = None
-    rows: list[list[str]] = []
+    header_line: str | None = None
+    data_lines: list[str] = []
     for line in out.splitlines():
         cells = line.split()
         if not cells:
             continue
         if "HOSTNAME" in cells:
-            header = cells
+            header_line = line
             continue
-        rows.append(cells)
+        data_lines.append(line)
+    header = header_line.split() if header_line is not None else None
     if header is None or "ID" not in header or "HOSTNAME" not in header:
         raise ReconcileError(
             f"could not parse etcd membership from control plane {endpoint}: "
             "unrecognised `etcd members` output; refusing to delete an addressless "
             "control plane without authoritative proof it left etcd"
         )
+    assert header_line is not None
+    starts = [m.start() for m in re.finditer(r"\S+", header_line)]
     id_idx = header.index("ID")
     host_idx = header.index("HOSTNAME")
     found: dict[str, str] = {}
-    for cells in rows:
-        if len(cells) <= host_idx or not cells[host_idx]:
+    for line in data_lines:
+        cells = []
+        for i, start in enumerate(starts):
+            end = starts[i + 1] if i + 1 < len(starts) else len(line)
+            cells.append(line[start:end].strip())
+        if not cells[host_idx]:
             raise ReconcileError(
                 f"etcd membership from control plane {endpoint} contains a member "
                 "without a hostname; cannot positively confirm any addressless "

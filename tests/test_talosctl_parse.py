@@ -311,10 +311,27 @@ def test_etcd_members_raises_on_unparseable_output(monkeypatch):
 
 
 def test_etcd_members_raises_when_a_member_has_no_hostname(monkeypatch):
-    """A member whose row is too short to carry a hostname cannot be identified:
-    it could be the addressless node under scrutiny, so the helper must fail
-    closed."""
-    stream = "NODE  ID  HOSTNAME  PEER URLS  CLIENT URLS  LEARNER\n10.0.0.1  8eb052c9\n"
+    """A member whose row stops before the hostname column (its hostname cell
+    slices to empty at its offset) cannot be identified: it could be the
+    addressless node under scrutiny, so the helper must fail closed."""
+    stream = "NODE  ID  HOSTNAME  PEER URLS  CLIENT URLS  LEARNER\n10.0.0.1\n"
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (0, stream, ""))
+    with pytest.raises(ReconcileError, match="member without a hostname"):
+        talosctl.etcd_members(Path("talosconfig"), "cp-01")
+
+
+def test_etcd_members_raises_when_a_member_has_an_empty_hostname_cell(monkeypatch):
+    """An etcd member added but never started reports an empty hostname (and no
+    client URLs); tabwriter still pads its row to the header's column widths, so
+    the hostname cell stays empty at its own offset. A whitespace split would
+    elide that empty cell and shift the peer URL into the hostname slot, silently
+    "confirming" the addressless control plane left etcd; slicing the row at the
+    header's column offsets keeps the cell visibly empty and fails closed."""
+    stream = (
+        "NODE      ID        HOSTNAME            PEER URLS                 CLIENT URLS               LEARNER\n"  # noqa: E501
+        "10.0.0.1  9eb1f01d  controlplane-01     https://192.0.2.1:2380    https://192.0.2.1:2379    false\n"  # noqa: E501
+        "10.0.0.1  1a2b3c4d                      https://192.0.2.3:2380                              true\n"  # noqa: E501
+    )
     monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (0, stream, ""))
     with pytest.raises(ReconcileError, match="member without a hostname"):
         talosctl.etcd_members(Path("talosconfig"), "cp-01")
