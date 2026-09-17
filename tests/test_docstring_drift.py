@@ -11,6 +11,10 @@ These tests keep the surviving wording honest so the drift does not resurface:
   removed README section.
 - Module docstrings no longer lean on the removed terraform / shell / yq tooling
   or an OpenStack-only connection.
+- The configuration overview does not self-contradict the refused-key behavior
+  or imply the plugin validate hook only runs against a plugin's own section
+  when its hooks run, and it covers nested fixed-schema blocks such as
+  `proxmox.network` in the same breath as the top-level sections.
 """
 
 from __future__ import annotations
@@ -89,3 +93,26 @@ def test_package_docstring_describes_both_providers():
     text = (TALOSCLUSTER / "__init__.py").read_text()
     assert "OpenStack or Proxmox" in text
     assert "See README-python.md" not in text
+
+
+def test_configuration_overview_refused_keys_are_not_self_contradicting():
+    text = (DOCS / "configuration.md").read_text()
+    # The old "no longer loads and is silently dropped" joined the new behavior
+    # ("no longer loads") to the old one ("is silently dropped") in one clause.
+    assert "no longer loads and is silently dropped" not in text
+    assert "no longer load quietly" in text
+    # The old behavior ("used to silently fall back") stays, clearly marked.
+    assert "used to silently fall back" in text
+    # Nested fixed-schema blocks are covered here, not just on the Proxmox page.
+    assert "proxmox.network" in text
+
+
+def test_configuration_overview_plugin_validate_runs_everywhere_up_front():
+    text = (DOCS / "configuration.md").read_text()
+    # The plugin `validate` hook runs in converge's validate phase for every
+    # installed plugin before any mutation, not only against an active plugin's
+    # own section when its hooks run.
+    assert "each plugin validates the keys inside its own section when its hooks run" not in text
+    assert "validate" in text
+    assert "before any mutation" in text
+    assert "every installed plugin" in text
