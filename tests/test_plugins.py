@@ -333,6 +333,91 @@ def test_converge_then_check_delivers_the_same_identity(monkeypatch, tmp_path):
     assert seen["check"] == "c-abc12"
 
 
+def test_real_rancher_and_argocd_check_hand_off_the_downstream_id_on_a_mismatch(
+    monkeypatch, tmp_path
+):
+    """The real plugins through collect: when the Rancher cluster does not match
+    the downstream agent's id, rancher's check publishes the DOWNSTREAM id and
+    argocd's check stamps that same id onto its cluster Secret.
+
+    A mismatch (downstream `c-abc12` vs a different Rancher cluster `c-OTHER`)
+    is the hard case: rancher must refuse the registration as ours yet still hand
+    argocd the id converge would refuse to attach to, so the Secret annotation
+    never drifts against the cluster that actually exists downstream."""
+    import taloscluster_argocd as _argocd_pkg
+    import taloscluster_rancher as _rancher_pkg
+    from taloscluster_argocd import kube as argocd_kube
+    from taloscluster_rancher import reconcile as rancher_reconcile
+    from taloscluster_rancher.client import RancherCluster
+
+    (tmp_path / "cluster.yaml").write_text(
+        "name: testcluster\n"
+        "rancher:\n  admins: []\n  users: []\n"
+        "argocd:\n  admins: []\n  users: []\n"
+    )
+    (tmp_path / "secrets.yaml").write_text(
+        "rancher:\n  url: https://200.1.2.3/\n  token: token-x:y\n"
+        "argocd:\n  kubeconfig: ./kubeconfig\n"
+    )
+    (tmp_path / "kubeconfig").write_text(
+        "apiVersion: v1\n"
+        "kind: Config\n"
+        "clusters:\n"
+        "- name: testcluster\n"
+        "  cluster:\n"
+        "    server: https://192.0.2.10:6443\n"
+        "    certificate-authority-data: ca==\n"
+        "users:\n"
+        "- name: admin\n"
+        "  user:\n"
+        "    client-certificate-data: cert==\n"
+        "    client-key-data: key==\n"
+        "contexts: []\n"
+    )
+
+    class _FakeClient:
+        def find_cluster(self, name):
+            return RancherCluster(id="c-OTHER", name=name, state="active")
+
+        def list_member_bindings(self, cluster_id):
+            return []
+
+        def resolve_principal(self, netid):
+            return None
+
+    # the downstream cluster's own agent id, which mismatches Rancher's c-OTHER
+    monkeypatch.setattr(rancher_reconcile, "downstream_rancher_id", lambda root: "c-abc12")
+    monkeypatch.setattr(rancher_reconcile, "_client", lambda secrets: _FakeClient())
+
+    rendered = {}
+
+    def _matches(target, root, manifest):
+        rendered.setdefault("secret", []).append(manifest)
+        return True
+
+    monkeypatch.setattr(argocd_kube, "matches", _matches)
+
+    install(
+        monkeypatch,
+        FakeEntryPoint("rancher", _rancher_pkg),
+        FakeEntryPoint("argocd", _argocd_pkg),
+    )
+
+    ctx = Context(root=tmp_path, cfg=None, results={})
+    report = plugins.collect(plugins.discover(), "check", ctx)
+
+    # rancher refuses the registration but publishes the downstream id it would
+    # attach to, so argocd renders that (not the unrelated c-OTHER)
+    assert report["rancher"]["ok"] is False
+    assert report["rancher"]["id_match"] is False
+    assert report["rancher"]["cluster_id"] == "c-abc12"
+    assert report["rancher"]["downstream_id"] == "c-abc12"
+    # the hand-off survives into argocd's report and its manifests
+    assert ctx.results["rancher"]["cluster_id"] == "c-abc12"
+    assert report["argocd"]["ok"] is True
+    assert "rancher.cattle.io/cluster-id: c-abc12" in rendered["secret"][0]
+
+
 def test_collect_records_a_failure_rather_than_dropping_it(monkeypatch, ctx):
     def boom(ctx):
         raise RuntimeError("unreachable")
