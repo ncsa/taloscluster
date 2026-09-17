@@ -15,16 +15,38 @@ from ..output import action, dry_run
 
 BIN = "kubectl"
 
+# Wall-clock bound on every kubectl subprocess (seconds). A kube-api that
+# accepts TCP but never answers (e.g. a VIP owned by a half-dead control plane)
+# would otherwise block kubectl indefinitely; this raises subprocess.TimeoutExpired
+# so a caller can tell a hung request apart from an abrupt negative answer.
+RUN_TIMEOUT = 30.0
+# kubectl --request-timeout for the probe; the only call that carries the flag.
+PROBE_TIMEOUT = "10s"
+# drain can legitimately take up to its own --timeout=5m; give it headroom.
+DRAIN_TIMEOUT = 5 * 60 + 30.0
+
 
 def _kc(kubeconfig: Path) -> list[str]:
     return [BIN, "--kubeconfig", str(kubeconfig)]
 
 
-def _run(args: list[str], capture: bool = False, check: bool = True) -> subprocess.CompletedProcess:
+def _run(
+    args: list[str],
+    capture: bool = False,
+    check: bool = True,
+    timeout: float = RUN_TIMEOUT,
+    input: str | None = None,
+) -> subprocess.CompletedProcess:
+    """Run a kubectl subprocess, bounded by `timeout` so a half-dead kube-api that
+    accepts TCP but never answers raises subprocess.TimeoutExpired instead of
+    hanging converge. `capture` pipes stdout/stderr for parsing; `input` feeds a
+    manifest over stdin (used for `apply/diff/delete -f -`)."""
     return subprocess.run(
         args,
         check=check,
+        timeout=timeout,
         text=True,
+        input=input,
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.PIPE if capture else None,
     )
@@ -34,7 +56,7 @@ def cluster_up(kubeconfig: Path) -> bool:
     """True iff kubeconfig is present and the api answers (heir of cluster_up())."""
     if not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
         return False
-    proc = _run(_kc(kubeconfig) + ["get", "nodes", "--request-timeout=10s"],
+    proc = _run(_kc(kubeconfig) + ["get", "nodes", f"--request-timeout={PROBE_TIMEOUT}"],
                 capture=True, check=False)
     return proc.returncode == 0
 
@@ -85,7 +107,7 @@ def drain(kubeconfig: Path, name: str) -> None:
     _run(_kc(kubeconfig) + [
         "drain", name,
         "--ignore-daemonsets", "--delete-emptydir-data", "--timeout=5m",
-    ])
+    ], timeout=DRAIN_TIMEOUT)
 
 
 def delete_node(kubeconfig: Path, name: str) -> None:

@@ -76,6 +76,18 @@ Diagnostics: converge stops before applying any machine config, and no node is c
 
 Recovery: re-run `taloscluster plan` and `taloscluster converge` once the version query works again; if the API stays non-responsive, investigate why it is unreachable (see [A node cannot be reached](#a-node-cannot-be-reached)) rather than converge past an unknown version.
 
+## A kubectl request to the kube-api times out
+
+Every `kubectl` call converge makes is bounded at 30 seconds of wall-clock time (`drain` gets 330s for its own five-minute `--timeout`), so a kube-api that accepts TCP connections but never answers — for example a floating VIP owned by a control plane that is half-dead — cannot hang the run. When a call exceeds the bound, converge fails with a clear error instead of waiting forever:
+
+```
+ERROR: a kubectl request to the kube-api timed out (the api accepted TCP but never answered); investigate the cluster and retry.
+```
+
+Diagnostics: the API is reachable at the network layer (the connection is accepted) but not answering kubectl. The operator-facing run exits 1; a version read is retried three times before it aborts, so a transient stall recovers on its own.
+
+Recovery: find which control plane owns the floating VIP and confirm it is healthy; if it is half-dead, recover the node (see [A node cannot be reached](#a-node-cannot-be-reached)) or fail over control of the VIP to a healthy control plane, then re-run `taloscluster converge`. The timeout is a safety valve: it does not fix an unhealthy API, only stops the run from hanging on one.
+
 ## Converge aborts a Kubernetes upgrade when no control-plane address resolves
 
 After a machine-config apply, converge stabilizes the cluster and re-reads the running Kubernetes version to step the upgrade. If the version stays unreadable and no control-plane address resolves, converge can no longer step upgrades and aborts instead of silently skipping:

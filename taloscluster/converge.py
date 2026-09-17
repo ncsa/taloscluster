@@ -905,7 +905,10 @@ def _running_kubernetes_version(kubeconfig: Path) -> str | None:
         info("kubernetes version unknown (missing kubeconfig); skipped in plan")
         return None
     for attempt in range(1, 4):
-        cur = kubectl.server_version(kubeconfig)
+        try:
+            cur = kubectl.server_version(kubeconfig)
+        except subprocess.TimeoutExpired:
+            cur = ""  # a timed-out read is still a failed read; retry then abort
         if cur:
             return cur
         if attempt < 3:

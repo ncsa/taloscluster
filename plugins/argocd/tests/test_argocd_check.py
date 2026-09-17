@@ -20,7 +20,7 @@ def test_matches_uses_kubectl_diff(monkeypatch, tmp_path, returncode, matches):
         seen["input"] = kwargs["input"]
         return SimpleNamespace(returncode=returncode, stderr="")
 
-    monkeypatch.setattr(kube.subprocess, "run", run)
+    monkeypatch.setattr(kube.kubectl, "_run", run)
     target = ApplyTarget(context="argocd")
 
     assert kube.matches(target, tmp_path, "kind: Secret\n") is matches
@@ -30,8 +30,8 @@ def test_matches_uses_kubectl_diff(monkeypatch, tmp_path, returncode, matches):
 
 def test_matches_reports_kubectl_errors(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        kube.subprocess,
-        "run",
+        kube.kubectl,
+        "_run",
         lambda *a, **k: SimpleNamespace(returncode=2, stderr="forbidden"),
     )
     with pytest.raises(ApplyError, match="forbidden"):

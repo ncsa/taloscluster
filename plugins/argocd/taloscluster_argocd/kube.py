@@ -6,10 +6,9 @@ secrets.yaml. The kubeconfig path is resolved against the cluster directory.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
-from taloscluster.k8s import rancher
+from taloscluster.k8s import kubectl, rancher
 from taloscluster.output import action, dry_run, info
 
 from .config import ApplyTarget
@@ -66,7 +65,7 @@ def downstream_rancher_id(root: Path) -> str | None:
 
 def _run_get(base: list[str], manifest: str) -> bool:
     args = base + ["get", "-f", "-"]
-    proc = subprocess.run(args, input=manifest, text=True, capture_output=True)
+    proc = kubectl._run(args, input=manifest, capture=True, check=False)
     return proc.returncode == 0
 
 
@@ -86,7 +85,7 @@ def matches_downstream(root: Path, manifest: str) -> bool:
 
 def _run_diff(base: list[str], manifest: str) -> bool:
     args = base + ["diff", "-f", "-"]
-    proc = subprocess.run(args, input=manifest, text=True, capture_output=True)
+    proc = kubectl._run(args, input=manifest, capture=True, check=False)
     if proc.returncode == 0:
         return True
     if proc.returncode == 1:
@@ -120,8 +119,8 @@ def _run_apply(base: list[str], manifest: str, message: str, label: str) -> None
         action(f"kubectl apply {label} " + " ".join(args[1:]))
         return
     action(message)
-    proc = subprocess.run(
-        args, input=manifest, text=True, capture_output=True,
+    proc = kubectl._run(
+        args, input=manifest, capture=True, check=False,
     )
     if proc.returncode != 0:
         raise ApplyError(f"kubectl apply failed: {proc.stderr.strip()}")
@@ -179,7 +178,7 @@ def _delete(args: list[str], manifest: str, message: str, label: str) -> None:
         action(f"kubectl delete {label} " + " ".join(args[1:]))
         return
     action(message)
-    proc = subprocess.run(args, input=manifest, text=True, capture_output=True)
+    proc = kubectl._run(args, input=manifest, capture=True, check=False)
     if proc.returncode != 0:
         raise ApplyError(f"kubectl delete failed: {proc.stderr.strip()}")
     for line in proc.stdout.splitlines():

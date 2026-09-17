@@ -8,6 +8,7 @@ running version and lets the upgrade phase step minors.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -543,6 +544,50 @@ def test_converge_aborts_when_reachable_cluster_version_cannot_be_read(
         converge.converge(tmp_path)
 
     assert not backend.applied  # no config reached the provider
+
+
+def test_config_kubernetes_version_retries_a_read_that_times_out(
+    monkeypatch, tmp_path
+):
+    """A kubectl version read that times out is a failed read, not a hang: it is
+    retried like an empty answer, and once the api answers the running version is
+    used instead of aborting."""
+    calls = {"n": 0}
+
+    def flaky(*_a):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise subprocess.TimeoutExpired("kubectl", converge.kubectl.RUN_TIMEOUT)
+        return "v1.35.8"
+
+    monkeypatch.setattr(converge.kubectl, "server_version", flaky)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge, "info", lambda *_a, **_k: None)
+    cfg = SimpleNamespace(name="test", kubernetes_version="v1.36.4")
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+
+    assert converge._config_kubernetes_version(cfg, kubeconfig, up=True) == "v1.35.8"
+    assert calls["n"] == 3
+
+
+def test_config_kubernetes_version_aborts_after_repeated_timeouts(
+    monkeypatch, tmp_path
+):
+    """Every retry timing out still aborts with a ReconcileError rather than a
+    raw traceback or a silent fallback to the target version."""
+    def always_timeout(*_a):
+        raise subprocess.TimeoutExpired("kubectl", 30)
+
+    monkeypatch.setattr(converge.kubectl, "server_version", always_timeout)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge, "info", lambda *_a, **_k: None)
+    cfg = SimpleNamespace(name="test", kubernetes_version="v1.36.4")
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+
+    with pytest.raises(ReconcileError, match="could not determine the running"):
+        converge._config_kubernetes_version(cfg, kubeconfig, up=True)
 
 
 def test_converge_recovers_a_missing_kubeconfig_and_keeps_upgrade_before_scale_up(

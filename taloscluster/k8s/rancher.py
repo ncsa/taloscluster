@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import base64
 import json
-import subprocess
 from pathlib import Path
 
 from . import kubectl
@@ -25,10 +24,10 @@ def cluster_id(kubeconfig: Path) -> str | None:
     installed (no agent): an absent cattle-system, a failed kubectl call, or an
     unparseable response all mean there is no Rancher identity to act on.
     """
-    proc = subprocess.run(
+    proc = kubectl._run(
         [kubectl.BIN, "--kubeconfig", str(kubeconfig),
          "get", "secret", "-n", "cattle-system", "-o", "json"],
-        capture_output=True, text=True,
+        capture=True, check=False,
     )
     if proc.returncode != 0:
         return None

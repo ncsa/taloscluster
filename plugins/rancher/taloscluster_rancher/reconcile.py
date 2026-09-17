@@ -33,7 +33,7 @@ from pathlib import Path
 
 from taloscluster.context import Context
 from taloscluster.errors import ConfigError
-from taloscluster.k8s import rancher
+from taloscluster.k8s import kubectl, rancher
 from taloscluster.output import action, dry_run, info, log, warn
 
 from .client import Client
@@ -56,9 +56,9 @@ def _client(secrets: Secrets) -> Client:
 
 def _kubectl(root: Path, *args: str) -> str | None:
     """Run kubectl against the cluster's kubeconfig; None on failure."""
-    proc = subprocess.run(
+    proc = kubectl._run(
         ["kubectl", "--kubeconfig", str(root / "kubeconfig"), *args],
-        capture_output=True, text=True,
+        capture=True, check=False,
     )
     if proc.returncode != 0:
         return None
@@ -207,9 +207,9 @@ def install_agent(root: Path, client: Client, cluster, agent_installed: bool = F
         return
     action("installing cattle-cluster-agent into the cluster via kubectl")
     try:
-        subprocess.run(
+        kubectl._run(
             ["kubectl", "--kubeconfig", str(root / "kubeconfig"), "apply", "-f", "-"],
-            input=command, text=True, check=True, capture_output=True,
+            input=command, capture=True, check=True,
         )
     except subprocess.CalledProcessError as e:
         raise RancherError(f"kubectl apply of import manifest failed: {e.stderr.strip()}") from e

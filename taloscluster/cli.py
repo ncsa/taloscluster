@@ -423,6 +423,10 @@ def main(argv: list[str] | None = None) -> int:
     except subprocess.CalledProcessError as e:
         print(f"ERROR: command failed: {' '.join(str(a) for a in e.cmd)}", file=sys.stderr)
         return 1
+    except subprocess.TimeoutExpired:
+        print("ERROR: a kubectl request to the kube-api timed out (the api accepted "
+              "TCP but never answered); investigate the cluster and retry.", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
         return 130
