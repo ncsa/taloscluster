@@ -76,6 +76,18 @@ Diagnostics: converge stops before applying any machine config, and no node is c
 
 Recovery: re-run `taloscluster plan` and `taloscluster converge` once the version query works again; if the API stays non-responsive, investigate why it is unreachable (see [A node cannot be reached](#a-node-cannot-be-reached)) rather than converge past an unknown version.
 
+## Converge aborts a Kubernetes upgrade when no control-plane address resolves
+
+After a machine-config apply, converge stabilizes the cluster and re-reads the running Kubernetes version to step the upgrade. If the version stays unreadable and no control-plane address resolves, converge can no longer step upgrades and aborts instead of silently skipping:
+
+```
+kubernetes server version unavailable and no control-plane address resolved; cannot perform a kubernetes upgrade
+```
+
+Diagnostics: a previous run of a converge that aborted this way exited 0 and silently skipped the upgrade; now it fails, so a skipped upgrade no longer hides behind a healthy exit status. Converge aborts before any `upgrade-k8s` step runs, but machine-config applies and Talos reconciliation earlier in the same run may already have changed or rebooted nodes.
+
+Recovery: investigate why the cluster's control planes are unreachable (see [A node cannot be reached](#a-node-cannot-be-reached)) and ensure a control-plane address resolves, then re-run `taloscluster converge`.
+
 ## Missing Talos secrets
 
 `talossecrets.yaml` holds the cluster CA, the etcd CA, and the join tokens that bind the machines into one cluster. It is the cluster's identity and cannot be regenerated. When a `converge` finds the file missing while the cluster's machines already exist, it refuses to create a fresh identity and fails hard:

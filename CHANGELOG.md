@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- Refuse a Kubernetes upgrade whose running version stays unreadable when no control-plane address resolves, instead of silently skipping the upgrade, and drop the unreachable direct-upgrade fallback.
 - Retag the Proxmox return-path pod's kube-proxy image to a running cluster's version at config build time, so an upgrade no longer has every node pull the target image before the minor-by-minor step.
 - Fold the Proxmox SDN shared-controller pending scan into one guard shared by converge and teardown, so the two rules cannot drift.
 - Move the downstream Rancher cluster-id parsing into a shared `taloscluster.k8s.rancher` core helper, so the argocd and rancher plugins resolve the `cattle-cluster-agent` id through one implementation instead of two copies that could drift.

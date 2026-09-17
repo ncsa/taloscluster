@@ -971,13 +971,6 @@ def _k8s_upgrade_path(cur: str, want: str) -> list[str]:
         parts = v.lstrip("v").split(".")
         return int(parts[0]), int(parts[1])
 
-    if not cur:
-        # kube-api was unreachable when we asked (it briefly is, right after a
-        # machine-config apply). Stepping cannot be computed without a starting
-        # point, so hand talosctl the target and let ITS check reject an illegal
-        # skip -- better a clear "unsupported upgrade path" than a guess.
-        warn("current kubernetes version unknown; attempting a direct upgrade")
-        return [want]
     cur_major, cur_minor = minor_of(cur)
     want_major, want_minor = minor_of(want)
     path: list[str] = []
@@ -1582,6 +1575,14 @@ def _upgrade(
         for node in kubectl.unschedulable(kubeconfig):
             if node in machines:
                 _uncordon_stale(kubeconfig, node)
+    if not cur:
+        # only reachable when no control-plane address resolved above: the
+        # stabilization path already rejects an empty version, and stepping
+        # needs a valid starting point, so fail rather than silently skip
+        raise ReconcileError(
+            "kubernetes server version unavailable and no control-plane address "
+            "resolved; cannot perform a kubernetes upgrade"
+        )
 
 
 # ---------------------------------------------------------------------------

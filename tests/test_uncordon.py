@@ -453,6 +453,25 @@ def test_upgrade_aborts_when_kube_api_stabilizes_but_version_is_still_unknown(mo
         )
 
 
+def test_upgrade_aborts_when_version_unresolved_and_no_control_plane_resolves(monkeypatch):
+    """An unresolved version must fail even when no control-plane address
+    resolves (which would otherwise let the retry fall through silently)."""
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8")
+    machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    # no member addresses and no inventory/network address -> cp1_address stays ""
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: None)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+
+    with pytest.raises(ReconcileError, match="no control-plane address resolved"):
+        converge._upgrade(
+            cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
+            {("base",): "sch-123"}, Path("talosconfig"), Path("kubeconfig"),
+        )
+
+
 def test_upgrade_noop_for_unprefixed_kubernetes_pin(make_config, monkeypatch):
     """An unprefixed `kubernetes.version: 1.31.0` pin must be canonicalized to
     `v1.31.0` so converge does not schedule an upgrade against a server already

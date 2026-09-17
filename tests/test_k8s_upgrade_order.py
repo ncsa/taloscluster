@@ -800,6 +800,8 @@ def test_upgrade_path_falls_back_to_minor_point_zero_when_lookup_fails(monkeypat
     assert "using 1.35.0" in capsys.readouterr().err
 
 
-def test_upgrade_path_unknown_current_is_a_direct_attempt(monkeypatch, capsys):
-    assert converge._k8s_upgrade_path("", "v1.36.2") == ["v1.36.2"]
-    assert "direct upgrade" in capsys.readouterr().err
+def test_upgrade_path_rejects_an_unknown_current():
+    # `_upgrade` raises before calling when the running version is empty, so
+    # the direct-upgrade path was removed; an empty `cur` is a programming error
+    with pytest.raises(ValueError, match="invalid literal"):
+        converge._k8s_upgrade_path("", "v1.36.2")
