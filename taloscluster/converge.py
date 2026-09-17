@@ -921,6 +921,29 @@ def _running_kubernetes_version(kubeconfig: Path) -> str | None:
     )
 
 
+def _upgrade_read_version(kubeconfig: Path) -> str:
+    """The running kubernetes version, retrying a timed-out or empty read.
+
+    The upgrade runs after the version was already established once, so a hung
+    `kubectl version` (`TimeoutExpired`, a kube-api that accepted TCP but never
+    answered) is treated as a failed read and retried like `_running_kubernetes_version`
+    does rather than aborting the whole converge with the generic timeout message.
+    Returns "" when the read still fails, leaving the caller's stabilization and
+    error handling to decide the verdict.
+    """
+    for attempt in range(1, 4):
+        try:
+            cur = kubectl.server_version(kubeconfig)
+        except subprocess.TimeoutExpired:
+            cur = ""  # a timed-out read is still a failed read; retry then give up
+        if cur:
+            return cur
+        if attempt < 3:
+            info(f"kubernetes version read failed (attempt {attempt}/3); retrying...")
+            time.sleep(2)
+    return ""
+
+
 def _new_node_configs(
     cfg: Config,
     secrets: Secrets,
@@ -1526,7 +1549,7 @@ def _upgrade(
     discovered = talosctl.member_addresses(
         talosconfig, endpoint, exclude_vip=_cluster_vips(cfg, refs, kubeconfig)
     )
-    cur = kubectl.server_version(kubeconfig)
+    cur = _upgrade_read_version(kubeconfig)
     if not cur:
         if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
             # plan prognosed the recovered cluster as up but wrote no kubeconfig,
@@ -1539,7 +1562,7 @@ def _upgrade(
         # and an unknown current version costs us the minor-stepping path
         info("kube-api did not answer; retrying version check in 30s")
         time.sleep(30)
-        cur = kubectl.server_version(kubeconfig)
+        cur = _upgrade_read_version(kubeconfig)
     if cur == cfg.kubernetes_version:
         info(f"{cur}, ok")
         return
@@ -1555,7 +1578,11 @@ def _upgrade(
     if cp1_address:
         consecutive = 0
         for _ in range(12):
-            if kubectl.cluster_up(kubeconfig):
+            try:
+                up = kubectl.cluster_up(kubeconfig)
+            except subprocess.TimeoutExpired:
+                up = False  # a hung probe still means not-up; keep retrying
+            if up:
                 consecutive += 1
                 if consecutive >= 2:
                     break
@@ -1565,7 +1592,7 @@ def _upgrade(
             time.sleep(10)
         else:
             raise ReconcileError("kube-api did not stabilize before k8s upgrade")
-        cur = kubectl.server_version(kubeconfig)
+        cur = _upgrade_read_version(kubeconfig)
         if not cur:
             raise ReconcileError("kube-api stabilized but server version is still unavailable")
         for step in _k8s_upgrade_path(cur, cfg.kubernetes_version):

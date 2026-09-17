@@ -453,6 +453,75 @@ def test_upgrade_aborts_when_kube_api_stabilizes_but_version_is_still_unknown(mo
         )
 
 
+def test_upgrade_retries_a_timed_out_version_read(monkeypatch):
+    """A hung `kubectl version` (`TimeoutExpired`) in the upgrade phase is a
+    failed read that gets retried, as `_running_kubernetes_version` does, not a
+    reason to abort the whole converge with the generic timeout message."""
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8")
+    machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses", lambda *_a, **_kw: {"cp-01": "192.0.2.1"}
+    )
+    calls = {"n": 0}
+
+    def flaky_version(*_a):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise subprocess.TimeoutExpired("kubectl", 30)
+        return "v1.34.2"
+
+    monkeypatch.setattr(converge.kubectl, "server_version", flaky_version)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda *_a: True)
+    monkeypatch.setattr(converge.kubectl, "unschedulable", lambda _kc: [])
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge, "_k8s_upgrade_path", lambda *_a, **_kw: ["v1.35.8"])
+    monkeypatch.setattr(converge.talosctl, "upgrade_k8s", lambda *_a, **_kw: None)
+
+    converge._upgrade(
+        cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
+        {("base",): "sch-123"}, Path("talosconfig"), Path("kubeconfig"),
+    )
+    assert calls["n"] >= 2  # the timed-out first read was retried
+
+
+def test_upgrade_stabilization_retries_a_timed_out_probe(monkeypatch):
+    """A hung `cluster_up` probe in the stabilization loop counts as not-up and
+    is retried, so one timeout does not abort the upgrade."""
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8")
+    machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses", lambda *_a, **_kw: {"cp-01": "192.0.2.1"}
+    )
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.34.2")
+    monkeypatch.setattr(converge.kubectl, "unschedulable", lambda _kc: [])
+    probes = {"n": 0}
+
+    def flaky_up(*_a):
+        probes["n"] += 1
+        if probes["n"] == 1:
+            raise subprocess.TimeoutExpired("kubectl", 30)
+        return True
+
+    monkeypatch.setattr(converge.kubectl, "cluster_up", flaky_up)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge, "_k8s_upgrade_path", lambda *_a, **_kw: ["v1.35.8"])
+    upgraded = {"n": 0}
+    monkeypatch.setattr(
+        converge.talosctl, "upgrade_k8s",
+        lambda *_a, **_kw: upgraded.__setitem__("n", upgraded["n"] + 1),
+    )
+
+    converge._upgrade(
+        cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
+        {("base",): "sch-123"}, Path("talosconfig"), Path("kubeconfig"),
+    )
+    assert upgraded["n"] == 1
+
+
 def test_upgrade_aborts_when_version_unresolved_and_no_control_plane_resolves(monkeypatch):
     """An unresolved version must fail even when no control-plane address
     resolves (which would otherwise let the retry fall through silently)."""
