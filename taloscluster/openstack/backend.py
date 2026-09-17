@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import functools
 import shlex
+
+from keystoneauth1.exceptions import ClientException, RetriableConnectionFailure
 
 from openstack import exceptions as os_exceptions
 
@@ -27,6 +30,34 @@ _STATUS_KINDS = (
 )
 
 
+def _reconcile_errors(fn):
+    """Translate an uncaught provider SDK error into a clean ReconcileError.
+
+    Mirrors the Proxmox client, which turns every API error into a
+    ``ReconcileError`` at the client boundary, so ``cli.main`` prints a
+    one-line ``ERROR:`` and exits 1 instead of leaking a traceback. Both the
+    ``openstack.exceptions.SDKException`` tree (a Neutron 409, a
+    ``wait_for_delete`` timeout, a quota error) and the keystoneauth1 tree
+    (a rejected application credential raising ``Unauthorized``, an
+    unreachable or timing-out cloud raising ``ConnectFailure``/``ConnectTimeout``)
+    are wrapped here. Nested helpers that catch a specific SDK case themselves
+    (``tags.create_tagged`` catches only ``BadRequestException`` for the legacy
+    tags-in-post fallback and re-raises everything else) are unaffected: only an
+    error that escapes the whole backend method is wrapped here.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (
+            os_exceptions.SDKException,
+            ClientException,
+            RetriableConnectionFailure,
+        ) as exc:
+            raise ReconcileError(f"OpenStack API error: {exc}") from exc
+    return wrapper
+
+
 class OpenStackBackend:
     name = "openstack"
     installer_platform = talos.INSTALLER_PLATFORM
@@ -45,6 +76,7 @@ class OpenStackBackend:
     ) -> TalosContribution:
         return talos.contribution(machine, self.cfg, endpoint)
 
+    @_reconcile_errors
     def load_inventory(self) -> InfrastructureInventory:
         raw = Inventory(self.conn, self.cfg.name).load()
         machines: dict[str, InfrastructureMachine] = {}
@@ -74,9 +106,11 @@ class OpenStackBackend:
             raise RuntimeError("OpenStack inventory is unavailable")
         return raw
 
+    @_reconcile_errors
     def ensure_boot_artifact(self) -> str:
         return image.ensure_image(self.conn, self.cfg)
 
+    @_reconcile_errors
     def reconcile_network(
         self,
         machines: dict[str, Machine],
@@ -124,6 +158,7 @@ class OpenStackBackend:
             metallb=(_fixed_ip(ingress_port),) if ingress_port else (),
         )
 
+    @_reconcile_errors
     def validate_machines(
         self,
         machines: dict[str, Machine],
@@ -136,6 +171,7 @@ class OpenStackBackend:
             self._raw(inventory),
         )
 
+    @_reconcile_errors
     def reconcile_machines(
         self,
         machines: dict[str, Machine],
@@ -153,6 +189,7 @@ class OpenStackBackend:
         )
         return set()
 
+    @_reconcile_errors
     def delete_machine(self, name: str, inventory: InfrastructureInventory) -> None:
         compute.delete_node(self.conn, name, self._raw(inventory))
 
@@ -162,10 +199,12 @@ class OpenStackBackend:
     def finalize_machines(self, inventory: InfrastructureInventory) -> None:
         return None
 
+    @_reconcile_errors
     def default_node_tags(self) -> dict[str, str]:
         project = project_name(self.conn)
         return {"ncsa/project": project} if project else {}
 
+    @_reconcile_errors
     def provider_status(self) -> dict[str, str]:
         return {
             "url": self.cfg.provider.url,
@@ -187,9 +226,11 @@ class OpenStackBackend:
             f"{shlex.quote(self.secrets.openstack_credential_secret)}"
         )
 
+    @_reconcile_errors
     def download_image(self) -> str:
         return image.ensure_image(self.conn, self.cfg)
 
+    @_reconcile_errors
     def remove_image(self, assume_yes: bool = False) -> None:
         name = naming.image_name(self.cfg.talos_version)
         img = self.conn.image.find_image(name)
@@ -224,6 +265,7 @@ class OpenStackBackend:
             f"{len(raw.all('ips'))} floating ips, network + router + security group"
         )
 
+    @_reconcile_errors
     def destroy_resources(self, inventory: InfrastructureInventory) -> None:
         raw = self._raw(inventory)
         for host in list(raw.all("servers")):

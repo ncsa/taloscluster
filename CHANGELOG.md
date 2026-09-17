@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- Wrap OpenStack provider errors (the `openstack.exceptions.SDKException` tree — a Neutron 409, a `wait_for_delete` timeout, a quota error — and keystoneauth1 requests such as a rejected credential or an unreachable/timing-out cloud) into a `ReconcileError` at the backend boundary, so `cli.main` prints one `ERROR:` line and exits 1 instead of leaking a traceback.
 - Reclaim a leaked OpenStack port during the network phase when its machine is no longer desired and never got a server, instead of leaving it orphaned until `destroy` (a live server's port is still left for scale-down, which drains first).
 - Drop the dead no-op override rewrites in the `proxmox.network` nested-key rejection test.
 - Refuse a Kubernetes upgrade whose running version stays unreadable when no control-plane address resolves, instead of silently skipping the upgrade, and drop the unreachable direct-upgrade fallback.
