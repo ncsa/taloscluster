@@ -476,6 +476,29 @@ class ProxmoxBackend:
                 + "); only `new` can be a leftover of an interrupted create"
             )
 
+    def _refuse_shared_controller_destructive_pending(
+        self, state: dict[str, list[dict[str, Any]]]
+    ) -> None:
+        """Teardown never deletes the shared controller, so its staged edits are unsafe.
+
+        Unlike the foreign-pending scan, which exempts our controller by name,
+        a pending `deleted` or `changed` on that shared object would be
+        committed by teardown's cluster-wide `PUT cluster/sdn`, disrupting
+        other clusters that use it. Only `new` can be a resumable leftover.
+        """
+        assert self.sdn is not None
+        for item in state["controllers"]:
+            if str(item.get("controller")) != self.sdn.controller:
+                continue
+            pending = str(item.get("state") or "")
+            if pending and pending != "new":
+                raise ReconcileError(
+                    f"refusing to commit pending SDN state on the shared "
+                    f"controller {self.sdn.controller} ({pending}); teardown "
+                    "never deletes the controller and its staged edits are "
+                    "cluster-wide, so apply or revert them first"
+                )
+
     def _refuse_vni_collisions(self, state: dict[str, list[dict[str, Any]]]) -> None:
         assert self.sdn is not None
         ours = {str(self.sdn.vrf_tag), str(self.sdn.tag)}
@@ -1650,6 +1673,7 @@ class ProxmoxBackend:
         if zone is None and vnet is None:
             return
         self._refuse_foreign_pending(state)
+        self._refuse_shared_controller_destructive_pending(state)
         changes = 0
         vnet_removed = vnet is None
         if vnet is not None:

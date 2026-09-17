@@ -1684,6 +1684,25 @@ def test_sdn_destroy_removes_subnet_vnet_zone_and_applies_once(sdn_cfg):
     )
 
 
+@pytest.mark.parametrize("state", ["deleted", "changed"])
+def test_sdn_destroy_refuses_pending_destructive_state_on_shared_controller(
+    sdn_cfg, state
+):
+    backend_probe = _backend(sdn_cfg, FakeClient({}))
+    data = _sdn_converged_data(backend_probe.sdn)
+    data["cluster/sdn/controllers"][0]["state"] = state
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="never deletes the controller"):
+        backend.destroy_resources(inventory)
+
+    assert not any(
+        path.startswith("cluster/sdn") for _method, path, _payload in client.mutations
+    )
+
+
 def test_sdn_destroy_keeps_zone_holding_a_foreign_vnet(sdn_cfg, capsys):
     data = _sdn_converged_data(_backend(sdn_cfg, FakeClient({})).sdn)
     data["cluster/sdn/vnets"].append(
