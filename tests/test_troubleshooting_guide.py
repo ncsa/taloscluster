@@ -28,6 +28,13 @@ RANCHER_RECONCILE = (
     / "taloscluster_rancher"
     / "reconcile.py"
 )
+RANCHER_CLIENT = (
+    Path(__file__).resolve().parent.parent
+    / "plugins"
+    / "rancher"
+    / "taloscluster_rancher"
+    / "client.py"
+)
 LIFECYCLE = Path(__file__).resolve().parent.parent / "docs" / "concepts" / "lifecycle.md"
 
 
@@ -254,6 +261,22 @@ def test_rancher_id_mismatch_matches_reconcile():
     assert "id_match: false" in text
     assert "does not match the downstream cluster" in text
     assert "does not match the downstream cluster" in RANCHER_RECONCILE.read_text()
+
+
+def test_rancher_orphan_refusal_matches_its_own_source():
+    # The guide's orphaned-agent section quotes the refusal converge actually
+    # prints -- the ensure_cluster refusal in client.py -- and presents the
+    # `orphan_reason`, which is a *different* string, as what check/status
+    # report. Each fragment is pinned to its own source so the guide cannot
+    # attribute one code path's message to the other again.
+    guide = GUIDE.read_text()
+    client = RANCHER_CLIENT.read_text()
+    reconcile = RANCHER_RECONCILE.read_text()
+    assert "uninstall the orphaned agent, then re-run" in guide
+    assert "uninstall the orphaned agent, then re-run" in client
+    assert "re-register the cluster under a fresh id" in guide
+    assert "re-register the cluster under a fresh id" in reconcile
+    assert "orphan_reason:" in guide
 
 
 def test_scale_down_removes_unjoined_or_failed_delete_machines():

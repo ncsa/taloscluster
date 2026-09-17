@@ -151,10 +151,12 @@ def test_converge_refuses_when_downstream_id_matches_no_rancher_cluster(tmp_path
 
         def ensure_cluster(self, name, downstream_id=None):
             # mirrors the real client: a registered agent that matches no named
-            # cluster is refused before create_import_cluster is reached
+            # cluster is refused before create_import_cluster is reached, and the
+            # message directs the operator to destroy to uninstall the orphaned agent
             raise RancherError(
                 f"the downstream cluster's cattle-cluster-agent is registered as "
-                f"{downstream_id}, but no Rancher cluster named {name!r} exists"
+                f"{downstream_id}, but no Rancher cluster named {name!r} exists; "
+                "run 'taloscluster destroy' to uninstall the orphaned agent, then re-run"
             )
 
     client = ConvergeClient()

@@ -179,12 +179,34 @@ Recovery: fix the netid in `cluster.yaml` so every configured member resolves in
 
 ## Rancher cluster id no longer matches the downstream agent
 
-When the downstream `cattle-cluster-agent` id matches no Rancher cluster bearing the configured name (the cluster was renamed or deleted in the Rancher UI while the agent still carries the old id), converge refuses the registration instead of creating a fresh import cluster that can never match the agent. `check`/`status` report the mismatch with `id_match: false` and an `id_mismatch_reason` naming both ids:
+Two distinct ways the downstream `cattle-cluster-agent` id can disagree with the configured Rancher cluster, with different diagnostics and recovery:
+
+### An unrelated Rancher cluster shares the configured name
+
+A Rancher cluster bearing the configured name still exists, but its id differs from the downstream agent's id — the name was reused for an unrelated cluster (or the agent was re-pointed). Converge refuses to attach to the foreign cluster, and `check`/`status` report the mismatch with `id_match: false` and an `id_mismatch_reason` naming both ids:
 
 ```
 Rancher cluster 'mycluster' (c-new) does not match the downstream cluster (c-old); converge refuses this registration
 ```
 
-Diagnostics: `taloscluster check -o yaml` shows `cluster_id`, `downstream_id`, `id_match: false`, and the `id_mismatch_reason`. Members bound to that cluster stay `pending`, and a later `destroy` refuses the same way.
+Diagnostics: `taloscluster check -o yaml` shows `cluster_id`, `downstream_id`, `id_match: false`, and the `id_mismatch_reason`. Members bound to that cluster stay `pending`, and a later `destroy` refuses the cluster the same way rather than deleting a cluster whose id does not match the agent.
 
-Recovery: make the downstream agent and the Rancher cluster agree — either fix the configured cluster name in `cluster.yaml` or re-point the agent at the intended Rancher cluster — until `check`/`status` report `id_match: true`, then re-run `taloscluster converge`. See [Rancher](concepts/plugins.md).
+Recovery: make the downstream agent and the Rancher cluster agree — either fix the configured cluster name in `cluster.yaml` to match the agent, or remove the unrelated cluster and then clear the now-orphaned agent with the `destroy` step in the next subsection — until `check`/`status` report `id_match: true`, then re-run `taloscluster converge`. See [Rancher](concepts/plugins.md).
+
+### The downstream agent is orphaned (matches no Rancher cluster)
+
+No Rancher cluster bears the configured name at all, but the downstream agent is still registered under its old id — the registration was renamed or deleted in the Rancher UI. Converge refuses to create a fresh import cluster that can never match the stranded agent:
+
+```
+the downstream cluster's cattle-cluster-agent is registered as c-old, but no Rancher cluster named 'mycluster' exists; the registration was probably renamed or deleted in the Rancher UI and is now orphaned, so importing a fresh cluster would strand the agent under the old id. The stale Rancher cluster is already gone, so deleting the registration will not clear the downstream agent -- run 'taloscluster destroy' to uninstall the orphaned agent, then re-run
+```
+
+Diagnostics: the message above is what converge prints. `taloscluster check -o yaml` shows `registered: false`, `downstream_id`, `id_match: false` and an `orphan_reason` (where otherwise it would report only `registered: false` with no ids), and `taloscluster status` shows the same `downstream_id` and `orphan_reason`:
+
+```
+orphan_reason: the downstream cluster's cattle-cluster-agent is registered as c-old, but no Rancher cluster named 'mycluster' exists; the registration was renamed or deleted in the Rancher UI and is now orphaned, so converge refuses to re-register the cluster under a fresh id. The stale Rancher cluster is already gone, so deleting the registration will not clear the downstream agent -- run 'taloscluster destroy' to uninstall it, then re-run
+```
+
+Because the stale Rancher cluster is already gone, deleting the registration in the Rancher UI does nothing to the downstream agent, so the old guidance to "delete the stale registration and re-run" deadlocks — converge refuses again because `downstream_rancher_id` still reads `c-old`.
+
+Recovery: run `taloscluster destroy`. With no Rancher cluster bearing the name, destroy recognizes the agent as orphaned and uninstalls it from the downstream cluster (deleting `cattle-system`) instead of printing "not registered; nothing to remove". Then re-run `taloscluster converge` to register the cluster fresh. See [Rancher](concepts/plugins.md).

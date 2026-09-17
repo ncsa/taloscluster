@@ -15,15 +15,22 @@ downstream cluster has no Rancher agent (or a different id), we refuse to attach
 to it and abort — it is an unrelated cluster with the same name. The mirror case
 is refused too: when the downstream agent is registered (a non-None id) but no
 Rancher cluster carries the configured name — the registration was renamed or
-deleted and recreated in the Rancher UI — a fresh import would strand the agent
+deleted in the Rancher UI — a fresh import would strand the agent
 under the old id, so we refuse rather than create an inert cluster that can never
-match the agent. Safe to re-run: an existing cluster matching the downstream agent
+match the agent. That agent is orphaned (its id matches no Rancher cluster), and
+deleting the stale registration in Rancher will not clear it; `destroy` uninstalls
+the orphaned agent from the downstream cluster so a later converge can register
+fresh. Safe to re-run: an existing cluster matching the downstream agent
 id is reused, and member reconciliation is idempotent.
 
 `destroy` deletes the cluster from Rancher and uninstalls the Rancher agent
 from the downstream cluster. Like `converge`, it refuses to touch a Rancher
 cluster whose id does not match the downstream cluster's cattle-cluster-agent,
-so an unrelated cluster bearing the same name is never deleted.
+so an unrelated cluster bearing the same name is never deleted. When the
+downstream agent is orphaned -- its id matches no Rancher cluster bearing the
+configured name (the registration was renamed or deleted in the Rancher UI) --
+`destroy` uninstalls the orphaned agent from the downstream cluster instead of
+claiming there is nothing to remove.
 """
 
 from __future__ import annotations
@@ -255,11 +262,21 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
     client = _client(secrets)
 
     cluster = client.find_cluster(cfg.name)
+    downstream_id = downstream_rancher_id(ctx.root)
     if cluster is None:
+        if downstream_id:
+            info(
+                f"cluster {cfg.name} has no Rancher cluster, but its cattle-cluster-agent "
+                f"is registered ({downstream_id}); removing the orphaned agent from the "
+                "downstream cluster"
+            )
+            log("uninstall the orphaned Rancher agent from the downstream cluster")
+            _remove_agent(ctx.root)
+            info("done")
+            return
         info(f"cluster {cfg.name} not registered in Rancher; nothing to remove")
         return
 
-    downstream_id = downstream_rancher_id(ctx.root)
     if not downstream_id:
         raise RancherError(
             f"Rancher cluster {cfg.name!r} ({cluster.id}) has no cattle-cluster-agent "
@@ -283,6 +300,18 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
 # reporting
 # ---------------------------------------------------------------------------
 
+def _orphan_reason(name: str, downstream_id: str) -> str:
+    """Explain a downstream agent whose id matches no Rancher cluster by name."""
+    return (
+        f"the downstream cluster's cattle-cluster-agent is registered as "
+        f"{downstream_id}, but no Rancher cluster named {name!r} exists; the "
+        "registration was renamed or deleted in the Rancher UI and is now orphaned, "
+        "so converge refuses to re-register the cluster under a fresh id. The stale "
+        "Rancher cluster is already gone, so deleting the registration will not clear "
+        "the downstream agent -- run 'taloscluster destroy' to uninstall it, then re-run"
+    )
+
+
 def _desired_members(client: Client, cfg: Config) -> dict[str, str]:
     """principal id -> role for every member cluster.yaml declares.
 
@@ -301,10 +330,14 @@ def status(ctx: Context) -> dict:
     """What Rancher currently knows about this cluster."""
     cfg, secrets = _load(ctx.root)
     client = _client(secrets)
+    downstream_id = downstream_rancher_id(ctx.root)
     cluster = client.find_cluster(cfg.name)
     if cluster is None:
-        return {"registered": False, "url": secrets.rancher_url}
-    downstream_id = downstream_rancher_id(ctx.root)
+        report = {"registered": False, "url": secrets.rancher_url,
+                  "downstream_id": downstream_id}
+        if downstream_id:
+            report["orphan_reason"] = _orphan_reason(cfg.name, downstream_id)
+        return report
     return {
         "registered": True,
         "url": secrets.rancher_url,
@@ -332,12 +365,21 @@ def check(ctx: Context) -> dict:
     """
     cfg, secrets = _load(ctx.root)
     client = _client(secrets)
+    downstream_id = downstream_rancher_id(ctx.root)
     cluster = client.find_cluster(cfg.name)
     if cluster is None:
+        if downstream_id:
+            return {
+                "ok": False,
+                "registered": False,
+                "downstream_id": downstream_id,
+                "agent_installed": True,
+                "id_match": False,
+                "orphan_reason": _orphan_reason(cfg.name, downstream_id),
+            }
         return {"ok": False, "registered": False,
                 "reason": f"cluster {cfg.name} is not registered in Rancher"}
 
-    downstream_id = downstream_rancher_id(ctx.root)
     agent = downstream_id is not None
     id_match = downstream_id is not None and downstream_id == cluster.id
     desired = {(pid, role) for pid, role in _desired_members(client, cfg).items()}

@@ -209,6 +209,34 @@ def test_check_not_ok_when_unregistered(cluster_dir, wire):
     assert report["registered"] is False
 
 
+def test_check_reports_orphaned_agent_when_no_rancher_cluster(cluster_dir, wire):
+    """A downstream agent whose id matches no Rancher cluster bearing the name is
+    an orphaned registration; check must report the downstream id and an orphan
+    reason instead of a bare `registered: false` with no ids, so the operator
+    sees converge refuses because the agent is stranded, not because there is no
+    registration at all."""
+    wire(FakeClient(cluster=None), downstream_id="c-old")
+    report = _converge.check(Context(root=cluster_dir, cfg=None))
+    assert report["ok"] is False
+    assert report["registered"] is False
+    assert report["downstream_id"] == "c-old"
+    assert report["agent_installed"] is True
+    assert report["id_match"] is False
+    assert "no Rancher cluster named 'testcluster'" in report["orphan_reason"]
+    assert "c-old" in report["orphan_reason"]
+
+
+def test_status_reports_orphaned_agent_when_no_rancher_cluster(cluster_dir, wire):
+    """status reports the downstream id and an orphan reason when the agent is
+    registered but no Rancher cluster bears the configured name."""
+    wire(FakeClient(cluster=None), downstream_id="c-old")
+    report = _converge.status(Context(root=cluster_dir, cfg=None))
+    assert report["registered"] is False
+    assert report["downstream_id"] == "c-old"
+    assert report["orphan_reason"]
+    assert "c-old" in report["orphan_reason"]
+
+
 def test_status_lists_members(cluster_dir, wire):
     wire(FakeClient(bindings=[binding(ALICE, "cluster-owner")], principals=PRINCIPALS))
     report = _converge.status(Context(root=cluster_dir, cfg=None))

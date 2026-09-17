@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- Give the orphaned Rancher registration a recovery path: when the downstream `cattle-cluster-agent` id matches no Rancher cluster bearing the configured name, `check`/`status` report `downstream_id` with an `orphan_reason`, `destroy` uninstalls the orphaned agent from the downstream cluster instead of reporting nothing to remove, the converge refuse message points at `destroy` (which the stale-registration guidance did not), and the troubleshooting guide splits the id-mismatch into the unrelated-cluster and orphaned-agent cases.
 - Add CLI dispatch tests for the `image`, `destroy` and `plugin` commands (the reserved `list` name, validate-before-configured ordering, destroy confirmation, and the check exit code) and for the exception-to-exit-code mapping in `cli.main`, with the handlers stubbed.
 - Encode the base schematic in the OpenStack boot image (and Proxmox boot ISO) identity, so changing the base extension set builds a fresh image under a new name instead of silently reusing a stale one.
 - Sweep the remaining OpenStack-only wording out of provider-neutral code: the `plan`, `check`, `image` and `dashboard` CLI help (including the non-Tailscale dashboard path), the `print_env`/`image`/`destroy` prose, the `ReconcileError` and `Context` docstrings, and the `pyproject.toml` description, and extend the docstring-drift test to CLI help strings and `pyproject.toml`.

@@ -44,33 +44,48 @@ def cluster_dir(tmp_path):
 
 @pytest.fixture
 def wire(monkeypatch, cluster_dir):
-    monkeypatch.setattr(reconcile, "_remove_agent", lambda root: None)
+    removed = []
 
-    def _wire(downstream_id):
-        client = FakeClient()
+    def _wire(downstream_id, cluster=CLUSTER):
+        client = FakeClient(cluster=cluster)
         monkeypatch.setattr(reconcile, "_client", lambda secrets: client)
         monkeypatch.setattr(reconcile, "downstream_rancher_id",
                             lambda root: downstream_id)
-        return client
+        monkeypatch.setattr(reconcile, "_remove_agent",
+                            lambda root: removed.append(root))
+        return client, removed
 
     return _wire
 
 
 def test_destroy_deletes_when_downstream_id_matches(cluster_dir, wire):
-    client = wire(downstream_id="c-abc12")
+    client, removed = wire(downstream_id="c-abc12")
     reconcile.destroy(Context(root=cluster_dir, cfg=None))
     assert client.deleted == "c-abc12"
+    assert removed == [cluster_dir]
 
 
 def test_destroy_refuses_when_downstream_id_mismatches(cluster_dir, wire):
-    client = wire(downstream_id="c-other99")
+    client, removed = wire(downstream_id="c-other99")
     with pytest.raises(RancherError, match="does not match the downstream"):
         reconcile.destroy(Context(root=cluster_dir, cfg=None))
     assert client.deleted is None
+    assert removed == []
 
 
 def test_destroy_refuses_when_no_downstream_agent(cluster_dir, wire):
-    client = wire(downstream_id=None)
+    client, removed = wire(downstream_id=None)
     with pytest.raises(RancherError, match="no cattle-cluster-agent"):
         reconcile.destroy(Context(root=cluster_dir, cfg=None))
     assert client.deleted is None
+    assert removed == []
+
+
+def test_destroy_removes_orphaned_agent_when_no_rancher_cluster(cluster_dir, wire):
+    """An agent whose id matches no Rancher cluster bearing the name is orphaned;
+    destroy must uninstall it from the downstream cluster instead of claiming
+    there is nothing to remove."""
+    client, removed = wire(downstream_id="c-orphan", cluster=None)
+    reconcile.destroy(Context(root=cluster_dir, cfg=None))
+    assert client.deleted is None
+    assert removed == [cluster_dir]

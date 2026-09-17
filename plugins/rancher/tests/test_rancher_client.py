@@ -265,6 +265,15 @@ def test_ensure_cluster_refuses_when_downstream_id_matches_no_named_cluster():
     assert post_hits == []
 
 
+def test_ensure_cluster_orphan_message_directs_to_destroy():
+    """Deleting the stale registration in Rancher will not clear the downstream
+    agent, so the refuse message must tell the operator that `destroy` uninstalls
+    the orphaned agent -- the only exit from the deadlock."""
+    client = _http_client(get=lambda path, **kw: {"data": []})
+    with pytest.raises(RancherError, match="run 'taloscluster destroy'"):
+        client.ensure_cluster("example", downstream_id="c-old")
+
+
 def test_ensure_cluster_refuses_an_existing_cluster_whose_id_differs():
     """An existing Rancher cluster that shares the name but whose id does not
     match the downstream agent is an unrelated cluster; do not attach to it."""

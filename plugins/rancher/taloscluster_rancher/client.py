@@ -140,7 +140,10 @@ class Client:
           - the downstream agent is registered (a non-None `downstream_id`) but
             no Rancher cluster carries the name: refuse, since a fresh import
             cluster could never match the agent's existing id and would strand
-            it — the registration was renamed or deleted in the Rancher UI.
+            it — the registration was renamed or deleted in the Rancher UI and
+            is now orphaned. The stale Rancher cluster is already gone, so
+            deleting the registration will not clear the downstream agent;
+            destroying the cluster uninstalls the orphaned agent instead.
         If no Rancher cluster named `name` exists and the downstream cluster has
         no agent, a new import cluster is created.
         """
@@ -166,10 +169,11 @@ class Client:
             raise RancherError(
                 f"the downstream cluster's cattle-cluster-agent is registered as "
                 f"{downstream_id}, but no Rancher cluster named {name!r} exists; "
-                "the registration was probably renamed or deleted and recreated in "
-                "the Rancher UI, so importing a fresh cluster would strand the "
-                "agent under the old id. Delete the stale registration or rename "
-                "the Rancher cluster back, then re-run"
+                "the registration was probably renamed or deleted in the Rancher UI "
+                "and is now orphaned, so importing a fresh cluster would strand the "
+                "agent under the old id. The stale Rancher cluster is already gone, "
+                "so deleting the registration will not clear the downstream agent -- "
+                "run 'taloscluster destroy' to uninstall the orphaned agent, then re-run"
             )
         if dry_run():
             action(f"create import cluster {name} in Rancher")
