@@ -58,10 +58,12 @@ def cluster_dir(tmp_path):
 def wire(monkeypatch):
     """Point the plugin at a FakeClient and a chosen agent state."""
 
-    def _wire(client, agent_installed=True):
+    def _wire(client, agent_installed=True, downstream_id="c-abc12"):
         monkeypatch.setattr(_converge, "_client", lambda secrets: client)
-        monkeypatch.setattr(_converge, "downstream_rancher_id",
-                            lambda root: "c-abc12" if agent_installed else None)
+        monkeypatch.setattr(
+            _converge, "downstream_rancher_id",
+            lambda root: downstream_id if agent_installed else None,
+        )
 
     return _wire
 
@@ -122,6 +124,40 @@ def test_check_not_ok_without_the_agent(cluster_dir, wire):
     report = _converge.check(Context(root=cluster_dir, cfg=None))
     assert report["ok"] is False
     assert report["agent_installed"] is False
+
+
+def test_check_fails_on_downstream_id_mismatch(cluster_dir, wire):
+    """A downstream agent whose id differs from the Rancher cluster id is the
+    unrelated-registration converge refuses; check must fail even when the
+    memberships otherwise match."""
+    wire(
+        FakeClient(bindings=[binding(ALICE, "cluster-owner", "b-1"),
+                             binding(CAROL, "cluster-member", "b-2"), OWNER],
+                   principals=PRINCIPALS),
+        downstream_id="c-unrelated",
+    )
+    report = _converge.check(Context(root=cluster_dir, cfg=None))
+    assert report["ok"] is False
+    assert report["agent_installed"] is True
+    assert report["id_match"] is False
+    assert report["downstream_id"] == "c-unrelated"
+    assert "c-abc12" in report["id_mismatch_reason"]
+    assert "c-unrelated" in report["id_mismatch_reason"]
+
+
+def test_status_reports_downstream_id_mismatch(cluster_dir, wire):
+    """status exposes both ids and the id_match flag so an unrelated registration
+    bearing the same name is visible instead of being reported as installed."""
+    wire(
+        FakeClient(bindings=[binding(ALICE, "cluster-owner")], principals=PRINCIPALS),
+        downstream_id="c-unrelated",
+    )
+    report = _converge.status(Context(root=cluster_dir, cfg=None))
+    assert report["registered"] is True
+    assert report["cluster_id"] == "c-abc12"
+    assert report["downstream_id"] == "c-unrelated"
+    assert report["agent_installed"] is True
+    assert report["id_match"] is False
 
 
 def test_check_not_ok_when_unregistered(cluster_dir, wire):

@@ -314,11 +314,14 @@ def status(ctx: Context) -> dict:
     cluster = client.find_cluster(cfg.name)
     if cluster is None:
         return {"registered": False, "url": secrets.rancher_url}
+    downstream_id = downstream_rancher_id(ctx.root)
     return {
         "registered": True,
         "url": secrets.rancher_url,
         "cluster_id": cluster.id,
-        "agent_installed": downstream_rancher_id(ctx.root) is not None,
+        "downstream_id": downstream_id,
+        "agent_installed": downstream_id is not None,
+        "id_match": downstream_id is not None and downstream_id == cluster.id,
         "members": sorted(
             f"{b.userPrincipalId} ({b.roleTemplateId})"
             for b in client.list_member_bindings(cluster.id)
@@ -330,11 +333,12 @@ def status(ctx: Context) -> dict:
 def check(ctx: Context) -> dict:
     """Would a converge change anything in Rancher?
 
-    Not ok when the cluster is unregistered, the downstream agent is missing, or
-    the actual bindings differ from the desired ones -- the same three things
-    converge fixes. A configured member that cannot be resolved raises (via
-    _desired_members), so the check reports a failed result rather than a clean
-    pass while that user is still unresolved.
+    Not ok when the cluster is unregistered, the downstream agent is missing,
+    the downstream cattle-cluster-agent id does not match the Rancher cluster id
+    (the same refuse-to-attach a converge raises), or the actual bindings differ
+    from the desired ones -- the same things converge fixes. A configured member
+    that cannot be resolved raises (via _desired_members), so the check reports a
+    failed result rather than a clean pass while that user is still unresolved.
     """
     cfg, secrets = _load(ctx.root)
     client = _client(secrets)
@@ -343,7 +347,9 @@ def check(ctx: Context) -> dict:
         return {"ok": False, "registered": False,
                 "reason": f"cluster {cfg.name} is not registered in Rancher"}
 
-    agent = downstream_rancher_id(ctx.root) is not None
+    downstream_id = downstream_rancher_id(ctx.root)
+    agent = downstream_id is not None
+    id_match = downstream_id is not None and downstream_id == cluster.id
     desired = {(pid, role) for pid, role in _desired_members(client, cfg).items()}
     actual = _by_principal_role(client.list_member_bindings(cluster.id))
     owner = f"{cluster.id}:creator-cluster-owner"
@@ -355,11 +361,21 @@ def check(ctx: Context) -> dict:
     } - desired
 
     missing = desired - actual
+    if downstream_id is not None and not id_match:
+        mismatch = (
+            f"Rancher cluster {cfg.name!r} ({cluster.id}) does not match the "
+            f"downstream cluster ({downstream_id}); converge refuses this registration"
+        )
+    else:
+        mismatch = ""
     return {
-        "ok": agent and not missing and not extra,
+        "ok": agent and id_match and not missing and not extra,
         "registered": True,
         "cluster_id": cluster.id,
+        "downstream_id": downstream_id,
         "agent_installed": agent,
+        "id_match": id_match,
+        "id_mismatch_reason": mismatch,
         "missing_members": sorted(f"{p} ({r})" for p, r in missing),
         "stale_members": sorted(f"{p} ({r})" for p, r in extra),
     }
