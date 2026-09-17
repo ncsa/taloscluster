@@ -1729,6 +1729,14 @@ class ProxmoxBackend:
             return ""
         interfaces = data.get("result", []) if isinstance(data, dict) else []
         network = ipaddress.ip_network(self.cfg.cidr)
+        # The guest reports every address on the private link, including the
+        # Layer 2 kube-api VIP the control plane currently owns. The VIP names
+        # whatever node happens to hold it, never a specific machine, so it must
+        # not become a node address: without tailscale it would be picked up as
+        # the talos endpoint and target the wrong owner. Skip it and keep the
+        # first real address; return "" when only the VIP is left rather than
+        # fall back to a floating address (see current_network for the VIP).
+        cluster_vip = str(self.cluster_network.get("kubeapi_vip") or "")
         for interface in interfaces if isinstance(interfaces, list) else []:
             addresses = interface.get("ip-addresses", []) if isinstance(interface, dict) else []
             for address in addresses if isinstance(addresses, list) else []:
@@ -1739,7 +1747,7 @@ class ProxmoxBackend:
                     parsed = ipaddress.ip_address(value)
                 except (TypeError, ValueError):
                     continue
-                if parsed.version == 4 and parsed in network:
+                if parsed.version == 4 and parsed in network and str(parsed) != cluster_vip:
                     return str(parsed)
         return ""
 

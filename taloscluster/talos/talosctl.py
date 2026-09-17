@@ -176,7 +176,10 @@ def members(
     carries the shared kube-api VIP, which would target the wrong node. Without
     tailscale, pass the VIP (or every VIP the cluster may still carry, during
     an endpoint move) as ``exclude_vip`` so the owner's next (real) address is
-    used instead of the floating one.
+    used instead of the floating one. When every reported address is excluded
+    (a member reporting only VIPs), its address is reported as "" -- unknown --
+    rather than an excluded VIP, so callers fall back to the provider inventory
+    instead of addressing whichever node owns the VIP.
 
     Discovery also reports each member's talos version, so ONE call answers
     "which nodes exist, where, and on what version" -- no per-node
@@ -207,8 +210,13 @@ def members(
             continue
         tailscale = [a for a in addrs if _is_tailscale(a)]
         stable = [a for a in addrs if a not in excluded]
+        # When every reported address was excluded (all that remain are the VIP
+        # and the tailscale/preferred ones are absent), fall back to "" rather
+        # than `addrs[0]`: that first address would be an excluded VIP naming
+        # whichever control plane owns it, not this member. An unknown address
+        # lets callers fall through to the provider inventory / network result.
         found[host] = Member(
-            address=tailscale[0] if tailscale else (stable[0] if stable else addrs[0]),
+            address=tailscale[0] if tailscale else (stable[0] if stable else ""),
             version=_member_version(str(spec.get("operatingSystem") or "")),
         )
     return found

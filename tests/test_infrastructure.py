@@ -52,6 +52,21 @@ def test_node_address_falls_back_to_network_then_inventory():
     assert resolve_node_address("node-1", {}, inventory) == "192.0.2.10"
 
 
+def test_node_address_ignores_an_unknown_discovered_address():
+    """A discovered member whose only address was an excluded VIP reports ""
+    (unknown); resolution must fall through to the real network/inventory
+    address instead of addressing whichever node owns the VIP."""
+    inventory = InfrastructureInventory(
+        machines={
+            "node-1": InfrastructureMachine(
+                "node-1", attachments=(NetworkAttachment("private", "192.0.2.10"),)
+            )
+        }
+    )
+
+    assert resolve_node_address("node-1", {"node-1": ""}, inventory) == "192.0.2.10"
+
+
 def test_proxmox_backend_is_selected(make_config):
     cfg = make_config(
         {

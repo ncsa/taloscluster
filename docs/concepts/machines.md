@@ -47,14 +47,14 @@ talosctl --talosconfig talosconfig -n mycluster-controlplane-01 version
 
 ### Path B: direct access to real node addresses without Tailscale
 
-A cluster without a `tailscale` section works, but only where you can already reach the node addresses — for example Proxmox on a routed bridge, or a routed network your management machine can route to. With no MagicDNS name to resolve, taloscluster falls back to the provider-reported address of the first control plane.
+A cluster without a `tailscale` section works, but only where you can already reach the node addresses — for example Proxmox on a routed bridge, or a routed network your management machine can route to. With no MagicDNS name to resolve, taloscluster falls back to the provider-reported address of the first control plane. The Kubernetes API VIP is never used as this address — it moves between control planes, so it is excluded from guest-agent and Talos discovery address selection, which report the next real address or nothing rather than the VIP.
 
 To use this path end to end:
 
 1. **Make the node addresses reachable**: route the private `network.cidr` from the management machine — a routed bridge on Proxmox, a router+floating setup on a tenant network, or a VPN. There must be no firewall in the way of TCP/50000.
 2. **Omit the `tailscale` section** from `cluster.yaml`; a leftover `tailscale.auth_key` in `secrets.yaml` is simply unused. Removing the section also drops the tailscale extension from new installer images (see [Tailscale](../configuration/tailscale.md)).
 3. **Let the allowlists include your management network**: put the source CIDR you reach the node addresses from into the `kubernetes` and `talos` rules under [`security`](../configuration/security.md), or converge locks itself out.
-4. **Run `taloscluster converge`.** Without Tailscale, taloscluster resolves the control plane's address in this order: a managed-SDN static address from the network plan, then the address the guest agent reports, polling until a freshly booted node reports one, then the endpoint an earlier `talosconfig` recorded.
+4. **Run `taloscluster converge`.** Without Tailscale, taloscluster resolves the control plane's address in this order: a managed-SDN static address from the network plan, then the address the guest agent reports, polling until a freshly booted node reports one, then the endpoint an earlier `talosconfig` recorded. The guest agent and Talos discovery never select the kube-api VIP, which would target whichever control plane owns it; if they report only VIPs, no address is used and resolution falls back to the other sources.
 
 Verify the path with `taloscluster status` and confirm the control plane answers on its real address:
 

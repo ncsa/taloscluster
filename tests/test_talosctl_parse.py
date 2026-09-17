@@ -202,6 +202,27 @@ def test_members_skips_the_shared_vip_when_excluded(monkeypatch, tmp_path):
     assert excluded["cp-01"].address == "10.0.0.236"
 
 
+def test_members_returns_unknown_when_every_address_is_the_excluded_vip(monkeypatch, tmp_path):
+    """A member reporting only excluded VIPs must report "" (unknown) rather
+    than fall back to the excluded VIP, which would name whatever node owns it."""
+    stream = (
+        '{"metadata": {"id": "cp-01"}, "spec": {"addresses": '
+        '["203.0.113.79", "203.0.113.80"], "operatingSystem": "Talos (v1.13.9)"}}'
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda _cmd: (0, stream, ""))
+    got = talosctl.members(
+        tmp_path / "talosconfig", "ep", exclude_vip=["203.0.113.79", "203.0.113.80"]
+    )
+    assert got["cp-01"].address == ""
+    # the address-only view keeps the member but with an unknown address, so
+    # resolve_node_address falls through to the provider inventory / network
+    assert talosctl.member_addresses(
+        tmp_path / "talosconfig",
+        "ep",
+        exclude_vip=["203.0.113.79", "203.0.113.80"],
+    )["cp-01"] == ""
+
+
 def test_members_prefers_tailscale_anywhere_in_100_64_slash_10(monkeypatch):
     """Tailscale CGNAT is the full 100.64.0.0/10: an address in 100.65-100.127
     is still a tailscale one and must be preferred over the private/VIP ips."""

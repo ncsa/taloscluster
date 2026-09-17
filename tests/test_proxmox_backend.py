@@ -174,6 +174,47 @@ def test_inventory_uses_guest_agent_private_address(proxmox_cfg):
     assert inventory.machine_address("testcluster-controlplane-01") == "192.168.1.23"
 
 
+def test_guest_address_skips_the_kubeapi_vip_when_it_is_first(proxmox_cfg):
+    """The guest reports the shared kube-api VIP among its private addresses; a
+    VIP-first reply must still resolve to the next real address, not the VIP."""
+    data = _data()
+    data["nodes/pve001/qemu/800/agent/network-get-interfaces"] = {
+        "result": [
+            {
+                "name": "eth0",
+                "ip-addresses": [
+                    {"ip-address": "192.168.0.10", "ip-address-type": "ipv4"},
+                    {"ip-address": "192.168.1.23", "ip-address-type": "ipv4"},
+                ],
+            }
+        ]
+    }
+
+    inventory = _backend(proxmox_cfg, FakeClient(data)).load_inventory()
+
+    assert inventory.machine_address("testcluster-controlplane-01") == "192.168.1.23"
+
+
+def test_guest_address_returns_unknown_when_only_the_vip_is_reported(proxmox_cfg):
+    """A VIP-only reply leaves no real address; the machine reports no address
+    rather than the floating VIP of whichever control plane owns it."""
+    data = _data()
+    data["nodes/pve001/qemu/800/agent/network-get-interfaces"] = {
+        "result": [
+            {
+                "name": "eth0",
+                "ip-addresses": [
+                    {"ip-address": "192.168.0.10", "ip-address-type": "ipv4"},
+                ],
+            }
+        ]
+    }
+
+    inventory = _backend(proxmox_cfg, FakeClient(data)).load_inventory()
+
+    assert inventory.machine_address("testcluster-controlplane-01") == ""
+
+
 def test_missing_permission_fails_before_any_mutation(proxmox_cfg):
     client = FakeClient(_data(permissions={"/": {"Sys.Audit": 1}}))
 
