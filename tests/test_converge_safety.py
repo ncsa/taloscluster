@@ -533,6 +533,154 @@ def test_scale_down_real_health_refuses_fallback_between_control_plane_removals(
     assert mutations == ["drain", "reset", "delete", "compute"]
 
 
+def test_scale_down_rerun_resumes_vm_delete_after_kube_node_already_gone(monkeypatch):
+    """A prior run deleted the kube Node but its provider-VM delete failed; the
+    rerun sees no Node in `kubectl.get nodes`, so the undesired owned machine
+    must be reconciled from the provider inventory and its VM deleted -- not
+    ignored forever."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    # the kube Node is gone on the rerun...
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
+    # ...and the owned VM is still in the inventory
+    inventory = InfrastructureInventory(
+        machines={
+            "old-worker": InfrastructureMachine(
+                "old-worker",
+                attachments=(NetworkAttachment("private", "192.0.2.10"),),
+            )
+        }
+    )
+    # no kube Node exists, so no drain and no kubectl node delete should run
+    monkeypatch.setattr(
+        converge.kubectl, "drain", lambda *_a: pytest.fail("inventory-only VM must not be drained")
+    )
+    monkeypatch.setattr(
+        converge.kubectl, "delete_node",
+        lambda *_a: pytest.fail("inventory-only VM has no kube Node to delete"),
+    )
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+
+    converge._scale_down(
+        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), Path("talosconfig"),
+        Path("kubeconfig"), assume_yes=True,
+    )
+
+    assert mutations == ["reset", "compute"]
+
+
+def test_scale_down_removes_owned_machine_that_never_joined_kubernetes(monkeypatch):
+    """An owned undesired provider machine that never registered as a kube Node
+    (e.g. a worker whose first boot failed) is invisible to `kubectl.get nodes`
+    and must still be removed from the provider inventory."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
+    inventory = InfrastructureInventory(
+        machines={
+            "stranded-worker": InfrastructureMachine(
+                "stranded-worker",
+                attachments=(NetworkAttachment("private", "192.0.2.11"),),
+            )
+        }
+    )
+    monkeypatch.setattr(
+        converge.kubectl, "drain", lambda *_a: pytest.fail("never-joined VM must not be drained")
+    )
+    monkeypatch.setattr(
+        converge.kubectl, "delete_node",
+        lambda *_a: pytest.fail("never-joined VM has no kube Node to delete"),
+    )
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+
+    converge._scale_down(
+        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), Path("talosconfig"),
+        Path("kubeconfig"), assume_yes=True,
+    )
+
+    assert mutations == ["reset", "compute"]
+
+
+def test_scale_down_preserves_etcd_safeguard_for_owned_control_plane_inventory_only(
+    monkeypatch, tmp_path
+):
+    """An addressless owned control-plane machine whose kube Node is already gone
+    is still a potential etcd member, so its removal must keep the authoritative
+    etcd-membership safeguard: abort while the node is still a member rather than
+    delete the VM."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
+    monkeypatch.setattr(
+        converge.kubectl, "drain", lambda *_a: pytest.fail("must not drain an addressless CP")
+    )
+    monkeypatch.setattr(
+        converge.kubectl, "delete_node",
+        lambda *_a: pytest.fail("must not delete a kube Node that does not exist"),
+    )
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    inventory = InfrastructureInventory(
+        machines={
+            "testcluster-controlplane-03": InfrastructureMachine("testcluster-controlplane-03")
+        }
+    )
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-03": "9eb1f01d"},
+    )
+
+    with pytest.raises(ReconcileError, match="still an etcd member"):
+        converge._scale_down(
+            FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), talosconfig,
+            Path("kubeconfig"), assume_yes=True,
+        )
+
+    assert mutations == []
+
+
+def test_scale_down_deletes_owned_control_plane_inventory_only_once_out_of_etcd(
+    monkeypatch, tmp_path
+):
+    """Once the owned addressless control plane is affirmatively absent from the
+    surviving control plane's etcd member list, its VM may be deleted even though
+    no kube Node is left."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
+    monkeypatch.setattr(
+        converge.kubectl, "drain", lambda *_a: pytest.fail("must not drain a kube-less CP")
+    )
+    monkeypatch.setattr(
+        converge.kubectl, "delete_node",
+        lambda *_a: pytest.fail("must not delete a kube Node that does not exist"),
+    )
+    monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    inventory = InfrastructureInventory(
+        machines={
+            "testcluster-controlplane-03": InfrastructureMachine("testcluster-controlplane-03")
+        }
+    )
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-02": "8c2aa1e0"},
+    )
+
+    converge._scale_down(
+        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), talosconfig,
+        Path("kubeconfig"), assume_yes=True,
+    )
+
+    assert mutations == ["compute"]
+
+
 def test_destroy_decline_happens_before_plugin_teardown(monkeypatch, tmp_path):
     cfg = SimpleNamespace(name="testcluster")
     plugin_calls: list[str] = []

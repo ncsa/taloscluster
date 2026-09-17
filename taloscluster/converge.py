@@ -1103,7 +1103,24 @@ def _scale_down(
         live = []
     else:
         live = kubectl.node_names(kubeconfig)
-    removals = [node for node in live if node not in desired]
+    # Removals are reconciled from OUR owned provider inventory as well as the
+    # live Kubernetes node set: `_scale_down` deletes the kube Node before the
+    # provider VM, so a VM deletion that fails strands the VM forever -- a rerun
+    # sees no Node and would never notice it. Owned machines that never joined
+    # Kubernetes (a worker that failed to register, or a control plane created
+    # then dropped from config) are invisible to `kubectl.get nodes` too. Every
+    # undesired owned machine must therefore be removed, not just live Nodes.
+    live_set = set(live)
+    removals = []
+    seen: set[str] = set()
+    for node in live:
+        if node not in desired and node not in seen:
+            removals.append(node)
+            seen.add(node)
+    for node in inv.machines:
+        if node not in desired and node not in seen:
+            removals.append(node)
+            seen.add(node)
     if not removals:
         info("nothing to remove")
         return
@@ -1137,27 +1154,37 @@ def _scale_down(
     remaining_cp = sum(1 for n in removals if "-controlplane-" in n)
     for node in removals:
         is_cp = "-controlplane-" in node
+        # A removal that came only from the provider inventory has no Kubernetes
+        # Node (it never joined, or a prior run deleted the Node before its VM
+        # delete failed), so there is nothing to drain or to delete via kubectl.
+        has_node = node in live_set
         address = resolve_node_address(node, discovered, inv, refs)
         if address:
             info(f"removing {node} ({address})")
-            try:
-                kubectl.drain(kubeconfig, node)
-            except subprocess.CalledProcessError:
-                ready = kubectl.node_ready(kubeconfig, node)
-                if ready is not False:
-                    raise ReconcileError(
-                        f"drain of {node} failed and node is {'Ready' if ready else 'unknown'}; "
-                        "aborting to protect a potentially live node"
-                    ) from None
-                warn(f"drain of {node} failed (node already NotReady); continuing")
+            if has_node:
+                try:
+                    kubectl.drain(kubeconfig, node)
+                except subprocess.CalledProcessError:
+                    ready = kubectl.node_ready(kubeconfig, node)
+                    if ready is not False:
+                        state = "Ready" if ready else "unknown"
+                        raise ReconcileError(
+                            f"drain of {node} failed and node is {state}; "
+                            "aborting to protect a potentially live node"
+                        ) from None
+                    warn(f"drain of {node} failed (node already NotReady); continuing")
             talosctl.reset(talosconfig, endpoint, address, control_plane=is_cp)
         else:
-            ready = kubectl.node_ready(kubeconfig, node)
-            if ready is not False:
-                raise ReconcileError(
-                    f"no address for {node} but node is {'Ready' if ready else 'unknown'} in k8s; "
-                    "aborting -- may be a discovery failure, not a reset node"
-                )
+            # node_ready reads the kube Node: for a node with no kube Node there
+            # is nothing to be Ready, so only consult it when a Node exists.
+            if has_node:
+                ready = kubectl.node_ready(kubeconfig, node)
+                if ready is not False:
+                    state = "Ready" if ready else "unknown"
+                    raise ReconcileError(
+                        f"no address for {node} but node is {state} in k8s; "
+                        "aborting -- may be a discovery failure, not a reset node"
+                    )
             # NotReady alone does not prove a control plane left etcd: a failed
             # or timed-out reset leaves a dead member, and deleting the VM would
             # bypass the reset-failure protection. Require positive proof the
@@ -1179,9 +1206,13 @@ def _scale_down(
                     f"no address for control plane {node} but it is absent from the "
                     f"surviving control plane's etcd member list; deleting"
                 )
-            else:
+            elif has_node:
                 warn(f"no address for {node} (node is NotReady, likely already reset); deleting")
-        kubectl.delete_node(kubeconfig, node)
+            else:
+                warn(f"no address for {node} and it has no kube node (never joined or "
+                     "already removed); deleting the VM")
+        if has_node:
+            kubectl.delete_node(kubeconfig, node)
         backend.delete_machine(node, inv)
         removed += 1
         if is_cp:
