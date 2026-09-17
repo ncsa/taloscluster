@@ -848,5 +848,5 @@ def test_upgrade_path_falls_back_to_minor_point_zero_when_lookup_fails(monkeypat
 def test_upgrade_path_rejects_an_unknown_current():
     # `_upgrade` raises before calling when the running version is empty, so
     # the direct-upgrade path was removed; an empty `cur` is a programming error
-    with pytest.raises(ValueError, match="invalid literal"):
+    with pytest.raises(ReconcileError, match="empty current version"):
         converge._k8s_upgrade_path("", "v1.36.2")

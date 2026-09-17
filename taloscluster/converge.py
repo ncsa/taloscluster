@@ -992,6 +992,10 @@ def _k8s_upgrade_path(cur: str, want: str) -> list[str]:
     not be a stale .0. Falls back to <minor>.0 if dl.k8s.io is unreachable --
     still a valid hop, just older.
     """
+    if not cur:
+        raise ReconcileError(
+            f"cannot compute a kubernetes upgrade path from an empty current version to {want}"
+        )
 
     def minor_of(v: str) -> tuple[int, int]:
         parts = v.lstrip("v").split(".")
