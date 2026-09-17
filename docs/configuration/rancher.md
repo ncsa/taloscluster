@@ -18,7 +18,7 @@ rancher:
 
 Optional · list of usernames · default empty
 
-Members granted the Rancher `cluster-owner` role. Usernames are resolved through Rancher's configured auth providers on an exact id match only; a short or misspelled netid cannot be resolved and is skipped with a warning. A name listed under both `admins` and `users` is ambiguous and refused during converge's validate phase, before any core change; so is a netid alongside an alias in the other tier that resolves to the same principal (for example `alice` in `admins` and `alice@example.com` in `users`), which is refused by converge and check before any binding changes. Removing a name removes stale individual user bindings on the next converge. The creator-owner binding and group bindings are preserved, so access through those bindings remains.
+Members granted the Rancher `cluster-owner` role. Usernames are resolved through Rancher's configured auth providers on an exact id match only; a short or misspelled netid that cannot be resolved is refused by converge and check rather than skipped, so reconcile never removes that user's existing binding as stale while they are still unresolved. A name listed under both `admins` and `users` is ambiguous and refused during converge's validate phase, before any core change; so is a netid alongside an alias in the other tier that resolves to the same principal (for example `alice` in `admins` and `alice@example.com` in `users`), which is refused by converge and check before any binding changes. Removing a name removes stale individual user bindings on the next converge. The creator-owner binding and group bindings are preserved, so access through those bindings remains.
 
 ### `rancher.users`
 

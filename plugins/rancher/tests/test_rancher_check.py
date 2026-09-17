@@ -13,6 +13,7 @@ from taloscluster.context import Context
 
 from taloscluster_rancher import reconcile as _converge
 from taloscluster_rancher.client import MemberBinding, RancherCluster
+from taloscluster_rancher.errors import RancherError
 
 CLUSTER = RancherCluster(id="c-abc12", name="testcluster", state="active")
 
@@ -138,11 +139,24 @@ def test_status_lists_members(cluster_dir, wire):
     assert report["members"] == [f"{ALICE} (cluster-owner)"]
 
 
-def test_unresolvable_netid_shows_up_as_missing(cluster_dir, wire):
-    """A typo'd netid must not raise; it reads as a member that is not there."""
-    wire(FakeClient(bindings=[], principals={"alice": ALICE}))
-    report = _converge.check(Context(root=cluster_dir, cfg=None))
-    assert report["missing_members"] == [f"{ALICE} (cluster-owner)"]
+def test_unresolvable_netid_is_a_failed_check(cluster_dir, wire):
+    """A typo'd or unresolvable netid must read as a failed check, not a clean
+    pass: skipping it would let a missing binding be ignored and an existing
+    admin keep being reported ok while still unresolved."""
+    wire(FakeClient(bindings=[binding(ALICE, "cluster-owner", "b-1"), OWNER],
+                    principals={"alice": ALICE}))  # carol is configured but unresolved
+    with pytest.raises(RancherError, match="could not resolve Rancher principals.*carol"):
+        _converge.check(Context(root=cluster_dir, cfg=None))
+
+
+def test_check_reports_unresolved_existing_admin(cluster_dir, wire):
+    """An admin whose principal search temporarily returns empty already holds a
+    binding; the check must fail rather than report ok (an existing binding the
+    search cannot reach must not be counted as resolved)."""
+    wire(FakeClient(bindings=[binding(ALICE, "cluster-owner", "b-1"), OWNER],
+                    principals={}))  # neither alice nor carol resolves now
+    with pytest.raises(RancherError, match="could not resolve Rancher principals"):
+        _converge.check(Context(root=cluster_dir, cfg=None))
 
 
 def test_netid_listed_as_both_admin_and_user_is_rejected(cluster_dir, wire):

@@ -14,6 +14,7 @@ from taloscluster.errors import ConfigError
 from taloscluster_rancher import reconcile
 from taloscluster_rancher.client import MemberBinding
 from taloscluster_rancher.config import Config
+from taloscluster_rancher.errors import RancherError
 
 
 class FakeClient:
@@ -102,3 +103,35 @@ def test_same_principal_under_two_tiers_is_rejected_before_mutation(tmp_path):
 
     assert client.added == []
     assert client.removed == []
+
+
+def test_unresolvable_existing_admin_is_not_deleted_as_stale(tmp_path):
+    """A search that temporarily returns empty for an existing admin must abort
+    before any binding mutation, so reconcile cannot delete that user's binding by
+    treating it as stale: once gone, check would report ok even though the admin
+    is still unresolved."""
+    client = FakeClient(
+        bindings=[binding(ALICE, "cluster-owner", "b-1"), OWNER],
+        principals={},  # alice resolves to nothing right now
+    )
+    cfg = _cfg(tmp_path, admins=["alice"], users=["carol"])
+
+    with pytest.raises(RancherError, match="could not resolve Rancher principals.*alice"):
+        reconcile.ensure_members(client, "c-abc12", cfg)
+
+    assert client.removed == []
+    assert client.added == []
+
+
+def test_unresolvable_never_created_member_aborts(tmp_path):
+    """A configured member who was never created (search backs no result) must
+    fail reconciliation rather than being silently skipped out of the desired
+    set, so the missing admin is reported instead of a clean pass."""
+    client = FakeClient(bindings=[OWNER], principals={})  # neither resolves
+    cfg = _cfg(tmp_path, admins=["alice"], users=["carol"])
+
+    with pytest.raises(RancherError, match="could not resolve Rancher principals"):
+        reconcile.ensure_members(client, "c-abc12", cfg)
+
+    assert client.removed == []
+    assert client.added == []

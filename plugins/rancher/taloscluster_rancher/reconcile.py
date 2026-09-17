@@ -93,18 +93,25 @@ def downstream_rancher_id(root: Path) -> str | None:
 def _resolve_members(client: Client, cfg: Config) -> dict[str, tuple[str, str]]:
     """principal id -> (netid, tier) for every configured member that resolves.
 
-    Raises ConfigError when two distinct configured netids from different tiers
-    resolve to the same principal (e.g. `alice` and `alice@example.com`, whose
-    email suffix resolve_principal strips), because that membership is ambiguous
-    and would flap between cluster-owner and cluster-member on alternating runs.
-    Unresolvable netids are skipped (they read as missing members downstream).
+    Resolves the complete desired set before returning, so a caller can never act
+    on a partially-resolved set. Raises ConfigError when two distinct configured
+    netids from different tiers resolve to the same principal (e.g. `alice` and
+    `alice@example.com`, whose email suffix resolve_principal strips), because
+    that membership is ambiguous and would flap between cluster-owner and
+    cluster-member on alternating runs. Raises RancherError when a configured
+    member cannot be resolved at all: skipping it let reconcile treat that user's
+    existing binding as stale and delete it, and let check report `ok: true`
+    while the configured admin was still unresolved. Refusing up front is what
+    stops an existing binding from being removed as stale and a never-created
+    member from being silently ignored.
     """
     by_pid: dict[str, tuple[str, str]] = {}
+    unresolved: list[str] = []
     for tier in TIERS:
         for netid in cfg.members.netids_for(tier):
             principal = client.resolve_principal(netid)
             if principal is None:
-                warn(f"could not resolve principal for {netid!r} (tier {tier}); skipping")
+                unresolved.append(f"{netid!r} (tier {tier})")
                 continue
             pid = principal["id"]
             existing = by_pid.get(pid)
@@ -117,6 +124,13 @@ def _resolve_members(client: Client, cfg: Config) -> dict[str, tuple[str, str]]:
                     "use canonical netids for both"
                 )
             by_pid[pid] = (netid, tier)
+    if unresolved:
+        raise RancherError(
+            "could not resolve Rancher principals for configured member(s): "
+            + ", ".join(unresolved)
+            + "; refusing to change memberships so an existing binding is not "
+            "removed as stale"
+        )
     return by_pid
 
 
@@ -126,7 +140,10 @@ def ensure_members(client: Client, cid: str, cfg: Config) -> list[dict[str, str]
     Adds any declared member missing the right role, and removes any existing
     member who is no longer in the config (so taking a user out of the admin/user
     list deletes their cluster membership). The cluster creator/owner -- the
-    `<cluster>:creator-cluster-owner` binding -- is always preserved.
+    `<cluster>:creator-cluster-owner` binding -- is always preserved. The whole
+    desired set is resolved (_resolve_members) before any binding is touched, so
+    a member that cannot be resolved fails the reconciliation rather than having
+    their existing binding removed as stale.
     """
     owner_binding = f"{cid}:creator-cluster-owner"
     resolved = _resolve_members(client, cfg)  # pid -> (netid, tier)
@@ -279,9 +296,10 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
 def _desired_members(client: Client, cfg: Config) -> dict[str, str]:
     """principal id -> role for every member cluster.yaml declares.
 
-    Unresolvable netids are skipped (they are reported by converge/check), so a
-    typo shows up as a missing member rather than an exception. Cross-tier
-    aliases that resolve to the same principal are refused (_resolve_members).
+    Cross-tier aliases that resolve to the same principal, and a configured
+    member that cannot be resolved at all, are refused here (_resolve_members),
+    so check reports a typo'd or unresolvable netid as a failed check instead of
+    a clean pass while the configured member is unresolved.
     """
     return {
         pid: ROLE_BY_TIER[tier]
@@ -314,7 +332,9 @@ def check(ctx: Context) -> dict:
 
     Not ok when the cluster is unregistered, the downstream agent is missing, or
     the actual bindings differ from the desired ones -- the same three things
-    converge fixes.
+    converge fixes. A configured member that cannot be resolved raises (via
+    _desired_members), so the check reports a failed result rather than a clean
+    pass while that user is still unresolved.
     """
     cfg, secrets = _load(ctx.root)
     client = _client(secrets)
