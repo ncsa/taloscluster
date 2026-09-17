@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import base64
 import json
+import subprocess
 from pathlib import Path
 
+from ..errors import ReconcileError
 from . import kubectl
 
 
@@ -22,13 +24,23 @@ def cluster_id(kubeconfig: Path) -> str | None:
     Read from the cattle-cluster-agent credentials Secret in cattle-system
     (`cattle-credentials-*`, `namespace` key). Returns None when Rancher is not
     installed (no agent): an absent cattle-system, a failed kubectl call, or an
-    unparseable response all mean there is no Rancher identity to act on.
+    unparseable response all mean there is no Rancher identity to act on. A
+    kubectl request that times out (the kube-api accepted TCP but never
+    answered) raises ReconcileError with a clear message instead of being
+    mistaken for an absent agent.
     """
-    proc = kubectl._run(
-        [kubectl.BIN, "--kubeconfig", str(kubeconfig),
-         "get", "secret", "-n", "cattle-system", "-o", "json"],
-        capture=True, check=False,
-    )
+    try:
+        proc = kubectl._run(
+            [kubectl.BIN, "--kubeconfig", str(kubeconfig),
+             "get", "secret", "-n", "cattle-system", "-o", "json"],
+            capture=True, check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ReconcileError(
+            "reading the downstream cluster's Rancher identity timed out "
+            f"(\"kubectl get secret -n cattle-system\" did not answer after "
+            f"{kubectl.RUN_TIMEOUT:.0f}s); investigate the cluster's kube-api and retry"
+        ) from e
     if proc.returncode != 0:
         return None
     try:

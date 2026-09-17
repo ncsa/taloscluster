@@ -64,6 +64,13 @@ def test_drain_uses_a_longer_wall_clock_bound(monkeypatch, tmp_path):
     assert captured["timeout"] == kubectl.DRAIN_TIMEOUT
 
 
+def test_manifest_timeout_is_a_dedicated_longer_bound():
+    """Manifest apply/diff/delete get their own headroom like drain, so a full
+    apply or a server-side diff against a remote cluster is not cut off as a
+    false timeout."""
+    assert kubectl.MANIFEST_TIMEOUT > kubectl.RUN_TIMEOUT
+
+
 def test_run_propagates_a_timeout(monkeypatch):
     def hung(*_a, **_k):
         raise subprocess.TimeoutExpired("kubectl", kubectl.RUN_TIMEOUT)

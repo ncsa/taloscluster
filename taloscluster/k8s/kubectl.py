@@ -24,6 +24,10 @@ RUN_TIMEOUT = 30.0
 PROBE_TIMEOUT = "10s"
 # drain can legitimately take up to its own --timeout=5m; give it headroom.
 DRAIN_TIMEOUT = 5 * 60 + 30.0
+# a server-side diff, or an apply/delete of the full manifest set against a
+# remote cluster, can legitimately exceed the probe bound; give these the same
+# headroom as drain so a real operation is not cut off as a false timeout.
+MANIFEST_TIMEOUT = 5 * 60 + 30.0
 
 
 def _kc(kubeconfig: Path) -> list[str]:

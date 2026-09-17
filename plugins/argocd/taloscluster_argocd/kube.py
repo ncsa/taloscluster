@@ -6,6 +6,7 @@ secrets.yaml. The kubeconfig path is resolved against the cluster directory.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from taloscluster.k8s import kubectl, rancher
@@ -13,6 +14,14 @@ from taloscluster.output import action, dry_run, info
 
 from .config import ApplyTarget
 from .errors import ApplyError
+
+
+def _timed_out(command: str) -> str:
+    """Message for a kubectl command that hung on the api instead of answering."""
+    return (
+        f"{command} timed out; the api accepted TCP but never answered. "
+        "Investigate the cluster and retry"
+    )
 
 
 def _base_args(target: ApplyTarget, root: Path) -> list[str]:
@@ -65,7 +74,10 @@ def downstream_rancher_id(root: Path) -> str | None:
 
 def _run_get(base: list[str], manifest: str) -> bool:
     args = base + ["get", "-f", "-"]
-    proc = kubectl._run(args, input=manifest, capture=True, check=False)
+    try:
+        proc = kubectl._run(args, input=manifest, capture=True, check=False)
+    except subprocess.TimeoutExpired as e:
+        raise ApplyError(_timed_out("kubectl get -f -")) from e
     return proc.returncode == 0
 
 
@@ -85,7 +97,12 @@ def matches_downstream(root: Path, manifest: str) -> bool:
 
 def _run_diff(base: list[str], manifest: str) -> bool:
     args = base + ["diff", "-f", "-"]
-    proc = kubectl._run(args, input=manifest, capture=True, check=False)
+    try:
+        proc = kubectl._run(
+            args, input=manifest, capture=True, check=False, timeout=kubectl.MANIFEST_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ApplyError(_timed_out("kubectl diff -f -")) from e
     if proc.returncode == 0:
         return True
     if proc.returncode == 1:
@@ -119,9 +136,12 @@ def _run_apply(base: list[str], manifest: str, message: str, label: str) -> None
         action(f"kubectl apply {label} " + " ".join(args[1:]))
         return
     action(message)
-    proc = kubectl._run(
-        args, input=manifest, capture=True, check=False,
-    )
+    try:
+        proc = kubectl._run(
+            args, input=manifest, capture=True, check=False, timeout=kubectl.MANIFEST_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ApplyError(_timed_out("kubectl apply -f -")) from e
     if proc.returncode != 0:
         raise ApplyError(f"kubectl apply failed: {proc.stderr.strip()}")
     for line in proc.stdout.splitlines():
@@ -173,12 +193,31 @@ def delete_secret_downstream(root: Path, namespace: str, name: str) -> None:
     )
 
 
+def _display(args: list[str]) -> str:
+    """"kubectl …" with the verbose flags/values trimmed, for a message."""
+    rest, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in ("--kubeconfig", "--context"):
+            skip = True
+            continue
+        rest.append(a)
+    return "kubectl " + " ".join(rest)
+
+
 def _delete(args: list[str], manifest: str, message: str, label: str) -> None:
     if dry_run():
         action(f"kubectl delete {label} " + " ".join(args[1:]))
         return
     action(message)
-    proc = kubectl._run(args, input=manifest, capture=True, check=False)
+    try:
+        proc = kubectl._run(
+            args, input=manifest, capture=True, check=False, timeout=kubectl.MANIFEST_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ApplyError(_timed_out(_display(args))) from e
     if proc.returncode != 0:
         raise ApplyError(f"kubectl delete failed: {proc.stderr.strip()}")
     for line in proc.stdout.splitlines():

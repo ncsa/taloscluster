@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -36,6 +37,54 @@ def test_matches_reports_kubectl_errors(monkeypatch, tmp_path):
     )
     with pytest.raises(ApplyError, match="forbidden"):
         kube.matches(ApplyTarget(context="argocd"), tmp_path, "kind: Secret\n")
+
+
+def test_matches_turns_a_timeout_into_apply_error(monkeypatch, tmp_path):
+    """A server-side diff that the api hangs on must be a clear error, not a raw
+    TimeoutExpired -- and uses the longer manifest bound."""
+
+    def hung(args, **kw):
+        raise subprocess.TimeoutExpired(args, kw.get("timeout", 30))
+
+    monkeypatch.setattr(kube.kubectl, "_run", hung)
+    with pytest.raises(ApplyError, match="kubectl diff -f - timed out"):
+        kube.matches(ApplyTarget(context="argocd"), tmp_path, "kind: Secret\n")
+
+
+def test_exists_turns_a_timeout_into_apply_error(monkeypatch, tmp_path):
+    """The read-only `get` probe uses the short bound but must still surface a
+    hung api as a clear error rather than a raw TimeoutExpired."""
+
+    def hung(args, **kw):
+        raise subprocess.TimeoutExpired(args, kw.get("timeout", 30))
+
+    monkeypatch.setattr(kube.kubectl, "_run", hung)
+    with pytest.raises(ApplyError, match="kubectl get -f - timed out"):
+        kube.exists(ApplyTarget(context="argocd"), tmp_path, "kind: Secret\n")
+
+
+def test_apply_turns_a_timeout_into_apply_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(kube, "dry_run", lambda: False)
+    monkeypatch.setattr(kube, "action", lambda _m: None)
+
+    def hung(args, **kw):
+        raise subprocess.TimeoutExpired(args, kw.get("timeout", 30))
+
+    monkeypatch.setattr(kube.kubectl, "_run", hung)
+    with pytest.raises(ApplyError, match="kubectl apply -f - timed out"):
+        kube.apply(ApplyTarget(context="argocd"), tmp_path, "kind: Secret\n")
+
+
+def test_delete_turns_a_timeout_into_apply_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(kube, "dry_run", lambda: False)
+    monkeypatch.setattr(kube, "action", lambda _m: None)
+
+    def hung(args, **kw):
+        raise subprocess.TimeoutExpired(args, kw.get("timeout", 30))
+
+    monkeypatch.setattr(kube.kubectl, "_run", hung)
+    with pytest.raises(ApplyError, match="kubectl delete -f - --ignore-not-found timed out"):
+        kube.delete(ApplyTarget(context="argocd"), tmp_path, "kind: Secret\n")
 
 
 def test_check_reports_drifted_resources(monkeypatch):

@@ -328,6 +328,17 @@ def test_main_maps_called_process_error_to_exit_1(monkeypatch, tmp_path, capsys)
     assert "talosctl get nodes" in err
 
 
+def test_main_maps_timeout_expired_to_exit_1(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        cli._converge, "converge",
+        _bomb(subprocess.TimeoutExpired(["kubectl", "get", "nodes"], 30)),
+    )
+    assert cli.main(["converge", "-C", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert "timed out" in err
+    assert "kubectl get nodes" in err
+
+
 def test_main_maps_keyboard_interrupt_to_130(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli._converge, "converge", _bomb(KeyboardInterrupt()))
     assert cli.main(["converge", "-C", str(tmp_path)]) == 130

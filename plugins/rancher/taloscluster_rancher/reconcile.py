@@ -62,11 +62,22 @@ def _client(secrets: Secrets) -> Client:
 
 
 def _kubectl(root: Path, *args: str) -> str | None:
-    """Run kubectl against the cluster's kubeconfig; None on failure."""
-    proc = kubectl._run(
-        ["kubectl", "--kubeconfig", str(root / "kubeconfig"), *args],
-        capture=True, check=False,
-    )
+    """Run kubectl against the cluster's kubeconfig; None on failure.
+
+    A kubectl request that times out (the kube-api accepted TCP but never
+    answered -- not merely returning non-zero) raises RancherError, so a hung
+    api is not mistaken for "cattle-system is absent".
+    """
+    try:
+        proc = kubectl._run(
+            ["kubectl", "--kubeconfig", str(root / "kubeconfig"), *args],
+            capture=True, check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RancherError(
+            f"kubectl {args[0] if args else ''} against the downstream cluster timed "
+            f"out ({kubectl.RUN_TIMEOUT:.0f}s); investigate the cluster's kube-api and retry"
+        ) from e
     if proc.returncode != 0:
         return None
     return proc.stdout.strip()
@@ -216,10 +227,16 @@ def install_agent(root: Path, client: Client, cluster, agent_installed: bool = F
     try:
         kubectl._run(
             ["kubectl", "--kubeconfig", str(root / "kubeconfig"), "apply", "-f", "-"],
-            input=command, capture=True, check=True,
+            input=command, capture=True, check=True, timeout=kubectl.MANIFEST_TIMEOUT,
         )
     except subprocess.CalledProcessError as e:
         raise RancherError(f"kubectl apply of import manifest failed: {e.stderr.strip()}") from e
+    except subprocess.TimeoutExpired as e:
+        raise RancherError(
+            "applying the Rancher import manifest to the downstream cluster timed out; "
+            "the kube-api accepted TCP but never answered. Investigate the cluster and "
+            "retry converge"
+        ) from e
 
 
 def converge(ctx: Context, assume_yes: bool = False) -> dict:

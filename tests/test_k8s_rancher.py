@@ -53,6 +53,22 @@ def test_cluster_id_is_none_when_kubectl_fails(monkeypatch):
     assert rancher.cluster_id(Path("kubeconfig")) is None
 
 
+def test_cluster_id_reports_a_hung_kubectl_as_an_error(monkeypatch):
+    """A timeout is not a "no agent" negative answer: the api accepted TCP but
+    never answered, so the reader must raise a clear error instead of letting a
+    raw TimeoutExpired leak or silently reporting the cluster as unregistered."""
+    import subprocess
+
+    from taloscluster.errors import ReconcileError
+
+    def hung(*_a, **_k):
+        raise subprocess.TimeoutExpired(["kubectl", "get", "secret"], 30)
+
+    monkeypatch.setattr(rancher.kubectl, "_run", hung)
+    with pytest.raises(ReconcileError, match="Rancher identity timed out"):
+        rancher.cluster_id(Path("kubeconfig"))
+
+
 def test_cluster_id_is_none_without_a_credentials_secret(monkeypatch):
     monkeypatch.setattr(
         rancher.kubectl, "_run",
@@ -134,17 +150,19 @@ def test_cluster_id_is_bounded(monkeypatch):
 
 def test_argocd_kubectl_calls_are_bounded(monkeypatch, tmp_path):
     """argocd's apply/get/delete/diff all run through kubectl._run's wall-clock
-    bound, so its converge/check hooks cannot hang on a non-responsive api."""
+    bound, so its converge/check hooks cannot hang on a non-responsive api. The
+    read-only `get` probe keeps the short bound; apply/delete/diff get the longer
+    manifest bound because a full apply or a server-side diff against a remote
+    cluster can legitimately exceed it."""
     from taloscluster_argocd import kube as argocd_kube
     from taloscluster_argocd.config import ApplyTarget
 
-    captured = {}
+    captured = []
     target = ApplyTarget(kubeconfig="kubeconfig", context=None)
     (tmp_path / "kubeconfig").write_text("clusters: []\n")
 
     def run(args, **kw):
-        captured["timeout"] = kw.get("timeout")
-        captured["args"] = args
+        captured.append(kw.get("timeout"))
         return _proc(0)
 
     monkeypatch.setattr(argocd_kube.kubectl.subprocess, "run", run)
@@ -153,12 +171,10 @@ def test_argocd_kubectl_calls_are_bounded(monkeypatch, tmp_path):
     monkeypatch.setattr(argocd_kube, "info", lambda _l: None)
 
     argocd_kube.exists(target, tmp_path, "manifest")
-    assert captured["timeout"] == argocd_kube.kubectl.RUN_TIMEOUT
-    argocd_kube.matches(target, tmp_path, "manifest")
-    assert captured["timeout"] == argocd_kube.kubectl.RUN_TIMEOUT
-    argocd_kube.apply(target, tmp_path, "manifest")
-    assert captured["timeout"] == argocd_kube.kubectl.RUN_TIMEOUT
-    argocd_kube.delete(target, tmp_path, "manifest")
-    assert captured["timeout"] == argocd_kube.kubectl.RUN_TIMEOUT
     argocd_kube.exists_downstream(tmp_path, "manifest")
-    assert captured["timeout"] == argocd_kube.kubectl.RUN_TIMEOUT
+    argocd_kube.matches(target, tmp_path, "manifest")
+    argocd_kube.apply(target, tmp_path, "manifest")
+    argocd_kube.delete(target, tmp_path, "manifest")
+    assert captured[:2] == [argocd_kube.kubectl.RUN_TIMEOUT] * 2
+    assert captured[2:] == [argocd_kube.kubectl.MANIFEST_TIMEOUT] * 3
+    assert argocd_kube.kubectl.MANIFEST_TIMEOUT > argocd_kube.kubectl.RUN_TIMEOUT
