@@ -526,6 +526,20 @@ class ProxmoxBackend:
                     "cluster-wide, so apply or revert them first"
                 )
 
+    def _refuse_sdn_destroy(self) -> None:
+        """Refuse teardown before any mutation when SDN apply would be unsafe.
+
+        Run at the top of destroy so a foreign-pending or shared-controller
+        refusal happens before VMs and the pool are deleted, and from the
+        summary so a plan/dry-run reports it instead of showing a teardown it
+        would refuse to perform.
+        """
+        if not self.sdn:
+            return
+        state = self._sdn_state(refresh=True)
+        self._refuse_foreign_pending(state)
+        self._refuse_shared_controller_destructive_pending(state)
+
     def _refuse_vni_collisions(self, state: dict[str, list[dict[str, Any]]]) -> None:
         assert self.sdn is not None
         ours = {str(self.sdn.vrf_tag), str(self.sdn.tag)}
@@ -1636,6 +1650,7 @@ class ProxmoxBackend:
 
     def destroy_summary(self, inventory: InfrastructureInventory) -> str:
         raw = self._raw(inventory)
+        self._refuse_sdn_destroy()
         count = sum(self._owns_vm(raw, vm) for vm in raw.vms.values())
         owned_pool = raw.pools.get(self.pool_id)
         pool_count = int(owned_pool is not None and owned_pool.comment == self.pool_comment)
@@ -1647,6 +1662,7 @@ class ProxmoxBackend:
     def destroy_resources(self, inventory: InfrastructureInventory) -> None:
         raw = self._raw(inventory)
         self._require_preflight()
+        self._refuse_sdn_destroy()
         for name in sorted(list(raw.vms)):
             if self._owns_vm(raw, raw.vms[name]):
                 self.delete_machine(name, inventory)

@@ -1760,9 +1760,35 @@ def test_sdn_destroy_refuses_pending_destructive_state_on_shared_controller(
     with pytest.raises(ReconcileError, match="never deletes the controller"):
         backend.destroy_resources(inventory)
 
-    assert not any(
-        path.startswith("cluster/sdn") for _method, path, _payload in client.mutations
-    )
+    assert client.mutations == []
+
+
+def test_sdn_destroy_refuses_foreign_pending_before_any_mutation(sdn_cfg):
+    data = _sdn_converged_data(_backend(sdn_cfg, FakeClient({})).sdn)
+    data["cluster/sdn/zones"].append({"zone": "otherz1", "type": "vlan", "state": "new"})
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="unapplied Proxmox SDN changes"):
+        backend.destroy_resources(inventory)
+
+    # the VMs and pool must not be deleted before the SDN refusal is raised
+    assert client.mutations == []
+
+
+def test_sdn_destroy_summary_refuses_foreign_pending_in_plan(sdn_cfg):
+    data = _sdn_converged_data(_backend(sdn_cfg, FakeClient({})).sdn)
+    data["cluster/sdn/zones"].append({"zone": "otherz1", "type": "vlan", "state": "new"})
+    client = FakeClient(data)
+    backend = _backend(sdn_cfg, client)
+    inventory = backend.load_inventory()
+    set_dry_run(True)
+
+    with pytest.raises(ReconcileError, match="unapplied Proxmox SDN changes"):
+        backend.destroy_summary(inventory)
+
+    assert client.mutations == []
 
 
 def test_sdn_destroy_keeps_zone_holding_a_foreign_vnet(sdn_cfg, capsys):
