@@ -36,19 +36,22 @@ IMAGE_PROPERTIES = {"hw_qemu_guest_agent": "yes"}
 
 
 def ensure_image(conn: Connection, cfg: Config) -> str:
-    """Ensure the single boot image exists (with the right properties); return
-    its name.
+    """Ensure the boot image exists (with the right properties); return its
+    name.
 
     Built from BASE_EXTENSIONS (tailscale + qemu-guest-agent). All nodes boot
-    from this one image regardless of pool.
+    from this one image regardless of pool. The image name embeds the schematic
+    id, so an existing image from a different base extension set is not reused
+    -- it gets a different identity and a fresh image is built.
     """
-    name = naming.image_name(cfg.talos_version)
+    schematic = factory.schematic_id(naming.BASE_EXTENSIONS)
+    name = naming.image_name(cfg.talos_version, schematic)
     existing = conn.image.find_image(name)
     if existing:
         info(f"image {name} exists")
         _ensure_properties(conn, existing)
         return name
-    _build_image(conn, cfg.talos_version, naming.BASE_EXTENSIONS, name)
+    _build_image(conn, cfg.talos_version, schematic, name)
     return name
 
 
@@ -68,10 +71,9 @@ def _ensure_properties(conn: Connection, img) -> None:
         conn.image.update_image(img, **missing)
 
 
-def _build_image(conn: Connection, talos_version: str, ext_set, name: str) -> None:
-    sid = factory.schematic_id(ext_set)
-    url = factory.image_url(sid, talos_version)
-    action(f"build image {name} from schematic {sid}")
+def _build_image(conn: Connection, talos_version: str, schematic: str, name: str) -> None:
+    url = factory.image_url(schematic, talos_version)
+    action(f"build image {name} from schematic {schematic}")
     if dry_run():
         return
 

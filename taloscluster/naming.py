@@ -102,13 +102,15 @@ def mac_address(cluster: str, hostname: str, index: int) -> str:
 
 
 # ---- boot image -----------------------------------------------------------
-# One boot image per talos version, baked with the BASE_EXTENSIONS (tailscale +
-# qemu-guest-agent). Fixed name for simplicity. Anything beyond the base set
-# (e.g. a GPU pool's nvidia extensions) is carried in the node's install.image
-# and applied on upgrade, not baked into the boot image.
+# One boot image per (talos version, base extension set). The schematic id,
+# which the Image Factory derives from the exact BASE_EXTENSIONS, is part of the
+# image name so a change to the base extensions produces a new identity instead
+# of silently reusing a stale image. Anything beyond the base set (e.g. a GPU
+# pool's nvidia extensions) is carried in the node's install.image and applied
+# on upgrade, not baked into the boot image.
 
-def image_name(talos_version: str) -> str:
-    return f"talos-{talos_version}-tailscale"
+def image_name(talos_version: str, schematic: str) -> str:
+    return f"talos-{talos_version}-tailscale-{schematic}"
 
 
 # ---- Proxmox SDN ------------------------------------------------------------

@@ -12,7 +12,7 @@ The categories, in order of how bad it is to lose them:
 | etcd snapshot | a file you write elsewhere | cluster control-plane state | restore the snapshot |
 | Application data | inside the cluster (etcd, volumes) | the workloads themselves | restore from a Kubernetes backup |
 
-Run `taloscluster status` to see what a cluster currently owns. The shared boot image is not per-cluster (it is keyed by `talos.version` and can be reused), so it does not need backing up.
+Run `taloscluster status` to see what a cluster currently owns. The shared boot image is not per-cluster (it is keyed by `talos.version` and the base schematic and can be reused), so it does not need backing up.
 
 ## What to back up
 

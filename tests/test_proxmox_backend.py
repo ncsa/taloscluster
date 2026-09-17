@@ -333,7 +333,7 @@ def test_cluster_memory_gb_converts_to_proxmox_api_mib():
 
 
 def test_boot_iso_uses_shared_tailscale_image_name():
-    assert _boot_iso_name("v1.12.2") == "talos-v1.12.2-tailscale.iso"
+    assert _boot_iso_name("v1.12.2", "abc123") == "talos-v1.12.2-tailscale-abc123.iso"
 
 
 def test_ensure_boot_artifact_uses_download_url(proxmox_cfg, monkeypatch):
@@ -348,7 +348,7 @@ def test_ensure_boot_artifact_uses_download_url(proxmox_cfg, monkeypatch):
 
     result = backend.ensure_boot_artifact()
 
-    expected_filename = _boot_iso_name(proxmox_cfg.talos_version)
+    expected_filename = _boot_iso_name(proxmox_cfg.talos_version, "abc123")
     downloads = [
         (path, payload) for method, path, payload in client.mutations
         if method == "POST" and path.endswith("/download-url")
@@ -385,7 +385,7 @@ def test_ensure_boot_artifact_downloads_once_for_shared_storage(proxmox_cfg, mon
 
 def test_ensure_boot_artifact_skips_when_iso_exists(proxmox_cfg, monkeypatch):
     data = _data()
-    filename = _boot_iso_name(proxmox_cfg.talos_version)
+    filename = _boot_iso_name(proxmox_cfg.talos_version, "abc123")
     volid = f"isos:iso/{filename}"
     data["nodes/pve001/storage/isos/content"] = [{"volid": volid}]
     data["nodes/pve002/storage/isos/content"] = [{"volid": volid}]

@@ -32,7 +32,7 @@ The provider touches five services during a converge. All must be present and re
 - **Keystone** (identity) — the `openstack.url` endpoint and the session scoping, including the `region` and the project label.
 - **Nova** (compute) — flavors and servers; each server is created volume-backed.
 - **Neutron** (network) — the tenant network, subnet, router, ports, security group and floating IPs.
-- **Glance** (image) — the shared Talos boot image, built and uploaded once per `talos.version`. The image needs a minimum 20 GB disk and 2 GiB RAM (`min_disk=20`, `min_ram=2048`) and the `hw_qemu_guest_agent=yes` property so the baked QEMU guest agent attaches its virtio-serial channel.
+- **Glance** (image) — the shared Talos boot image, built and uploaded once per `talos.version` and base schematic. Changing the base extension set yields a new image identity under a new name rather than reusing a stale one. The image needs a minimum 20 GB disk and 2 GiB RAM (`min_disk=20`, `min_ram=2048`) and the `hw_qemu_guest_agent=yes` property so the baked QEMU guest agent attaches its virtio-serial channel.
 - **Cinder** (volume) — the boot volumes behind each server; converge reads a server's boot volume size through Cinder to detect a `disk` change.
 
 Out-of-region or absent services cause a fail-fast error at the phase that needs them. `openstack region list` shows the available regions; if your cloud's region is not the default (`RegionOne`), copy your region's name into `openstack.region` (see [The configured region](#the-configured-region)).

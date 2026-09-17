@@ -93,14 +93,20 @@ def test_machine_name_is_hostname():
     assert naming.machine_name("mycluster-worker-01") == "mycluster-worker-01"
 
 
-def test_image_name_includes_talos_version_and_tailscale():
-    assert naming.image_name("v1.8.3") == "talos-v1.8.3-tailscale"
+def test_image_name_includes_talos_version_and_schematic():
+    assert naming.image_name("v1.8.3", "abc123") == "talos-v1.8.3-tailscale-abc123"
+
+
+def test_image_name_encodes_the_schematic():
+    """A different base extension set yields a different image identity, so a
+    stale image is not silently reused."""
+    assert naming.image_name("v1.8.3", "abc123") != naming.image_name("v1.8.3", "def456")
 
 
 def test_names_are_deterministic():
     """Same cluster input always yields the same names."""
     assert naming.network_name(CLUSTER) == naming.network_name(CLUSTER)
-    assert naming.image_name("v1.8.3") == naming.image_name("v1.8.3")
+    assert naming.image_name("v1.8.3", "abc123") == naming.image_name("v1.8.3", "abc123")
 
 
 def test_sdn_id_format_matches_proxmox_rules():

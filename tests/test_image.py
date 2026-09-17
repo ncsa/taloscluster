@@ -1,6 +1,9 @@
-"""Tests for taloscluster.openstack.image._download_and_decompress.
+"""Tests for taloscluster.openstack.image.
 
-The function streams an xz-compressed Talos raw image from the factory and
+Covers the schematic-aware boot image identity: an existing image is reused
+only when it carries the *current* base schematic, and a stale schematic gets a
+fresh image instead of a silent reuse. Also covers ``_download_and_decompress``,
+which streams an xz-compressed Talos raw image from the factory and
 lzma-decompresses it to disk. We monkeypatch ``requests.get`` with a fake
 context-manager response so no network is involved, and assert the happy path
 plus the two truncation guards (Content-Length mismatch and decomp.eof).
@@ -9,6 +12,7 @@ plus the two truncation guards (Content-Length mismatch and decomp.eof).
 from __future__ import annotations
 
 import lzma
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,12 +42,91 @@ class FakeResponse:
         yield from self._chunks
 
 
+class FakeGlance:
+    """A stand-in for the openstack ``conn.image`` façade."""
+
+    def __init__(self, images=None):
+        self.images = images if images is not None else []
+        self.created: list[str] = []
+
+    def find_image(self, name):
+        return next((i for i in self.images if i.name == name), None)
+
+    def create_image(self, filename=None, name=None, **kwargs):
+        img = SimpleNamespace(name=name, filename=filename, properties={})
+        self.images.append(img)
+        self.created.append(name)
+        return img
+
+    def update_image(self, img, **kwargs):
+        img.properties.update(kwargs)
+
+
+class FakeConn:
+    """A stand-in for an openstack connection whose ``image`` is a FakeGlance."""
+
+    def __init__(self, images=None):
+        self.image = FakeGlance(images)
+
+
 def _chunked(data: bytes, size: int = 1024) -> list[bytes]:
     return [data[i : i + size] for i in range(0, len(data), size)]
 
 
 def _patch_get(monkeypatch, fake: FakeResponse):
     monkeypatch.setattr(image.requests, "get", lambda *a, **k: fake)
+
+
+# ---------------------------------------------------------------------------
+# ensure_image: the schematic is part of the image identity
+# ---------------------------------------------------------------------------
+
+def _cfg(talos_version: str = "v1.13.9") -> SimpleNamespace:
+    return SimpleNamespace(talos_version=talos_version)
+
+
+def test_ensure_image_reuses_image_when_schematic_matches(monkeypatch):
+    """An image built from the current base extensions is reused, not rebuilt."""
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    built: list[str] = []
+    monkeypatch.setattr(image, "_build_image", lambda *a, **k: built.append(a[3]))
+    existing = SimpleNamespace(name="talos-v1.13.9-tailscale-abc123", properties={})
+    conn = FakeConn([existing])
+
+    name = image.ensure_image(conn, _cfg())
+
+    assert name == "talos-v1.13.9-tailscale-abc123"
+    assert conn.image.created == []
+    assert existing.name in {i.name for i in conn.image.images}
+
+
+def test_ensure_image_builds_fresh_image_for_stale_schematic(monkeypatch):
+    """An existing image for a *different* base extension set is not reused: a
+    new image under the current schematic's name is built instead."""
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "def456")
+    built: list[str] = []
+    monkeypatch.setattr(image, "_build_image", lambda conn, tv, ext, name: built.append(name))
+    stale = SimpleNamespace(name="talos-v1.13.9-tailscale-abc123", properties={})
+    conn = FakeConn([stale])
+
+    name = image.ensure_image(conn, _cfg())
+
+    assert name == "talos-v1.13.9-tailscale-def456"
+    assert built == ["talos-v1.13.9-tailscale-def456"]
+    # the stale image is left untouched for the old schematic
+    assert [i.name for i in conn.image.images] == ["talos-v1.13.9-tailscale-abc123"]
+
+
+def test_ensure_image_builds_when_no_image_present(monkeypatch):
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    built: list[str] = []
+    monkeypatch.setattr(image, "_build_image", lambda conn, tv, ext, name: built.append(name))
+    conn = FakeConn([])
+
+    name = image.ensure_image(conn, _cfg())
+
+    assert name == "talos-v1.13.9-tailscale-abc123"
+    assert built == ["talos-v1.13.9-tailscale-abc123"]
 
 
 # ---------------------------------------------------------------------------

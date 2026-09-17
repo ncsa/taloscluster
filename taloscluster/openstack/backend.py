@@ -21,6 +21,7 @@ from ..infrastructure import (
     TalosContribution,
 )
 from ..output import action, dry_run, info, log, warn
+from ..talos import factory
 from . import compute, image, network, security, talos
 from .network import _fixed_ip
 from .session import Inventory, connect, project_name
@@ -232,7 +233,8 @@ class OpenStackBackend:
 
     @_reconcile_errors
     def remove_image(self, assume_yes: bool = False) -> None:
-        name = naming.image_name(self.cfg.talos_version)
+        schematic = factory.schematic_id(naming.BASE_EXTENSIONS)
+        name = naming.image_name(self.cfg.talos_version, schematic)
         img = self.conn.image.find_image(name)
         if img is None:
             info(f"image {name} not found, nothing to remove")

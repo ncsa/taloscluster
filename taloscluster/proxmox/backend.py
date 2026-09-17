@@ -313,7 +313,7 @@ class ProxmoxBackend:
     def ensure_boot_artifact(self) -> str:
         inventory = self._require_preflight()
         schematic = factory.schematic_id(naming.BASE_EXTENSIONS)
-        filename = _boot_iso_name(self.cfg.talos_version)
+        filename = _boot_iso_name(self.cfg.talos_version, schematic)
         nodes = self._iso_nodes(inventory)
         volumes = {
             node: self._find_iso(node, self.provider.iso_storage, filename) for node in nodes
@@ -1649,7 +1649,8 @@ class ProxmoxBackend:
 
     def remove_image(self, assume_yes: bool = False) -> None:
         inventory = self._require_preflight()
-        filename = _boot_iso_name(self.cfg.talos_version)
+        schematic = factory.schematic_id(naming.BASE_EXTENSIONS)
+        filename = _boot_iso_name(self.cfg.talos_version, schematic)
         volumes = {
             node: self._find_iso(node, self.provider.iso_storage, filename)
             for node in self._iso_nodes(inventory)
@@ -1879,8 +1880,8 @@ class ProxmoxBackend:
         )
 
 
-def _boot_iso_name(talos_version: str) -> str:
-    return f"{naming.image_name(talos_version)}.iso"
+def _boot_iso_name(talos_version: str, schematic: str) -> str:
+    return f"{naming.image_name(talos_version, schematic)}.iso"
 
 
 def _cidata_name(cluster: str, hostname: str) -> str:
