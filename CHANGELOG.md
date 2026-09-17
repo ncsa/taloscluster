@@ -6,66 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-- Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.
-- Abort a control-plane scale-down when the graceful reset fails or times out, and health-check between removals.
-- Require `talosctl health` after a control-plane upgrade, reboot or config apply before touching the next one; the kube-api VIP no longer counts as healthy.
-- Apply machine configs to control planes one at a time, waiting for each restart to finish.
-- Remove owned machines that never joined Kubernetes, or whose VM delete failed earlier, during scale-down.
-- Refuse to generate machine configs when a running cluster's Kubernetes version cannot be read.
-- Refuse a Kubernetes upgrade when the running version cannot be determined instead of skipping it.
-- Boot nodes scaled up in the same run as a Kubernetes upgrade at the upgraded version.
-- Retry the kube-api probe and warn when an existing cluster is unreachable instead of treating it as new; converge then exits 1 and defers plugin changes.
-- Recover a missing kubeconfig from the Talos identity before deciding a cluster is new, on clusters with or without Tailscale.
-- Refuse to generate a fresh `talossecrets.yaml` when machines already exist.
+### Added
+
 - Bound every `kubectl` call with a request timeout so a hung kube-api fails converge instead of hanging it.
 - Report a machine missing from both Talos discovery and Kubernetes as an incomplete `check`.
 - Exit nonzero from `check` when version data is incomplete, with `incomplete` and `incomplete_reasons` in the report.
 - Detect extension-only changes from the running schematic so adding or removing an extension reinstalls the node.
-- Never use the kube-api VIP as a node address; nodes reporting only VIPs fall back to the provider inventory.
-- Detect Tailscale addresses across the whole `100.64.0.0/10` range.
-- Redact registry passwords, `machine.files` and inline-manifest contents, multiline credentials and secret-like environment entries from the `plan` diff.
-- Emit no `--login-server` argument when `tailscale.login_server` is unset.
-- Reject unsupported Proxmox changes (disk shrink, NIC move, placement or storage change) before any mutation, and report them in `plan`.
 - Refuse OpenStack flavor, disk and availability-zone changes with recreation guidance; update an existing subnet's DNS in place.
 - Warn that `network.dns` is not applied on DHCP-backed Proxmox networks.
 - Refuse duplicate Proxmox VM names that involve a cluster-managed machine.
 - Refuse Proxmox SDN teardown or converge while the shared controller or the cluster's own zone, VNet or subnet has pending `deleted` or `changed` state, before any VM is deleted.
-- Re-verify the managed SDN bridge on every converge, waiting up to a minute for it to appear.
-- Remember a grown Proxmox disk until the node reboots so a later `--reboot` converge restarts it.
-- Accept Proxmox tasks that finish with warnings as successful.
 - Report the firewall a new Proxmox VM would get during `plan`.
-- Reclaim OpenStack ports left behind by machines that never got a server.
-- Fix OpenStack security-group normalization so allowlists are enforced and `0.0.0.0/0` is not recreated on every run.
-- Use the configured OpenStack region instead of a hardcoded `RegionOne`.
-- Include the extension schematic in the boot image and ISO name so changing base extensions builds a fresh image.
 - Print one `ERROR:` line and exit 1 on provider API failures instead of a traceback.
 - Refuse unknown or misspelled keys in every fixed-schema section of `cluster.yaml` and `secrets.yaml`, including plugin and nested Proxmox sections.
-- Normalize a missing `v` prefix on `talos.version` and `kubernetes.version`.
 - Refuse null, non-string, empty or scaffolded `CHANGE-ME` secrets at load time.
-- Fix the hostname-length check for pools with 100 or more nodes.
-- Scaffold the Proxmox `kubeapi_vip` outside the managed-SDN static layout.
-- Create `talossecrets.yaml` with mode 0600 from the start.
 - Run plugin validation for every installed plugin before any cluster mutation, including standalone `plugin NAME` commands.
 - Report plugin work that must wait for the first bootstrap as deferred in `plan` instead of failing.
 - Require the cluster name to confirm `plugin NAME destroy`, matching top-level `destroy`.
-- Contain a plugin's fatal error so one plugin cannot abort the whole run; warn on duplicate plugin entry-point names.
-- Forward plugin `check`/`status` results to later plugins so ArgoCD renders the same Rancher cluster id as converge.
-- Refuse Rancher converge and destroy when the Rancher cluster's id does not match the downstream agent, or when the agent matches no Rancher cluster; `check`/`status` report the mismatch and `destroy` removes an orphaned agent.
-- Fail Rancher member reconciliation when a configured user cannot be resolved instead of removing their binding.
-- Resolve Rancher members on an exact id match, and reject a user listed under both `admins` and `users` or under both via an alias.
 - Validate Rancher settings and require the `BackingNamespaceCreated` condition to be `True` before creating registration tokens.
-- Fix Rancher API error messages that were joined character by character.
 - Split ArgoCD sync settings: `argocd.sync` sets the chart value, new `argocd.automated` controls automated sync, pruning and self-healing.
 - Require real YAML types for ArgoCD booleans, member lists, URLs and apply targets; refuse unknown per-app keys and version overrides on apps that ignore them.
-- Render ArgoCD manifests through a YAML serializer so values with quotes, colons or newlines are preserved.
-- Pass the Proxmox `ingress_pool` to ArgoCD so MetalLB address pools render for both providers.
-- Deliver the OpenStack Cinder cloud.conf as a Secret instead of embedding credentials in ArgoCD values.
-- Give the ArgoCD AppProject `user` role the read access its name implies.
-- Activate the ArgoCD plugin only with a `kubeconfig` or `context` apply target.
 - Add a live workflow test script that drives the CLI against a disposable cluster.
-- Reorganize the documentation around installation, quickstart, usage, commands, configuration, plugins and troubleshooting, and shorten the README.
 - Add guides for OpenStack setup, backup and recovery, node maintenance, load balancers and ingress, and both management access paths.
 - Expand troubleshooting with diagnostics and recovery for the new refusals, missing Talos secrets, failed drains, incomplete checks, plugin failures and interrupted upgrades.
+
+### Changed
+
+- Apply machine configs to control planes one at a time, waiting for each restart to finish.
+- Require `talosctl health` after a control-plane upgrade, reboot or config apply before touching the next one; the kube-api VIP no longer counts as healthy.
+- Remove owned machines that never joined Kubernetes, or whose VM delete failed earlier, during scale-down.
+- Refuse to generate machine configs when a running cluster's Kubernetes version cannot be read.
+- Refuse a Kubernetes upgrade when the running version cannot be determined instead of skipping it.
+- Retry the kube-api probe and warn when an existing cluster is unreachable instead of treating it as new; converge then exits 1 and defers plugin changes.
+- Recover a missing kubeconfig from the Talos identity before deciding a cluster is new, on clusters with or without Tailscale.
+- Refuse to generate a fresh `talossecrets.yaml` when machines already exist.
+- Never use the kube-api VIP as a node address; nodes reporting only VIPs fall back to the provider inventory.
+- Reject unsupported Proxmox changes (disk shrink, NIC move, placement or storage change) before any mutation, and report them in `plan`.
+- Re-verify the managed SDN bridge on every converge, waiting up to a minute for it to appear.
+- Use the configured OpenStack region instead of a hardcoded `RegionOne`.
+- Include the extension schematic in the boot image and ISO name so changing base extensions builds a fresh image.
+- Normalize a missing `v` prefix on `talos.version` and `kubernetes.version`.
+- Scaffold the Proxmox `kubeapi_vip` outside the managed-SDN static layout.
+- Create `talossecrets.yaml` with mode 0600 from the start.
+- Forward plugin `check`/`status` results to later plugins so ArgoCD renders the same Rancher cluster id as converge.
+- Refuse Rancher converge and destroy when the Rancher cluster's id does not match the downstream agent, or when the agent matches no Rancher cluster; `check`/`status` report the mismatch and `destroy` removes an orphaned agent.
+- Resolve Rancher members on an exact id match, and reject a user listed under both `admins` and `users` or under both via an alias.
+- Render ArgoCD manifests through a YAML serializer so values with quotes, colons or newlines are preserved.
+- Deliver the OpenStack Cinder cloud.conf as a Secret instead of embedding credentials in ArgoCD values.
+- Activate the ArgoCD plugin only with a `kubeconfig` or `context` apply target.
+- Reorganize the documentation around installation, quickstart, usage, commands, configuration, plugins and troubleshooting, and shorten the README.
+
+### Fixed
+
+- Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.
+- Abort a control-plane scale-down when the graceful reset fails or times out, and health-check between removals.
+- Boot nodes scaled up in the same run as a Kubernetes upgrade at the upgraded version.
+- Detect Tailscale addresses across the whole `100.64.0.0/10` range.
+- Redact registry passwords, `machine.files` and inline-manifest contents, multiline credentials and secret-like environment entries from the `plan` diff.
+- Emit no `--login-server` argument when `tailscale.login_server` is unset.
+- Remember a grown Proxmox disk until the node reboots so a later `--reboot` converge restarts it.
+- Accept Proxmox tasks that finish with warnings as successful.
+- Reclaim OpenStack ports left behind by machines that never got a server.
+- Fix OpenStack security-group normalization so allowlists are enforced and `0.0.0.0/0` is not recreated on every run.
+- Fix the hostname-length check for pools with 100 or more nodes.
+- Contain a plugin's fatal error so one plugin cannot abort the whole run; warn on duplicate plugin entry-point names.
+- Fail Rancher member reconciliation when a configured user cannot be resolved instead of removing their binding.
+- Fix Rancher API error messages that were joined character by character.
+- Pass the Proxmox `ingress_pool` to ArgoCD so MetalLB address pools render for both providers.
+- Give the ArgoCD AppProject `user` role the read access its name implies.
 
 ## [0.7.0] - 2026-09-06
 
