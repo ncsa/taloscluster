@@ -139,9 +139,36 @@ class ProxmoxBackend:
         if refresh or self._inventory is None:
             self._preflight_complete = False
             self._inventory = load(self.client)
+            self._refuse_duplicate_names(self._inventory)
             self._validate_environment(self._inventory)
             self._validate_permissions(self._inventory)
         return self._inventory
+
+    def _refuse_duplicate_names(self, inventory: ProxmoxInventory) -> None:
+        """Reject two VMs sharing a name when a managed one is involved.
+
+        The inventory keys machines by VM name, so when two VMIDs share a name
+        the later entry overwrites the earlier in ``vms``. A later unowned VM
+        would hide an owned one -- reading as an empty inventory to the
+        Talos-identity guard (secrets are then generated for, or destroy wipes
+        identity for, a cluster that still has managed VMs). Two owned VMs
+        colliding is equally ambiguous: whichever the list order keeps, the
+        other managed machine is invisible. Reject the ambiguity up front rather
+        than gamble on the ``cluster/resources`` order; two VMs sharing a name
+        where neither is managed by this cluster is left alone.
+        """
+        ambiguous = [
+            name
+            for name, group in inventory.vm_collisions.items()
+            if any(self._owns_vm(inventory, vm) for vm in group)
+        ]
+        if ambiguous:
+            raise ReconcileError(
+                "duplicate Proxmox VM names among "
+                f"cluster-managed machines: {', '.join(sorted(ambiguous))}; "
+                "the inventory keys machines by name, so rename the VMs so "
+                "every managed name is unique"
+            )
 
     def _validate_environment(self, inventory: ProxmoxInventory) -> None:
         online = {name for name, node in inventory.nodes.items() if node.online}

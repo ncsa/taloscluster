@@ -155,6 +155,68 @@ def test_inventory_uses_bulk_reads_and_only_exposes_owned_vms(proxmox_cfg):
     ]
 
 
+def _collision_data(second_vmid, tags="unmanaged", before_owned=False, pool=None):
+    """Inventory with a second VM sharing the owned VM's name.
+
+    `before_owned` places the colliding VM ahead of the managed one in the
+    `cluster/resources` list, so the order that hides/keeps each VMID flips.
+    """
+    data = _data()
+    second = {
+        "type": "qemu",
+        "vmid": second_vmid,
+        "name": "testcluster-controlplane-01",
+        "node": "pve002",
+        "status": "running",
+        "tags": tags,
+        "pool": pool or "",
+    }
+    owned = data["cluster/resources"][0]
+    assert owned["name"] == "testcluster-controlplane-01"
+    pair = [second, owned] if before_owned else [owned, second]
+    data["cluster/resources"] = pair + data["cluster/resources"][1:]
+    return data
+
+
+def test_duplicate_managed_vm_name_is_rejected_regardless_of_list_order(proxmox_cfg):
+    """An unowned VM sharing the managed VM's name must never hide it from the
+    Talos-identity guard, whichever the cluster/resources order is."""
+    for before_owned in (False, True):
+        data = _collision_data(801, before_owned=before_owned)
+        with pytest.raises(ReconcileError, match="duplicate Proxmox VM names"):
+            _backend(proxmox_cfg, FakeClient(data)).load_inventory()
+
+
+def test_two_owned_vms_sharing_a_name_are_rejected(proxmox_cfg):
+    """Two cluster-managed VMs with the same name are ambiguous in both orders:
+    whichever the list keeps, the other managed machine would be invisible."""
+    data = _collision_data(
+        801, tags="taloscluster;cluster_testcluster;role_controlplane;pool_controlplane",
+        pool="taloscluster-testcluster",
+    )
+    with pytest.raises(ReconcileError, match="testcluster-controlplane-01"):
+        _backend(proxmox_cfg, FakeClient(data)).load_inventory()
+
+
+def test_same_named_unmanaged_vms_are_not_rejected(proxmox_cfg):
+    """A name collision between VMs none of which this cluster owns is harmless
+    to the per-name machine lookup, so it must not fabricate an error."""
+    data = _data()
+    data["cluster/resources"][0]["tags"] = "unmanaged"  # owned VM becomes unowned
+    data["cluster/resources"].append(
+        {
+            "type": "qemu",
+            "vmid": 802,
+            "name": "testcluster-controlplane-01",
+            "node": "pve002",
+            "status": "running",
+            "tags": "unmanaged",
+        }
+    )
+    inventory = _backend(proxmox_cfg, FakeClient(data)).load_inventory()
+    assert inventory.machines == {}
+
+
 def test_inventory_uses_guest_agent_private_address(proxmox_cfg):
     data = _data()
     data["nodes/pve001/qemu/800/agent/network-get-interfaces"] = {

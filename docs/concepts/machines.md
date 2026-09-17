@@ -16,7 +16,7 @@ Converge creates a private network from [`network.cidr`](../configuration/networ
 
 ## Proxmox
 
-Converge downloads the boot ISO to `iso_storage`, writes each node's machine configuration to a small cloud-init volume on node-local storage, creates the VM in the resource pool `taloscluster-<name>`, and configures the per-VM firewall. The first NIC attaches to an existing bridge or VNet, or to a managed EVPN SDN network that taloscluster creates itself. An optional second NIC on a routed subnet can carry the API VIP and ingress addresses directly. After successful health checks, converge detaches and deletes the temporary cloud-init ISO. See the [Proxmox settings](../configuration/proxmox.md).
+Converge downloads the boot ISO to `iso_storage`, writes each node's machine configuration to a small cloud-init volume on node-local storage, creates the VM in the resource pool `taloscluster-<name>`, and configures the per-VM firewall. The first NIC attaches to an existing bridge or VNet, or to a managed EVPN SDN network that taloscluster creates itself. An optional second NIC on a routed subnet can carry the API VIP and ingress addresses directly. After successful health checks, converge detaches and deletes the temporary cloud-init ISO. Proxmox keys machines by VM name, so a name shared by two VMs — one managed by this cluster or two — is refused up front (converge or destroy aborts) rather than letting the `cluster/resources` list order hide the managed machine; two same-named VMs none of which this cluster owns is left alone. See the [Proxmox settings](../configuration/proxmox.md).
 
 ## Reaching the nodes
 

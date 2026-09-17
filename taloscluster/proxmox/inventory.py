@@ -43,6 +43,11 @@ class ProxmoxInventory:
     storages: dict[str, dict[str, Any]] = field(default_factory=dict)
     pools: dict[str, ProxmoxPool] = field(default_factory=dict)
     vms: dict[str, ProxmoxVM] = field(default_factory=dict)
+    #: VM names shared by more than one VMID, every VMID preserved. `vms` keys a
+    #: VM by its name, so a later same-named VM overwrites an earlier one there;
+    #: each colliding group is kept here so callers can reject the ambiguity
+    #: instead of gambling on the `cluster/resources` list order.
+    vm_collisions: dict[str, list[ProxmoxVM]] = field(default_factory=dict)
     permissions: dict[str, Any] = field(default_factory=dict)
     firewall_options: dict[str, Any] = field(default_factory=dict)
 
@@ -72,6 +77,7 @@ def load(client: ProxmoxClient) -> ProxmoxInventory:
         if item.get("poolid")
     }
     vms: dict[str, ProxmoxVM] = {}
+    collisions: dict[str, list[ProxmoxVM]] = {}
     for item in _items(client.get("cluster/resources", params={"type": "vm"})):
         if item.get("type") not in (None, "qemu") or not item.get("name"):
             continue
@@ -84,6 +90,9 @@ def load(client: ProxmoxClient) -> ProxmoxInventory:
             tags=_tags(item.get("tags")),
             memory=int(item.get("maxmem") or 0),
         )
+        earlier = vms.get(vm.name)
+        if earlier is not None:
+            collisions.setdefault(vm.name, [earlier]).append(vm)
         vms[vm.name] = vm
     permissions = client.get("access/permissions")
     fw_opts = client.get("cluster/firewall/options")
@@ -92,6 +101,7 @@ def load(client: ProxmoxClient) -> ProxmoxInventory:
         storages=storages,
         pools=pools,
         vms=vms,
+        vm_collisions=collisions,
         permissions=dict(permissions) if isinstance(permissions, dict) else {},
         firewall_options=dict(fw_opts) if isinstance(fw_opts, dict) else {},
     )
