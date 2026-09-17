@@ -1202,8 +1202,6 @@ def test_typo_region_no_longer_silently_selects_regionone(make_config):
 def test_proxmox_network_nested_key_is_rejected(make_config, overrides, field):
     """A miscapped or unsupported key inside a `proxmox.network` block is refused
     instead of loading and being silently ignored."""
-    cluster_yaml = overrides.get("network", None)
-    overrides["network"] = cluster_yaml or {}
     cfg_overrides = {
         "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
         "proxmox": {
