@@ -2231,6 +2231,8 @@ name = "taloscluster"
 version = "0.7.0"
 source = { editable = "." }
 dependencies = [
+    { name = "keystoneauth1", version = "5.14.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "keystoneauth1", version = "5.17.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "openstacksdk", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "openstacksdk", version = "4.20.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyyaml" },
@@ -2267,6 +2269,7 @@ rancher = [
 
 [package.metadata]
 requires-dist = [
+    { name = "keystoneauth1", specifier = ">=5.0" },
     { name = "mkdocs-material", marker = "extra == 'dev'", specifier = ">=9.7.7" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "openstacksdk", specifier = ">=3.0" },

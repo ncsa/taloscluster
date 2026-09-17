@@ -145,6 +145,13 @@ def test_pyproject_description_is_provider_neutral():
     assert "OpenStack or Proxmox" in text
 
 
+def test_keystoneauth1_is_a_declared_dependency():
+    text = (ROOT / "pyproject.toml").read_text()
+    # backend.py imports keystoneauth1.exceptions directly; it must be a declared
+    # dependency, not a transitive one, so the import does not silently break.
+    assert "keystoneauth1" in text
+
+
 def test_configuration_overview_plugin_validate_runs_everywhere_up_front():
     text = (DOCS / "configuration.md").read_text()
     # The plugin `validate` hook runs in converge's validate phase for every
