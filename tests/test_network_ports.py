@@ -62,6 +62,12 @@ class FakeInv:
     def put(self, kind, obj):
         return obj
 
+    def all(self, kind):
+        return {name: obj for (k, name), obj in self.existing.items() if k == kind}
+
+    def drop(self, kind, name):
+        self.existing.pop((kind, name), None)
+
 
 @pytest.fixture(autouse=True)
 def _live_run():
@@ -128,3 +134,63 @@ def test_dry_run_does_not_attach_router_interface():
     network._ensure_router_interface(conn, router, subnet)
 
     assert calls == []
+
+
+# ---- stale machine ports ---------------------------------------------------
+
+def test_stale_machine_port_is_deleted_when_no_longer_desired():
+    """A network-only machine (port exists, no server) that a later converge no
+    longer wants must have its port reclaimed; reserved VIP ports survive."""
+    conn = FakeConn()
+    inv = FakeInv({
+        ("ports", "testcluster-worker-02"): _port("testcluster-worker-02", [SG.id]),
+        ("ports", "testcluster-kubeapi"): _port("testcluster-kubeapi", [SG.id]),
+        ("ports", "testcluster-ingress"): _port("testcluster-ingress", [SG.id]),
+    })
+    network._drop_stale_machine_ports(
+        conn, "testcluster", {"testcluster-worker-01"}, inv
+    )
+    assert conn.deleted == ["id-testcluster-worker-02"]
+    assert set(inv.all("ports")) == {
+        "testcluster-kubeapi",
+        "testcluster-ingress",
+    }
+
+
+def test_stale_port_with_a_live_server_is_left_for_scale_down():
+    """A scaled-down machine whose server still exists is (drain + reset then)
+    removed by ``_scale_down``; the network phase must not tear off its NIC."""
+    conn = FakeConn()
+    inv = FakeInv({
+        ("ports", "testcluster-worker-02"): _port("testcluster-worker-02", [SG.id]),
+        ("servers", "testcluster-worker-02"): types.SimpleNamespace(
+            id="server-worker-02", name="testcluster-worker-02"
+        ),
+    })
+    network._drop_stale_machine_ports(
+        conn, "testcluster", {"testcluster-worker-01"}, inv
+    )
+    assert conn.deleted == []
+    assert set(inv.all("ports")) == {"testcluster-worker-02"}
+
+
+def test_desired_machine_port_is_kept():
+    conn = FakeConn()
+    inv = FakeInv({
+        ("ports", "testcluster-worker-01"): _port("testcluster-worker-01", [SG.id]),
+    })
+    network._drop_stale_machine_ports(
+        conn, "testcluster", {"testcluster-worker-01"}, inv
+    )
+    assert conn.deleted == []
+    assert set(inv.all("ports")) == {"testcluster-worker-01"}
+
+
+def test_dry_run_reports_but_does_not_delete_stale_port():
+    conn = FakeConn()
+    inv = FakeInv({
+        ("ports", "testcluster-worker-02"): _port("testcluster-worker-02", [SG.id]),
+    })
+    set_dry_run(True)
+    network._drop_stale_machine_ports(conn, "testcluster", {"testcluster-worker-01"}, inv)
+    assert conn.deleted == []

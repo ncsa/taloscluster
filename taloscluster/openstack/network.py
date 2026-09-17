@@ -26,7 +26,7 @@ from openstack import exceptions
 from .. import naming
 from ..config import Config, Machine
 from ..errors import ReconcileError
-from ..output import action, dry_run, info
+from ..output import action, dry_run, info, warn
 from .session import Inventory
 from .tags import create_tagged
 
@@ -77,7 +77,38 @@ def reconcile(
         port = _ensure_machine_port(conn, cluster, m, network, sg, pair, inv)
         refs.machine_private_ips[host] = _fixed_ip(port)
 
+    _drop_stale_machine_ports(conn, cluster, set(machines), inv)
+
     return refs
+
+
+def _drop_stale_machine_ports(conn, cluster, desired: set[str], inv) -> None:
+    """Delete owned per-machine ports whose machine is no longer desired.
+
+    The OpenStack inventory builds ``machines`` from servers only, so a port the
+    network phase created for a machine whose server create failed (or a pool
+    shrank between phases) is never seen by scale-down's server-based scan and
+    would otherwise leak until ``destroy``. Reconcile the ports here instead: any
+    owned port that is neither a desired machine's port nor a reserved VIP port
+    is reclaimed. A stale port whose machine still has a server is left alone --
+    scale-down drains + resets the node before deleting it; tearing off its NIC
+    here (before scale-down runs) would drop a live node. The reserved ports are
+    found-by-name and share none of the machine hostnames, so they are never
+    touched.
+    """
+    reserved = {naming.kubeapi_name(cluster), naming.ingress_name(cluster)}
+    for name, port in list(inv.all("ports").items()):
+        if name in desired or name in reserved:
+            continue
+        if inv.get("servers", name) is not None:
+            continue
+        action(f"delete stale port {name}")
+        if not dry_run():
+            try:
+                conn.network.delete_port(port.id)
+            except exceptions.SDKException as exc:
+                warn(f"could not delete stale port {name}: {exc}")
+        inv.drop("ports", name)
 
 
 # ---------------------------------------------------------------------------
