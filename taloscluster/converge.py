@@ -1961,11 +1961,11 @@ def dashboard(root: Path, nodes: list[str] | None = None) -> None:
 
 
 def print_env(root: Path) -> None:
-    """Print the OS_* auth exports (from cluster.yaml + secrets.yaml) so the
-    `openstack` CLI can use the same application credential taloscluster does:
+    """Print the provider's CLI authentication exports (from cluster.yaml +
+    secrets.yaml) so the provider CLI can use the same credential taloscluster
+    does:
 
         eval "$(taloscluster env)"
-        openstack image show ...
 
     Note: this writes the credential secret to stdout -- intended for eval, not
     for logging.
@@ -1976,8 +1976,8 @@ def print_env(root: Path) -> None:
 
 
 def image_download(root: Path) -> None:
-    """Build (factory -> download -> decompress) and upload the boot image to
-    Glance if it isn't there yet. Standalone version of the converge image phase;
+    """Build (factory -> download -> decompress) and upload the boot image if it
+    isn't there yet. Standalone version of the converge image phase;
     handy for pre-seeding the image without touching the cluster."""
     cfg = load_config(root)
     secrets = load_secrets(root)
@@ -1988,7 +1988,7 @@ def image_download(root: Path) -> None:
 
 
 def image_remove(root: Path, assume_yes: bool = False) -> None:
-    """Delete the boot image for this cluster's talos version from Glance.
+    """Delete the boot image for this cluster's talos version.
 
     converge never deletes the image (it is shared and reused); this is the
     explicit way to remove it, e.g. to force a rebuild after changing the baked
@@ -2018,7 +2018,7 @@ def destroy(root: Path, assume_yes: bool = False) -> int:
         if resp != cfg.name:
             raise SystemExit("aborted")
 
-    # Plugins still run before OpenStack teardown, while the cluster is
+    # Plugins still run before provider teardown, while the cluster is
     # reachable, but only after the user has confirmed the entire destroy.
     ctx = Context(root=root, cfg=cfg)
     failed = _run_plugins(ctx, "destroy", reverse=True, assume_yes=assume_yes)

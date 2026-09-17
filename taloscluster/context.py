@@ -4,7 +4,7 @@ A plugin should never have to re-derive endpoint or infrastructure facts --
 converge computed them a moment ago. `Context` carries them, plus the loaded
 cluster.yaml and the paths to the derived client configs.
 
-The expensive part (the status payload, which needs an OpenStack connection) is
+The expensive part (the status payload, which needs a provider connection) is
 either pre-filled by converge from the refs it already holds, or fetched lazily
 on first access and cached. A plugin that never looks at infrastructure/ingress
 (rancher does not) therefore costs nothing.

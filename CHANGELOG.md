@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- Sweep the remaining OpenStack-only wording out of provider-neutral code: the `plan`, `check`, `image` and `dashboard` CLI help (including the non-Tailscale dashboard path), the `print_env`/`image`/`destroy` prose, the `ReconcileError` and `Context` docstrings, and the `pyproject.toml` description, and extend the docstring-drift test to CLI help strings and `pyproject.toml`.
 - Bound every `kubectl` call (core wrapper, the shared Rancher `cluster_id` reader, and the argocd and rancher plugins) with a 30s wall-clock request timeout (330s for `drain`), so a kube-api that accepts TCP but never answers (a VIP owned by a half-dead control plane) fails converge with a clear error instead of hanging; callers distinguish a timed-out request from a negative answer.
 - Wrap OpenStack provider errors (the `openstack.exceptions.SDKException` tree — a Neutron 409, a `wait_for_delete` timeout, a quota error — and keystoneauth1 requests such as a rejected credential or an unreachable/timing-out cloud) into a `ReconcileError` at the backend boundary, so `cli.main` prints one `ERROR:` line and exits 1 instead of leaking a traceback.
 - Reclaim a leaked OpenStack port during the network phase when its machine is no longer desired and never got a server, instead of leaving it orphaned until `destroy` (a live server's port is still left for scale-down, which drains first).

@@ -22,7 +22,7 @@ class StateError(Exception):
 
 
 class ReconcileError(Exception):
-    """An OpenStack resource could not be converged to the desired state."""
+    """A provider resource could not be converged to the desired state."""
 
 
 class PreflightError(Exception):

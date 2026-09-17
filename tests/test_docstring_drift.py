@@ -79,6 +79,8 @@ def test_module_docstrings_drop_removed_tooling_and_openstack_only_claims():
         "talos/factory.py",
         "openstack/compute.py",
         "openstack/session.py",
+        "context.py",
+        "openstack/backend.py",
     ):
         text = (TALOSCLUSTER / name).read_text()
         assert "terraform" not in text
@@ -105,6 +107,42 @@ def test_configuration_overview_refused_keys_are_not_self_contradicting():
     assert "used to silently fall back" in text
     # Nested fixed-schema blocks are covered here, not just on the Proxmox page.
     assert "proxmox.network" in text
+
+
+def test_cli_help_strings_are_provider_neutral():
+    src = (TALOSCLUSTER / "cli.py").read_text()
+    # The plan / check / image / dashboard descriptions no longer single out one
+    # provider, and the non-Tailscale dashboard path is described too.
+    assert "Changes nothing in OpenStack or the cluster" not in src
+    assert "needs no OpenStack credentials" not in src
+    assert "upload to Glance" not in src
+    assert "delete from Glance" not in src
+    assert "Requires this machine to be on the tailnet" not in src
+    assert "on the tailnet" in src
+    assert "else on the cluster network" in src
+
+
+def test_command_prose_is_provider_neutral():
+    # print_env / destroy / image prose in converge.py and the errors/context
+    # docstrings describe the generic provider, not OpenStack alone.
+    converge = (TALOSCLUSTER / "converge.py").read_text()
+    assert "OS_* auth exports" not in converge
+    assert "the same application credential taloscluster does" not in converge
+    assert "before OpenStack teardown" not in converge
+    assert "to Glance" not in converge
+    assert "from Glance" not in converge
+    errors = (TALOSCLUSTER / "errors.py").read_text()
+    assert "An OpenStack resource" not in errors
+    context = (TALOSCLUSTER / "context.py").read_text()
+    assert "needs an OpenStack connection" not in context
+
+
+def test_pyproject_description_is_provider_neutral():
+    text = (ROOT / "pyproject.toml").read_text()
+    # The package description no longer names the removed terraform/cluster.sh
+    # workflow; taloscluster also drives Proxmox now.
+    assert "terraform" not in text
+    assert "OpenStack or Proxmox" in text
 
 
 def test_configuration_overview_plugin_validate_runs_everywhere_up_front():

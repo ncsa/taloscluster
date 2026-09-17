@@ -248,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         "plan",
         help="dry-run converge (alias for converge --dry-run)",
         description="Dry-run a converge: print every create/update/delete that "
-                    "converge would perform. Changes nothing in OpenStack or the "
+                    "converge would perform. Changes nothing in the "
                     "cluster (it does POST idempotent schematics to factory.talos.dev "
                     "and makes read-only provider inventory requests).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -286,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
                     "actually runs. Reports the newest patch of the pinned "
                     "minor (a safe in-place bump) separately from the newest "
                     "release overall, plus any node not yet on the pinned "
-                    "versions. Read-only: it needs no OpenStack credentials and "
+                    "versions. Read-only: it needs no provider credentials and "
                     "changes nothing. Exits 1 when an update or a drift was "
                     "found, 0 when everything is current, so it can gate CI.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -307,7 +307,8 @@ def main(argv: list[str] | None = None) -> int:
                     "that booted but never joined kubernetes is still included. "
                     "Nodes whose apid does not answer are reported and dropped -- "
                     "talosctl dashboard aborts if any single target is unreachable. "
-                    "Requires this machine to be on the tailnet.",
+                    "This machine must be able to reach each node (on the tailnet "
+                    "when it is enabled, else on the cluster network).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common(p_dash)
@@ -341,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_common(p_image)
     p_image.add_argument(
         "action", choices=["download", "remove"],
-        help="download = build + upload to Glance if missing; remove = delete from Glance",
+        help="download = build + upload the boot image if missing; remove = delete it",
     )
     p_image.add_argument("--dry-run", action="store_true", help="print actions, change nothing")
     p_image.add_argument("--yes", action="store_true",
