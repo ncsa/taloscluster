@@ -49,6 +49,18 @@ _PROVIDER_KEYS = {
     "proxmox": {"url", "storage", "iso_storage", "cidata_storage",
                 "placement_strategy", "nodes", "tls_verify", "network"},
 }
+#: Direct keys `proxmox.network` accepts. Both subsections are fixed-schema, so
+#: a miscapped `clustr`/`extrnl` section is refused instead of ignored.
+_PROXMOX_NETWORK_KEYS = {"cluster", "external"}
+#: Direct keys `proxmox.network.cluster` accepts; exactly one of `bridge`,
+#: `vnet` or `sdn` is required (see :func:`_validate`).
+_PROXMOX_CLUSTER_KEYS = {"bridge", "vnet", "vlan", "kubeapi_vip", "sdn"}
+#: Direct keys `proxmox.network.cluster.sdn` accepts.
+_PROXMOX_SDN_KEYS = {"name", "zone", "controller", "asn", "vrf_tag", "tag",
+                     "mtu", "nodes", "exit_nodes", "primary_exit_node"}
+#: Direct keys `proxmox.network.external` accepts.
+_PROXMOX_EXTERNAL_KEYS = {"bridge", "cidr", "gateway", "anchor_cidr",
+                          "kubeapi_vip", "vlan", "ingress_pool"}
 #: Keys a pool may carry; `tags` is a freeform label map and both `extensions` /
 #: `config_patches` are freeform lists, so only the structural keys are fixed.
 _POOL_KEYS = {"count", "flavor", "disk", "cores", "memory", "node",
@@ -1015,8 +1027,14 @@ def _validate(cfg: Config) -> None:
             raise ConfigError(
                 "cluster.yaml: proxmox.tls_verify must be true, false, or a CA bundle path"
             )
+        _reject_unknown_keys(
+            provider.network, "cluster.yaml: proxmox.network", _PROXMOX_NETWORK_KEYS
+        )
         cluster_network = _mapping(
             provider.network.get("cluster"), "cluster.yaml: proxmox.network.cluster"
+        )
+        _reject_unknown_keys(
+            cluster_network, "cluster.yaml: proxmox.network.cluster", _PROXMOX_CLUSTER_KEYS
         )
         links = [name for name in ("bridge", "vnet") if cluster_network.get(name)]
         if "sdn" in cluster_network:
@@ -1025,8 +1043,14 @@ def _validate(cfg: Config) -> None:
                     "cluster.yaml: proxmox.network.cluster.sdn is mutually exclusive "
                     "with bridge, vnet, and vlan"
                 )
+            sdn_map = _mapping(
+                cluster_network.get("sdn"), "cluster.yaml: proxmox.network.cluster.sdn"
+            )
+            _reject_unknown_keys(
+                sdn_map, "cluster.yaml: proxmox.network.cluster.sdn", _PROXMOX_SDN_KEYS
+            )
             _validate_proxmox_sdn(
-                cluster_network.get("sdn"), cfg, cluster_network.get("kubeapi_vip")
+                sdn_map, cfg, cluster_network.get("kubeapi_vip")
             )
         elif len(links) != 1:
             raise ConfigError(
@@ -1039,6 +1063,9 @@ def _validate(cfg: Config) -> None:
 
         external_network = _mapping(
             provider.network.get("external"), "cluster.yaml: proxmox.network.external"
+        )
+        _reject_unknown_keys(
+            external_network, "cluster.yaml: proxmox.network.external", _PROXMOX_EXTERNAL_KEYS
         )
         cluster_vip = cluster_network.get("kubeapi_vip")
         if external_network:

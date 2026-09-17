@@ -1175,6 +1175,52 @@ def test_typo_region_no_longer_silently_selects_regionone(make_config):
         make_config({"openstack": {"regoin": "RegionTwo"}})
 
 
+@pytest.mark.parametrize(
+    "overrides, field",
+    [
+        ({"network": {"cluster": {"bridge": "vmbr0"}, "clustr": {}}},
+         r"proxmox.network: unknown key\(s\): clustr"),
+        ({"network": {"cluster": {"bridge": "vmbr0", "vlna": 321}}},
+         r"proxmox.network.cluster: unknown key\(s\): vlna"),
+        ({"network": {"cluster": {"bridge": "vmbr0"}, "external": {
+            "bridge": "vmbr1", "cidr": "203.0.113.0/24", "gateway": "203.0.113.1",
+            "anchor_cidr": "169.254.40.0/24", "kubeapi_vip": "203.0.113.10",
+            "ingress_pool": "203.0.113.20-203.0.113.40"}}},
+         None),  # valid external, no error
+        ({"network": {"cluster": {"bridge": "vmbr0"}, "external": {
+            "bridge": "vmbr1", "cidr": "203.0.113.0/24", "gatway": "203.0.113.1",
+            "anchor_cidr": "169.254.40.0/24", "kubeapi_vip": "203.0.113.10",
+            "ingress_pool": "203.0.113.20-203.0.113.40"}}},
+         r"proxmox.network.external: unknown key\(s\): gatway"),
+        ({"network": {"cluster": {"sdn": {"muta": 8950}, "kubeapi_vip": "192.168.0.9"}}},
+         r"proxmox.network.cluster.sdn: unknown key\(s\): muta"),
+        ({"network": {"cluster": {"sdn": {"exit_ndoes": ["pve1"]},
+                                  "kubeapi_vip": "192.168.0.9"}}},
+         r"proxmox.network.cluster.sdn: unknown key\(s\): exit_ndoes"),
+    ],
+)
+def test_proxmox_network_nested_key_is_rejected(make_config, overrides, field):
+    """A miscapped or unsupported key inside a `proxmox.network` block is refused
+    instead of loading and being silently ignored."""
+    cluster_yaml = overrides.get("network", None)
+    overrides["network"] = cluster_yaml or {}
+    cfg_overrides = {
+        "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+        "proxmox": {
+            "url": "https://pve.example",
+            "storage": "vms",
+            "iso_storage": "isos",
+            "network": overrides["network"],
+        },
+    }
+    if field is None:
+        cfg = make_config(cfg_overrides, remove=("openstack",))
+        assert cfg.provider.network["external"]["kubeapi_vip"] == "203.0.113.10"
+    else:
+        with pytest.raises(ConfigError, match=field):
+            make_config(cfg_overrides, remove=("openstack",))
+
+
 def test_pool_freeform_keys_are_preserved(make_config):
     """`tags` (label maps) and `config_patches` (freeform YAML) stay accepted."""
     cfg = make_config({

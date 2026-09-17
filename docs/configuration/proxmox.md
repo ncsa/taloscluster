@@ -75,7 +75,7 @@ Verify the API certificate against the system trust store, skip verification, or
 
 Required · mapping
 
-The private network every VM's first NIC attaches to. Set exactly one of `bridge`, `vnet` or `sdn`. Moving a running cluster to another bridge, VLAN or VNet, or switching between `bridge` and `sdn`, is refused; recreate the cluster instead.
+The private network every VM's first NIC attaches to. Set exactly one of `bridge`, `vnet` or `sdn`. Moving a running cluster to another bridge, VLAN or VNet, or switching between `bridge` and `sdn`, is refused; recreate the cluster instead. Only the keys documented below are accepted inside `proxmox.network`, `cluster`, `cluster.sdn` and `external`; a miscapped key (such as `vlna` or `gatway`) is refused at load instead of being silently ignored.
 
 ### `bridge`
 
