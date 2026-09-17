@@ -169,7 +169,7 @@ class Client:
         namespace_ready = "BackingNamespaceCreated" in {
             cond.get("type")
             for cond in (c.get("conditions") or [])
-            if cond.get("status")
+            if cond.get("status") == "True"
         }
         return RancherCluster(
             id=c["id"],

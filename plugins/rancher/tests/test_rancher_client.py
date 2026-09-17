@@ -222,6 +222,54 @@ def test_delete_cluster_deletes_via_the_api():
     assert deleted == ["/v3/clusters/c-7"]
 
 
+def _cluster_payload(conditions):
+    return {"id": "c-1", "name": "example", "state": "pending", "conditions": conditions}
+
+
+def _cluster_get(conditions):
+    client = _http_client()
+    client._get = lambda path, **kw: _cluster_payload(conditions)
+    return client
+
+
+def test_backing_namespace_not_ready_when_condition_status_false():
+    conds = [{"type": "BackingNamespaceCreated", "status": "False", "reason": "CreationPending"}]
+    assert _cluster_get(conds).get_cluster("c-1").namespace_ready is False
+
+
+def test_backing_namespace_not_ready_when_condition_status_unknown():
+    conds = [{"type": "BackingNamespaceCreated", "status": "Unknown"}]
+    assert _cluster_get(conds).get_cluster("c-1").namespace_ready is False
+
+
+def test_backing_namespace_not_ready_when_condition_absent_or_without_status():
+    assert _cluster_get([]).get_cluster("c-1").namespace_ready is False
+    conds = [{"type": "BackingNamespaceCreated"}]
+    assert _cluster_get(conds).get_cluster("c-1").namespace_ready is False
+
+
+def test_backing_namespace_ready_when_condition_status_true():
+    conds = [{"type": "BackingNamespaceCreated", "status": "True"}]
+    assert _cluster_get(conds).get_cluster("c-1").namespace_ready is True
+
+
+def test_wait_for_namespace_waits_for_true_transition():
+    calls = []
+
+    def fake_get(path, **kw):
+        calls.append(path)
+        if len(calls) == 1:
+            return _cluster_payload([{"type": "BackingNamespaceCreated", "status": "False"}])
+        if len(calls) == 2:
+            return _cluster_payload([{"type": "BackingNamespaceCreated", "status": "Unknown"}])
+        return _cluster_payload([{"type": "BackingNamespaceCreated", "status": "True"}])
+
+    client = _http_client()
+    client._get = fake_get
+    client.wait_for_namespace("c-1", timeout=5, poll=0)
+    assert len(calls) == 3
+
+
 def test_member_mutations_are_noops_in_dry_run(monkeypatch):
     from taloscluster_rancher import client as cmod
 
