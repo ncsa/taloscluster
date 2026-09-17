@@ -534,9 +534,10 @@ def _kube_up(
         if recover and talosconfig and endpoint and node:
             recovered = _recover_missing_kubeconfig(talosconfig, endpoint, node, kubeconfig)
             if dry_run() and recovered:
-                # plan/dry-run wrote nothing, but recovery prognoses an existing
-                # cluster; report it UP (scale-down/apply/upgrade will run) rather
-                # than "will bootstrap if needed"
+                # a dry run writes no kubeconfig, but a real run recovers it from
+                # the restored identity, so the existing cluster is up; report it
+                # UP (scale-down/apply/upgrade will run) rather than "will
+                # bootstrap if needed"
                 return True
             if not recovered:
                 # no kubeconfig was reproduced: a never-bootstrapped first run
@@ -578,7 +579,8 @@ def _recover_missing_kubeconfig(
     a fresh one from the first control plane through the identity the operator
     restored, then let the caller probe it. Returns True only once a non-empty
     kubeconfig was actually written (in dry-run, which writes nothing, True
-    reports the recovery prognosis so the caller reads the cluster as up). A
+    reports that a real run would recover it, so the caller reads the cluster
+    as up). A
     never-bootstrapped first run fails here (the node runs no api-server to serve
     a kubeconfig) and stays a fresh cluster for the caller to bootstrap.
 
@@ -1123,9 +1125,9 @@ def _scale_down(
     endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
     desired = set(machines)
     if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
-        # plan prognosed the recovered cluster as up but wrote no kubeconfig, so
-        # there is no live node list to read against (a real run recovers it
-        # first); with no nodes known there is nothing to scale down.
+        # a dry run with no non-empty kubeconfig on disk reads no live node
+        # list (a real run writes it, or recovers it from the restored
+        # identity, first); with no nodes known there is nothing to scale down.
         live = []
     else:
         live = kubectl.node_names(kubeconfig)
@@ -1556,10 +1558,11 @@ def _upgrade(
     cur = _upgrade_read_version(kubeconfig)
     if not cur:
         if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
-            # plan prognosed the recovered cluster as up but wrote no kubeconfig,
-            # so the running version is unknown and a real run recovers it and
-            # steps it through the minors; there is nothing a dry run can upgrade,
-            # and the 30s retry + stabilization waits have no kube-api to probe.
+            # a dry run with no non-empty kubeconfig on disk has no running
+            # version to report (a real run writes it, or recovers it from the
+            # restored identity, then steps the minors); there is nothing a dry
+            # run can upgrade, and the 30s retry + stabilization waits have no
+            # kube-api to probe.
             info("kubernetes version unknown (missing kubeconfig); skipped in plan")
             return
         # the api server is briefly unreachable after a machine-config apply,

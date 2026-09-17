@@ -58,6 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Deliver the OpenStack Cinder cloud.conf as a Secret instead of embedding credentials in ArgoCD values.
 - Activate the ArgoCD plugin only with a `kubeconfig` or `context` apply target.
 - Reorganize the documentation around installation, quickstart, usage, commands, configuration, plugins and troubleshooting, and shorten the README.
+- Correct the etcd-member scale-down and upgrade-abort troubleshooting entries, move the kubectl-timeout note with the control-plane rollouts, and point the Rancher guide at the orphan refusal.
 
 ### Fixed
 

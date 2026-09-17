@@ -96,7 +96,7 @@ After a machine-config apply, converge stabilizes the cluster and re-reads the r
 kubernetes server version unavailable and no control-plane address resolved; cannot perform a kubernetes upgrade
 ```
 
-Diagnostics: a previous run of a converge that aborted this way exited 0 and silently skipped the upgrade; now it fails, so a skipped upgrade no longer hides behind a healthy exit status. Converge aborts before any `upgrade-k8s` step runs, but machine-config applies and Talos reconciliation earlier in the same run may already have changed or rebooted nodes.
+Diagnostics: converge exits 1 before any `upgrade-k8s` step runs, so a skipped upgrade never hides behind a healthy exit status. The abort follows the `kubernetes version (want ...)` heading and the version-read retry notices already printed; machine-config applies and Talos reconciliation earlier in the same run may already have changed or rebooted nodes.
 
 Recovery: investigate why the cluster's control planes are unreachable (see [A node cannot be reached](#a-node-cannot-be-reached)) and ensure a control-plane address resolves, then re-run `taloscluster converge`.
 
@@ -136,7 +136,13 @@ Recovery: re-run `taloscluster converge`. It lifts stale cordons on its own (or 
 
 ## Converge refuses to remove a control plane that is still an etcd member
 
-Scaling a control plane down resets each one gracefully. If the graceful reset fails, or the node's address is known but the node is wiped or powered off, converge refuses to delete the machine unless the surviving control plane's authoritative `talosctl etcd members` list confirms the node left etcd:
+Scaling a control plane down resets each one gracefully. A graceful reset that fails or times out on a control plane that still has a Kubernetes Node aborts unconditionally — a half-reset control plane is a dead etcd member that would cost quorum on a later removal, so converge never proceeds past it. That abort is `talosctl reset`'s own error; the VM is left in place:
+
+```
+graceful reset of control plane mycluster-controlplane-03 failed (rc=1): <talosctl error>; refusing to delete it -- a half-reset control plane is a dead etcd member
+```
+
+The etcd-membership fallthrough applies only on a rerun whose Kubernetes Node is already gone (a wiped or powered-off VM whose delete failed on a prior run) but the provider still knows the machine's address. There a failed or unreachable reset is not proof the node left etcd, so converge refuses to delete the machine unless the surviving control plane's authoritative `talosctl etcd members` list confirms the node left:
 
 ```
 reset of control plane mycluster-controlplane-03 failed (address 192.0.2.30 is known but the node did not reset) and it is still an etcd member (id 1a2b3c4d on control plane mycluster-controlplane-01); refusing to delete a member that could cost quorum
