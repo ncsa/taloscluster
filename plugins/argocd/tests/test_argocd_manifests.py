@@ -69,9 +69,12 @@ def ctx_for(root, results=None, status=None):
 def test_cluster_apps_carries_the_ingress_ips(kubeconfig, cfg):
     """The clusterctl regression: these three came out empty."""
     out = manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"]
+    doc = yaml.safe_load(out)
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
     assert "- 10.0.0.2/32" in out          # metallb address pool
-    assert 'publicIP: "1.2.3.5"' in out    # ingress floating ip
-    assert 'privateIP: "10.0.0.2"' in out  # ingress vip
+    assert values["metallb"]["addresses"] == ["10.0.0.2/32"]
+    assert values["ingresscontroller"]["publicIP"] == "1.2.3.5"   # floating ip
+    assert values["ingresscontroller"]["privateIP"] == "10.0.0.2" # vip
 
 
 def test_cluster_apps_carries_the_openstack_project(kubeconfig, cfg):
@@ -333,6 +336,174 @@ def test_project_role_names_match_their_policy_subjects(kubeconfig, cfg):
     assert roles["user"]["policies"] == [
         f"p, proj:{name}:user, applications, get, {name}/*, allow"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Repo Secret: git credentials are YAML scalars and must round-trip exactly
+# however the token is shaped, or the rendered manifest becomes unparsable.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [
+    "plain",
+    "it's got an apostrophe",
+    'double "quotes"',
+    "back\\slash",
+    "line1\nline2",
+    "on",        # YAML-reserved word -> would read as a boolean if not quoted
+    "true",
+    "0123",
+    "  leading space",
+    "key: value",
+    "- dash",
+    "# comment-looking",
+])
+def test_repo_secret_round_trips_credential_shapes(kubeconfig, cfg, value):
+    repo = manifests.render(cfg, ctx_for(kubeconfig), git=(value, value))["repo"]
+    doc = yaml.safe_load(repo)
+    assert doc["stringData"]["username"] == value
+    assert doc["stringData"]["password"] == value
+
+
+def test_repo_secret_with_apostrophe_renders_parseable_yaml(kubeconfig, cfg):
+    """The regression: a token containing `'` made stringData unparsable."""
+    repo = manifests.render(cfg, ctx_for(kubeconfig), git=("it's me", "tok'en"))["repo"]
+    doc = yaml.safe_load(repo)
+    assert doc["stringData"]["username"] == "it's me"
+    assert doc["stringData"]["password"] == "tok'en"
+    assert doc["stringData"]["project"] == "testcluster"
+    assert doc["stringData"]["name"] == "testcluster-cluster"
+    assert doc["stringData"]["url"] == "https://git.example.com/repo.git"
+    assert doc["stringData"]["type"] == "git"
+
+
+# ---------------------------------------------------------------------------
+# YAML-scalar safety across the other manifests: every user-controlled scalar
+# (repository URLs, server addresses, emails, versions, IPs, classes, group
+# members) must round-trip through safe_load whatever its shape, or the
+# rendered manifest is unparsable (e.g. a `: ` colon makes a mapping) or
+# silently corrupts the value.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [
+    "plain",
+    "it's got an apostrophe",
+    'double "quotes"',
+    "back\\slash",
+    "https://x/repo with space.git",
+    "https://x/b#frag",
+    "value: with colon",
+    "line1\nline2",
+    "https://" + "a" * 70 + " " + "b" * 30 + ".git",
+    "on",           # YAML-reserved word -> would read as a boolean if not quoted
+])
+def test_root_app_repo_url_round_trips(kubeconfig, cfg, value):
+    """`cfg.git_url` is only validated as any non-empty string (config.py)."""
+    cfg.git_url = value
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["apps"])
+    assert doc["spec"]["source"]["repoURL"] == value
+
+
+@pytest.mark.parametrize("value", [
+    "plain",
+    "https://x/infra with space.git",
+    "https://x/b#frag",
+    "value: with colon",
+    "line1\nline2",
+    "https://" + "a" * 70 + " " + "b" * 30 + "/infra.git",
+])
+def test_cluster_apps_infra_url_round_trips(kubeconfig, cfg, value):
+    """`cfg.infra_url` is only validated as any non-empty string."""
+    cfg.infra_url = value
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["cluster-apps"])
+    assert doc["spec"]["source"]["repoURL"] == value
+
+
+@pytest.mark.parametrize("value", [
+    "plain",
+    "it's got an apostrophe",
+    'double "quotes"',
+    "back\\slash",
+    "line1\nline2",
+    "p: q",
+    "a # comment",
+    "- dash",
+    "0123",
+    "on",
+])
+def test_cluster_apps_values_scalars_round_trip(kubeconfig, cfg, value):
+    """OpenStack identity, ingress class/IPs and certmanager email/version."""
+    cfg.openstack = Openstack(project="", url=value, region=value)
+    cfg.ingress = {"enabled": True, "class": value}
+    cfg.certmanager = {"enabled": True, "email": value, "version": value}
+    status = {
+        "openstack": {"url": "https://cloud", "region": "r", "project": value},
+        "kubernetes": {},
+        "ingress": {"floating_ip": value, "vip": value, "metallb": []},
+    }
+    out = manifests.render(cfg, ctx_for(kubeconfig, status=status))["cluster-apps"]
+    doc = yaml.safe_load(out)
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["openstack"]["project"] == value
+    assert values["openstack"]["auth_url"] == value
+    assert values["openstack"]["region"] == value
+    assert values["ingresscontroller"]["class"] == value
+    assert values["ingresscontroller"]["publicIP"] == value
+    assert values["ingresscontroller"]["privateIP"] == value
+    assert values["certmanager"]["class"] == value
+    assert values["certmanager"]["email"] == value
+    assert values["certmanager"]["version"] == value
+
+
+@pytest.mark.parametrize("value", [
+    "plain",
+    "a: b@e.com",
+    "it's@e.com",
+    'q"@e.com',
+    "line1\nline2@example.com",
+    "user " + "x " * 45 + "@example.com",
+])
+def test_project_group_members_round_trip(kubeconfig, cfg, value):
+    """Member emails are validated only as non-empty strings (config.py)."""
+    cfg.members = Members(admins=(value,), users=(value,))
+    doc = yaml.safe_load(manifests.render(cfg, ctx_for(kubeconfig))["project"])
+    roles = {r["name"]: r for r in doc["spec"]["roles"]}
+    assert roles["admin"]["groups"] == [value]
+    assert roles["user"]["groups"] == [value]
+
+
+@pytest.mark.parametrize("value", [
+    "plain", "c: 12", 'with "quotes"', "back\\slash",
+    "id\nwith\nnewlines", "c-" + "a" * 90 + " b",
+])
+def test_rancher_id_round_trips_annotation_and_values(kubeconfig, cfg, value):
+    ctx = ctx_for(kubeconfig, results={"rancher": {"cluster_id": value}})
+    secret = yaml.safe_load(manifests.render(cfg, ctx)["secret"])
+    assert secret["metadata"]["annotations"]["rancher.cattle.io/cluster-id"] == value
+    doc = yaml.safe_load(manifests.render(cfg, ctx)["cluster-apps"])
+    values = yaml.safe_load(doc["spec"]["source"]["helm"]["values"])
+    assert values["cluster"]["rancher"]["id"] == value
+
+
+@pytest.mark.parametrize("value", [
+    "https://kube: 6443", "https://a b.example", "plain",
+    "https://kube\nwith\nnewlines", "https://" + "a" * 80 + " " + "b" * 20,
+])
+def test_cluster_and_project_server_round_trip(tmp_path, cfg, value):
+    """The kubeconfig `server` is used verbatim in the Secret, Project and values."""
+    ca = base64.b64encode(b"ca").decode()
+    (tmp_path / "kubeconfig").write_text(yaml.safe_dump({
+        "clusters": [{"name": "c", "cluster": {
+            "server": value, "certificate-authority-data": ca}}],
+        "users": [],
+    }))
+    out = manifests.render(cfg, ctx_for(tmp_path))
+    assert yaml.safe_load(out["secret"])["stringData"]["server"] == value
+    project = yaml.safe_load(out["project"])
+    assert project["spec"]["destinations"][0]["server"] == value
+    values = _values(yaml.safe_load(out["cluster-apps"]))
+    assert values["cluster"]["url"] == value
 
 
 # ---------------------------------------------------------------------------

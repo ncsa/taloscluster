@@ -132,3 +132,5 @@ ArgoCD API endpoint and token. The plugin applies manifests via kubectl only, so
 Optional · strings
 
 Credentials for `argocd.git.url`, rendered into its ArgoCD repository Secret. Supplying either credential also requires that Git URL. The plugin does not create a separate credential Secret for `argocd.infra.url`; configure access to a private infrastructure repository in ArgoCD separately.
+
+Credential values are serialized with a YAML serializer, and every other user-controlled scalar the plugin renders — the git/infra repository URLs in the two Applications' `spec.source.repoURL`, the downstream kubeconfig `server` in the cluster Secret and AppProject, the AppProject role member emails, the Rancher cluster-id, and the Helm values (OpenStack identity, ingress `class`/IPs, cert-manager `email` and chart `version` pins) — emits through a YAML serializer as well. Each is kept on one physical line, so a value containing a colon+space, quote, leading/trailing space, newline, or a YAML-reserved word round-trips exactly instead of producing an unparsable manifest or silently corrupting its value.

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import yaml
 from taloscluster.context import Context
@@ -36,6 +37,29 @@ def downstream_kubeconfig(root: Path) -> dict:
     except yaml.YAMLError as e:
         raise ConfigError(f"could not parse {path}: {e}") from e
     return data
+
+
+def _yq(value: object) -> str:
+    """Render a single-line scalar for YAML interpolation with minimal, safe quoting.
+
+    User-controlled scalars (URLs, emails, versions, ids, server addresses) are
+    interpolated through this instead of plain f-string formatting so a value
+    containing a colon+space, apostrophe, double quote, leading/trailing space or
+    a YAML-reserved word is quoted/escaped by PyYAML rather than producing an
+    unparsable manifest or a value that silently changes type on reload. Plain
+    scalars dump unquoted, so existing output is unchanged. Always emits a single
+    physical line -- a value with an embedded newline or one long enough to fold
+    is dumped as an escaped double-quoted line -- so the continuation line never
+    lands at the wrong indentation when interpolated.
+    """
+    dumped = yaml.safe_dump({"k": str(value)}).split("k: ", 1)[1].rstrip("\n")
+    # The plain dump folds long scalars and block-quotes embedded newlines, which
+    # land on continuation lines at the wrong indentation when the value is
+    # interpolated. Fall back to a single double-quoted line (escaped, no
+    # folding) whenever the plain scalar spans more than one physical line.
+    if "\n" not in dumped:
+        return dumped
+    return yaml.safe_dump(str(value), default_style='"', width=10**9).rstrip("\n")
 
 
 def _cluster_connection(root: Path) -> tuple[str, str | None, str | None, str | None]:
@@ -80,7 +104,7 @@ metadata:
 type: Opaque
 stringData:
   name: {cfg.name}
-  server: {server}
+  server: {_yq(server)}
   config: |
     {config}
 """
@@ -97,7 +121,7 @@ def _rancher_annotation(ctx: Context) -> str:
     cluster_id = _rancher_id(ctx)
     if not cluster_id:
         return ""
-    return f"  annotations:\n    rancher.cattle.io/cluster-id: {cluster_id}\n"
+    return f"  annotations:\n    rancher.cattle.io/cluster-id: {_yq(cluster_id)}\n"
 
 
 def _rancher_id(ctx: Context) -> str:
@@ -107,7 +131,7 @@ def _rancher_id(ctx: Context) -> str:
 def _groups_block(emails: tuple[str, ...]) -> str:
     if not emails:
         return ""
-    items = "\n".join(f"    - {e}" for e in emails)
+    items = "\n".join(f"    - {_yq(e)}" for e in emails)
     return f"    groups:\n{items}"
 
 
@@ -148,7 +172,7 @@ spec:
   - '*'
   destinations:
   - namespace: '*'
-    server: {server}
+    server: {_yq(server)}
   - namespace: argocd
     server: https://kubernetes.default.svc
   clusterResourceWhitelist:
@@ -165,22 +189,29 @@ def _repo_secret(cfg: Config, git: tuple[str, str] | None) -> str:
     if not cfg.git_url:
         raise ConfigError("argocd.git.url not set in cluster.yaml; cannot render repo secret")
     username, password = git or ("", "")
-    return f"""\
-apiVersion: v1
-kind: Secret
-metadata:
-  name: repo-{cfg.name}
-  namespace: argocd
-  labels:
-    argocd.argoproj.io/secret-type: repository
-stringData:
-  project: {cfg.name}
-  name: {cfg.name}-cluster
-  url: {cfg.git_url}
-  type: git
-  username: '{username}'
-  password: '{password}'
-"""
+    # Build stringData through a YAML serializer so every scalar (the git
+    # credentials most importantly) round-trips exactly: a token containing an
+    # apostrophe, backslash, newline or YAML-looking text is quoted/escaped by
+    # PyYAML instead of producing an unparsable manifest.
+    string_data = {
+        "project": cfg.name,
+        "name": f"{cfg.name}-cluster",
+        "url": cfg.git_url,
+        "type": "git",
+        "username": username,
+        "password": password,
+    }
+    return (
+        "apiVersion: v1\n"
+        "kind: Secret\n"
+        "metadata:\n"
+        f"  name: repo-{cfg.name}\n"
+        "  namespace: argocd\n"
+        "  labels:\n"
+        "    argocd.argoproj.io/secret-type: repository\n"
+        "stringData:\n"
+        + textwrap.indent(yaml.safe_dump(string_data, default_flow_style=False), "  ")
+    )
 
 
 def _root_app(cfg: Config) -> str:
@@ -212,7 +243,7 @@ spec:
 {automated}    syncOptions:
       - CreateNamespace=true
   source:
-    repoURL: {cfg.git_url}
+    repoURL: {_yq(cfg.git_url)}
     path: charts/apps
     targetRevision: HEAD
     helm:
@@ -223,24 +254,15 @@ spec:
 """
 
 
-def _version_line(section: dict, indent: str = "          ") -> str:
-    """Render a `version:` line only when explicitly set in the config.
-
-    Anything not present in cluster.yaml keeps the chart's default by omitting
-    the key entirely.
-    """
-    v = section.get("version")
-    if not v:
-        return ""
-    return f'{indent}version: "{v}"\n'
-
-
 def _cluster_apps(cfg: Config, ctx: Context) -> str:
     """The cluster apps Application (`<cluster>-cluster`) embedding per-cluster values.
 
     Mirrors ncsa/radiant-cluster `charts/apps/values.yaml` with **everything
     disabled** by default; only identity fields (cluster name/url, git repo) are
-    populated. Enable features later by filling in config.
+    populated. Enable features later by filling in config. The embedded Helm
+    values are built as a dict and rendered through a YAML serializer so every
+    user-controlled scalar (URLs, emails, versions, IPs, classes) round-trips
+    exactly whatever shape it takes instead of corrupting the values block.
     """
     if not cfg.git_url:
         raise ConfigError("argocd.git.url not set in cluster.yaml; cannot render cluster-apps")
@@ -260,15 +282,16 @@ def _cluster_apps(cfg: Config, ctx: Context) -> str:
     # MetalLB addresses: a bare single IP (OpenStack VIP) becomes a /32; the
     # Proxmox ingress_pool range ("start-end") is already a valid MetalLB spec.
     ingress_vip = ctx.ingress.get("vip", "")
-    metallb_addresses = ""
+    metallb_addresses: list[str] = []
     if metallb_enabled:
         pool = ctx.ingress.get("metallb") or ([ingress_vip] if ingress_vip else [])
         for addr in pool:
             addr = str(addr).strip()
             if not addr:
                 continue
-            spec = addr if ("-" in addr or "/" in addr) else f"{addr}/32"
-            metallb_addresses += f"          - {spec}\n"
+            metallb_addresses.append(
+                addr if ("-" in addr or "/" in addr) else f"{addr}/32"
+            )
     ingress_enabled = enabled(cfg.ingress)
     ingress_class = cfg.ingress.get("class") or "traefik"
     certmanager_enabled = enabled(cfg.certmanager)
@@ -279,10 +302,7 @@ def _cluster_apps(cfg: Config, ctx: Context) -> str:
     nfs_enabled = enabled(cfg.nfs)
     monitoring_enabled = enabled(cfg.monitoring)
     # argocd.nfs.servers is passed through verbatim (name -> server/path/defaultClass)
-    servers = cfg.nfs.get("servers") if nfs_enabled else None
-    nfs_servers = "          servers: {}\n"
-    if isinstance(servers, dict) and servers:
-        nfs_servers = textwrap.indent(yaml.safe_dump({"servers": servers}), " " * 10)
+    nfs_servers = cfg.nfs.get("servers") if nfs_enabled else None
     sync_enabled = cfg.sync
     automated = (
         "    automated:\n"
@@ -290,11 +310,77 @@ def _cluster_apps(cfg: Config, ctx: Context) -> str:
         "      prune: true\n"
         "      selfHeal: true\n"
     ) if cfg.automated else ""
-    metallb_version = _version_line(cfg.metallb)
-    certmanager_version = _version_line(cfg.certmanager)
-    traefik_version = _version_line(cfg.ingress.get("traefik") or {}, indent="            ")
-    sealedsecrets_version = _version_line(cfg.sealedsecrets)
-    cinder_version = _version_line(cfg.cinder)
+
+    # The embedded values, mirroring charts/apps/values.yaml with features off by
+    # default. `version` keys are omitted entirely unless explicitly set; the
+    # chart keeps its own default then.
+    values: dict[str, Any] = {
+        "cluster": {
+            "name": name,
+            "url": server,
+            "rancher": {"id": rancher_id},
+        },
+        "openstack": {
+            "project": openstack_project,
+            "auth_url": openstack_url,
+            "region": openstack_region,
+        },
+        "notifications": {},
+        "sync": sync_enabled,
+        "metallb": {
+            "enabled": metallb_enabled,
+            "addresses": metallb_addresses,
+        },
+        "certmanager": {
+            "enabled": certmanager_enabled,
+            "email": certmanager_email,
+            "class": certmanager_class,
+        },
+        "ingresscontroller": {
+            "enabled": ingress_enabled,
+            "class": ingress_class,
+            "publicIP": ctx.ingress.get("floating_ip", ""),
+            "privateIP": ingress_vip,
+            "traefik": {
+                "storageClass": "",
+                "ports": {},
+            },
+        },
+        "gateway_crd": {"enabled": True},
+        "sealedsecrets": {"enabled": sealedsecrets_enabled},
+        "monitoring": {"enabled": monitoring_enabled},
+        "healthmonitor": {
+            "enabled": False,
+            "targetRevision": "HEAD",
+            "nfs": False,
+            "notifiers": {"console": {"report": "change", "threshold": 0}},
+        },
+        "nfs": {
+            "enabled": nfs_enabled,
+            "type": "csi",
+            "mountPermissions": "0777",
+        },
+        "longhorn": {"enabled": False, "replicas": 3},
+        "cinder": {"enabled": cinder_enabled},
+        "manila": {"enabled": False, "protocols": []},
+        "raw": {"enabled": True, "resources": [], "templates": []},
+    }
+    if metallb_version := cfg.metallb.get("version"):
+        values["metallb"]["version"] = metallb_version
+    if certmanager_version := cfg.certmanager.get("version"):
+        values["certmanager"]["version"] = certmanager_version
+    if traefik_version := (cfg.ingress.get("traefik") or {}).get("version"):
+        values["ingresscontroller"]["traefik"]["version"] = traefik_version
+    if sealedsecrets_version := cfg.sealedsecrets.get("version"):
+        values["sealedsecrets"]["version"] = sealedsecrets_version
+    if cinder_version := cfg.cinder.get("version"):
+        values["cinder"]["version"] = cinder_version
+    if isinstance(nfs_servers, dict) and nfs_servers:
+        values["nfs"]["servers"] = nfs_servers
+    values_yaml = textwrap.indent(
+        yaml.safe_dump(values, default_flow_style=False), " " * 8
+    )
+
     return f"""\
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -314,79 +400,10 @@ spec:
     helm:
       releaseName: {name}
       values: |
-        cluster:
-          name: {name}
-          url: {server}
-          rancher:
-            id: "{rancher_id}"
-
-        openstack:
-          project: {openstack_project}
-          auth_url: {openstack_url}
-          region: {openstack_region}
-
-        notifications: {{}}
-
-        sync: {"true" if sync_enabled else "false"}
-
-        metallb:
-          enabled: {"true" if metallb_enabled else "false"}
-{metallb_version}          addresses:
-{metallb_addresses}        certmanager:
-          enabled: {"true" if certmanager_enabled else "false"}
-{certmanager_version}          email: "{certmanager_email}"
-          class: {certmanager_class}
-
-        ingresscontroller:
-          enabled: {"true" if ingress_enabled else "false"}
-          class: {ingress_class}
-          publicIP: "{ctx.ingress.get("floating_ip", "")}"
-          privateIP: "{ingress_vip}"
-          traefik:
-{traefik_version}            storageClass: ""
-            ports: {{}}
-
-        gateway_crd:
-          enabled: true
-
-        sealedsecrets:
-          enabled: {"true" if sealedsecrets_enabled else "false"}
-{sealedsecrets_version}
-        monitoring:
-          enabled: {"true" if monitoring_enabled else "false"}
-
-        healthmonitor:
-          enabled: false
-          targetRevision: HEAD
-          nfs: false
-          notifiers:
-            console:
-              report: change
-              threshold: 0
-
-        nfs:
-          enabled: {"true" if nfs_enabled else "false"}
-          type: csi
-          mountPermissions: "0777"
-{nfs_servers}
-        longhorn:
-          enabled: false
-          replicas: 3
-
-        cinder:
-          enabled: {"true" if cinder_enabled else "false"}
-{cinder_version}
-        manila:
-          enabled: false
-          protocols: []
-
-        raw:
-          enabled: true
-          resources: []
-          templates: []
+{values_yaml}
       version: v3
     path: charts/apps
-    repoURL: {cfg.infra_url}
+    repoURL: {_yq(cfg.infra_url)}
     targetRevision: HEAD
   syncPolicy:
 {automated}    syncOptions:
