@@ -33,6 +33,7 @@ from pathlib import Path
 
 from taloscluster.context import Context
 from taloscluster.errors import ConfigError
+from taloscluster.k8s import rancher
 from taloscluster.output import action, dry_run, info, log, warn
 
 from .client import Client
@@ -72,26 +73,11 @@ def downstream_rancher_id(root: Path) -> str | None:
     not installed (no agent), meaning the cluster is unrelated to any existing
     Rancher cluster and can't be a re-run.
     """
+    # The namespace pre-check keeps the "no agent" distinction explicit before
+    # the shared helper parses the id from the credentials secret.
     if _kubectl(root, "get", "ns", "cattle-system") is None:
         return None
-    import base64
-    import json
-    secrets = _kubectl(root, "get", "secret", "-n", "cattle-system", "-o", "json")
-    if not secrets:
-        return None
-    try:
-        doc = json.loads(secrets)
-    except ValueError:
-        return None
-    for item in doc.get("items", []):
-        if item.get("metadata", {}).get("name", "").startswith("cattle-credentials"):
-            ns = item.get("data", {}).get("namespace")
-            if ns:
-                try:
-                    return base64.b64decode(ns).decode()
-                except Exception:
-                    pass
-    return None
+    return rancher.cluster_id(root / "kubeconfig")
 
 
 def _resolve_members(client: Client, cfg: Config) -> dict[str, tuple[str, str]]:

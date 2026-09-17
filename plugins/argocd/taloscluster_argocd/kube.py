@@ -6,11 +6,10 @@ secrets.yaml. The kubeconfig path is resolved against the cluster directory.
 
 from __future__ import annotations
 
-import base64
-import json
 import subprocess
 from pathlib import Path
 
+from taloscluster.k8s import rancher
 from taloscluster.output import action, dry_run, info
 
 from .config import ApplyTarget
@@ -56,31 +55,13 @@ def downstream_rancher_id(root: Path) -> str | None:
 
     Read from the cattle-cluster-agent's ``cattle-credentials-*`` secret in
     cattle-system, the same value the rancher plugin's `downstream_rancher_id`
-    returns. The standalone ``plugin argocd converge|check`` runs argocd without
-    rancher, so argocd resolves the id itself rather than rendering the Rancher
-    annotation empty and re-writing the cluster Secret without it (or reporting
-    drift against the just-applied one).
+    returns (via the shared `taloscluster.k8s.rancher` helper). The standalone
+    ``plugin argocd converge|check`` runs argocd without rancher, so argocd
+    resolves the id itself rather than rendering the Rancher annotation empty
+    and re-writing the cluster Secret without it (or reporting drift against the
+    just-applied one).
     """
-    proc = subprocess.run(
-        _downstream_args(root)
-        + ["get", "secret", "-n", "cattle-system", "-o", "json"],
-        capture_output=True, text=True,
-    )
-    if proc.returncode != 0:
-        return None
-    try:
-        doc = json.loads(proc.stdout)
-    except ValueError:
-        return None
-    for item in doc.get("items", []):
-        if item.get("metadata", {}).get("name", "").startswith("cattle-credentials"):
-            ns = item.get("data", {}).get("namespace")
-            if ns:
-                try:
-                    return base64.b64decode(ns).decode()
-                except Exception:
-                    pass
-    return None
+    return rancher.cluster_id(root / "kubeconfig")
 
 
 def _run_get(base: list[str], manifest: str) -> bool:
