@@ -858,16 +858,19 @@ def _config_kubernetes_version(cfg: Config, kubeconfig: Path, up: bool) -> str:
     kubernetes by config push, skipping every minor in between and leaving
     `talosctl upgrade-k8s` nothing to do. Keep the running version in the
     config; the upgrade phase then steps to the target with upgrade-k8s, which
-    rewrites those images itself. Fresh clusters (and an unreachable kube-api)
-    use cluster.yaml.
+    rewrites those images itself. Fresh clusters use cluster.yaml. On an up
+    cluster whose running version cannot be read, a dry run keeps the target
+    (there is no non-empty kubeconfig on disk to read; a real run writes or
+    recovers it and steps the minors), while a real converge aborts before any
+    config mutation.
     """
     want = cfg.kubernetes_version
     if not up:
         return want
     cur = _running_kubernetes_version(kubeconfig)
     if cur is None:
-        # dry-run plan on a recovered machine: the running version is unknown
-        # because no kubeconfig is on disk, but a real run recovers it and steps
+        # dry run with no non-empty kubeconfig on disk: the running version is
+        # unknown, but a real run writes or recovers the kubeconfig and steps
         # the minors -- keep the target so the plan completes (see `_upgrade`).
         return want
     if cur == want:
@@ -889,16 +892,16 @@ def _running_kubernetes_version(kubeconfig: Path) -> str | None:
     reading it as the target version would push target kubelet/control-plane
     images through `_apply_existing_configs` and skip the minor-by-minor
     upgrade. Retry the read and, if it still cannot be established, abort
-    before any config mutation. The one exception is a dry-run plan on a
-    recovered management machine, which prognoses the cluster up without
-    writing a kubeconfig: there is nothing to read, so return None and let
+    before any config mutation. The one exception is a dry run with no
+    non-empty kubeconfig on disk -- any such plan (not only on a recovered
+    management machine): with nothing to read, return None and let
     `_config_kubernetes_version` keep the target instead of aborting the plan
     (mirrors `_upgrade`'s guard).
     """
     if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
-        # plan prognosed the recovered cluster as up but wrote no kubeconfig;
-        # the running version cannot be read, and a real run recovers it and
-        # steps the minors -- nothing for a dry run to mutate
+        # a real run writes the kubeconfig (or recovers it); a dry run reads
+        # nothing, so the running version cannot be established -- keep the
+        # target so the plan completes, and a real run steps the minors
         info("kubernetes version unknown (missing kubeconfig); skipped in plan")
         return None
     for attempt in range(1, 4):

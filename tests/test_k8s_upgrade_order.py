@@ -63,6 +63,30 @@ def test_plan_with_a_missing_kubeconfig_keeps_the_target(monkeypatch, tmp_path):
     assert converge._config_kubernetes_version(CFG, kubeconfig, up=True) == "v1.36.4"
 
 
+def test_plan_escapes_only_with_no_nonempty_kubeconfig(monkeypatch, tmp_path):
+    """The dry-run escape from the version-read refusal is granted solely by the
+    missing or empty kubeconfig -- it is not tied to a recovered management
+    machine. A `plan` run next to a reachable cluster whose kubeconfig was
+    deleted keeps the target, but a dry run that DOES have a kubeconfig is not
+    excused: it reads the running version like a real run (and still refuses to
+    fall back to the target when that read comes up empty)."""
+    # dry run with a present non-empty kubeconfig: the running version answers,
+    # so the target is not blindly kept -- the running version is used.
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.34.4")
+    present = tmp_path / "kubeconfig"
+    present.write_text("clusters: []\n")
+    assert converge._config_kubernetes_version(CFG, present, up=True) == "v1.34.4"
+
+    # same dry run, but the read comes up empty: the escape does not apply when
+    # a kubeconfig is on disk, so it still aborts rather than falling back to
+    # the target.
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "")
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    with pytest.raises(ReconcileError, match="could not determine the running"):
+        converge._config_kubernetes_version(CFG, present, up=True)
+
+
 def test_version_read_is_retried_before_aborting(monkeypatch, capsys):
     monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
     reads: list[str] = ["", "", "v1.34.4"]
