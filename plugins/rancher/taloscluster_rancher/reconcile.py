@@ -372,10 +372,18 @@ def check(ctx: Context) -> dict:
         )
     else:
         mismatch = ""
+    # Publish the id a converge would stamp, not the id of whatever unrelated
+    # Rancher cluster happens to bear the configured name. When the downstream
+    # agent's id does not match (or there is no agent), the Rancher cluster is
+    # not ours -- ArgoCD renders the annotation from this value, so stamping the
+    # mismatched Rancher id would drift against the identity converge refuses to
+    # attach to. Fall back to the downstream's own id (or none) so both plugins
+    # agree on which cluster is ours.
+    reported_id = cluster.id if id_match else downstream_id
     return {
         "ok": agent and id_match and not missing and not extra,
         "registered": True,
-        "cluster_id": cluster.id,
+        "cluster_id": reported_id,
         "downstream_id": downstream_id,
         "agent_installed": agent,
         "id_match": id_match,

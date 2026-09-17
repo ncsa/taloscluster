@@ -163,4 +163,4 @@ Rancher cluster 'mycluster' (c-new) does not match the downstream cluster (c-old
 
 Diagnostics: `taloscluster check -o yaml` shows `cluster_id`, `downstream_id`, `id_match: false`, and the `id_mismatch_reason`. Members bound to that cluster stay `pending`, and a later `destroy` refuses the same way.
 
-Recovery: make the downstream agent and the Rancher cluster agree — either fix the configured cluster name in `cluster.yaml` or re-point the agent at the intended Rancher cluster — so `cluster_id` and `downstream_id` match, then re-run `taloscluster converge`. See [Rancher](concepts/plugins.md).
+Recovery: make the downstream agent and the Rancher cluster agree — either fix the configured cluster name in `cluster.yaml` or re-point the agent at the intended Rancher cluster — until `check`/`status` report `id_match: true`, then re-run `taloscluster converge`. See [Rancher](concepts/plugins.md).

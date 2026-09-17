@@ -147,6 +147,46 @@ def test_check_fails_on_downstream_id_mismatch(cluster_dir, wire):
     assert "c-unrelated" in report["id_mismatch_reason"]
 
 
+def test_check_publishes_downstream_id_on_mismatch(cluster_dir, wire):
+    """The todo's regression: on a mismatch the Rancher cluster bearing the name
+    is NOT ours, so the id argocd consumes (`cluster_id`) must be the downstream
+    agent's own id, not the foreign `c-abc12` a converge would refuse to stamp."""
+    wire(
+        FakeClient(bindings=[binding(ALICE, "cluster-owner", "b-1"), OWNER],
+                   principals=PRINCIPALS),
+        downstream_id="c-ours",
+    )
+    report = _converge.check(Context(root=cluster_dir, cfg=None))
+    assert report["id_match"] is False
+    assert report["ok"] is False
+    assert report["cluster_id"] == "c-ours"
+    assert report["downstream_id"] == "c-ours"
+
+
+def test_check_publishes_no_id_when_there_is_no_agent(cluster_dir, wire):
+    """With no downstream agent there is no id a converge would attach to, so the
+    report publishes none rather than the foreign Rancher cluster's id."""
+    wire(
+        FakeClient(bindings=[binding(ALICE, "cluster-owner", "b-1"), OWNER],
+                   principals=PRINCIPALS),
+        downstream_id="c-unrelated",
+        agent_installed=False,
+    )
+    report = _converge.check(Context(root=cluster_dir, cfg=None))
+    assert report["agent_installed"] is False
+    assert report["id_match"] is False
+    assert report["cluster_id"] is None
+
+
+def test_check_keeps_the_matching_rancher_id(cluster_dir, wire):
+    """When the ids match the Rancher cluster is ours, so its id is published."""
+    wire(FakeClient(bindings=[binding(ALICE, "cluster-owner", "b-1"), OWNER],
+                    principals=PRINCIPALS))
+    report = _converge.check(Context(root=cluster_dir, cfg=None))
+    assert report["id_match"] is True
+    assert report["cluster_id"] == "c-abc12"
+
+
 def test_status_reports_downstream_id_mismatch(cluster_dir, wire):
     """status exposes both ids and the id_match flag so an unrelated registration
     bearing the same name is visible instead of being reported as installed."""
