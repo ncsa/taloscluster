@@ -19,6 +19,7 @@ patches so an explicit user override still wins.
 
 from __future__ import annotations
 
+import copy
 import re
 import tempfile
 from pathlib import Path
@@ -175,6 +176,33 @@ def _patch_stem(host: str, name: str) -> str:
     return f"{host}-{name}"
 
 
+def _retag_kube_proxy(doc, tag: str):
+    """Rewrite the kube-proxy image tag in any static-pod document to `tag`.
+
+    The return-path pod is the one configuration part that bakes a kubernetes
+    component image directly (kube-proxy as the vehicle that ships the `nft`
+    binary), so `build_configs`' running-version override must reach it too or
+    on an upgrade every node pulls the target kube-proxy at apply time, before
+    the minor-by-minor upgrade. Accepts a single document dict or a list of
+    Talos resource documents; mutates `doc` in place.
+    """
+    documents = doc if isinstance(doc, list) else [doc]
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        pods = (document.get("machine") or {}).get("pods")
+        if not isinstance(pods, list):
+            continue
+        for pod in pods:
+            containers = (pod.get("spec") or {}).get("containers")
+            if not isinstance(containers, list):
+                continue
+            for container in containers:
+                image = container.get("image", "")
+                if image.startswith("registry.k8s.io/kube-proxy:"):
+                    container["image"] = f"registry.k8s.io/kube-proxy:{tag}"
+
+
 def _write(workdir: Path, stem: str, doc) -> Path:
     """Dump a patch dict, a list of Talos documents, or raw YAML to its own file."""
     path = workdir / f"{stem}.yaml"
@@ -205,7 +233,10 @@ def build_configs(
     patches last. `kubernetes_version` overrides `cfg.kubernetes_version` for
     the component images baked into the config (kubelet, kube-apiserver, ...):
     converge passes the version a running cluster is on so the upgrade goes
-    through `talosctl upgrade-k8s` instead of a config push.
+    through `talosctl upgrade-k8s` instead of a config push. It also retags the
+    provider's return-path static pod (whose kube-proxy image is baked with the
+    target) to the same running version so an upgrade never pulls the target
+    kube-proxy before its minor-by-minor step.
     """
     cluster_endpoint = f"https://{endpoint.advertised_address}:6443"
     configs: dict[str, str] = {}
@@ -239,8 +270,12 @@ def build_configs(
             # provider contributions before the user's, so an explicit user
             # patch still has the last word
             for patch in contribution.patches:
+                document = patch.document
+                if kubernetes_version and kubernetes_version != cfg.kubernetes_version:
+                    document = copy.deepcopy(document)
+                    _retag_kube_proxy(document, kubernetes_version)
                 patches.append(
-                    _write(workdir, _patch_stem(host, patch.name), patch.document)
+                    _write(workdir, _patch_stem(host, patch.name), document)
                 )
             # freeform user patches last so they can override
             for i, raw in enumerate(m.config_patches):

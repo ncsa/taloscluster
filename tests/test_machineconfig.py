@@ -483,3 +483,53 @@ def test_contribution_patch_name_allows_internal_hyphens(cfg, monkeypatch, tmp_p
         any(Path(p).name.endswith("-return-path.yaml") for p in call["patches"])
         for call in calls
     )
+
+
+# ---------------------------------------------------------------------------
+# return-path pod version override
+# ---------------------------------------------------------------------------
+
+def _return_path_contribution(cfg, image):
+    pod = {
+        "metadata": {"name": "taloscluster-proxmox-return-path"},
+        "spec": {"containers": [{"name": "return-path", "image": image}]},
+    }
+    return _contributions(cfg, TalosPatch("return-path", {"machine": {"pods": [pod]}}))
+
+
+def _pod_image(calls):
+    images = []
+    for call in calls:
+        for docs in call["documents"]:
+            for doc in docs:
+                if not isinstance(doc, dict):
+                    continue
+                for pod in (doc.get("machine") or {}).get("pods") or []:
+                    images.append(pod["spec"]["containers"][0]["image"])
+    return images
+
+
+def test_build_configs_retags_return_path_pod_to_running_version(cfg, monkeypatch, tmp_path):
+    """On an upgrade build_configs bakes the RUNNING version into configs, so the
+    return-path pod -- which the provider built with the (newer) target kube-proxy
+    -- must be retagged to the running version, or every node would pull the target
+    image at apply time, before the minor-by-minor upgrade."""
+    calls = _capture(monkeypatch)
+    image = f"registry.k8s.io/kube-proxy:{cfg.kubernetes_version}"
+    contributions = _return_path_contribution(cfg, image)
+
+    _build(cfg, tmp_path, contributions, kubernetes_version="v1.33.4")
+
+    assert set(_pod_image(calls)) == {"registry.k8s.io/kube-proxy:v1.33.4"}
+
+
+def test_build_configs_keeps_target_pod_when_version_matches(cfg, monkeypatch, tmp_path):
+    """A fresh cluster or new-node rebuild bakes the target version: the pod image
+    (also target) is left untouched."""
+    calls = _capture(monkeypatch)
+    image = f"registry.k8s.io/kube-proxy:{cfg.kubernetes_version}"
+    contributions = _return_path_contribution(cfg, image)
+
+    _build(cfg, tmp_path, contributions)  # no override
+
+    assert set(_pod_image(calls)) == {image}

@@ -200,6 +200,10 @@ exit 1
                     # kube-proxy ships nft (it runs in nftables mode) and is
                     # already present on every node; Talos has no host nft
                     # visible to the kubelet, so hostPath mounts can't work.
+                    # The version below is the TARGET; build_configs retags the
+                    # image to the cluster's RUNNING version when it differs, so
+                    # an upgrade never pulls the target kube-proxy before the
+                    # minor-by-minor step rewrites the other component images.
                     "image": f"registry.k8s.io/kube-proxy:{cfg.kubernetes_version}",
                     "imagePullPolicy": "IfNotPresent",
                     "command": ["/bin/sh", "-ec", script],
