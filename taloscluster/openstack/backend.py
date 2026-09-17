@@ -235,30 +235,37 @@ class OpenStackBackend:
     def remove_image(self, assume_yes: bool = False) -> None:
         schematic = factory.schematic_id(naming.BASE_EXTENSIONS)
         name = naming.image_name(self.cfg.talos_version, schematic)
-        img = self.conn.image.find_image(name)
-        if img is None:
+        legacy = naming.legacy_image_name(self.cfg.talos_version)
+        images = [
+            img
+            for img in (self.conn.image.find_image(n) for n in (name, legacy))
+            if img is not None
+        ]
+        if not images:
             info(f"image {name} not found, nothing to remove")
             return
-        log(f"remove image {name}")
+        found = ", ".join(img.name for img in images)
+        log(f"remove image {found}")
         warn("other clusters on the same talos version may share this image")
         if not assume_yes and not dry_run():
             resp = input(f"type '{name}' to confirm: ").strip()
             if resp != name:
                 raise SystemExit("aborted")
-        action(f"delete image {name}")
-        if not dry_run():
-            try:
-                self.conn.image.delete_image(img.id)
-            except os_exceptions.SDKException as exc:
-                raise RuntimeError(
-                    f"could not delete image {name}: {exc}\n"
-                    "On Ceph-backed clouds (like Radiant) each boot volume is a "
-                    "copy-on-write clone of the image, so the image cannot be deleted "
-                    "while any cluster's nodes still exist. Note: you usually do NOT "
-                    "need to delete the image -- `taloscluster image download` updates "
-                    "its properties in place. To rebuild it, `destroy` the dependent "
-                    "cluster(s) first, then `image remove`."
-                ) from exc
+        for img in images:
+            action(f"delete image {img.name}")
+            if not dry_run():
+                try:
+                    self.conn.image.delete_image(img.id)
+                except os_exceptions.SDKException as exc:
+                    raise RuntimeError(
+                        f"could not delete image {img.name}: {exc}\n"
+                        "On Ceph-backed clouds (like Radiant) each boot volume is a "
+                        "copy-on-write clone of the image, so the image cannot be deleted "
+                        "while any cluster's nodes still exist. Note: you usually do NOT "
+                        "need to delete the image -- `taloscluster image download` updates "
+                        "its properties in place. To rebuild it, `destroy` the dependent "
+                        "cluster(s) first, then `image remove`."
+                    ) from exc
 
     def destroy_summary(self, inventory: InfrastructureInventory) -> str:
         raw = self._raw(inventory)

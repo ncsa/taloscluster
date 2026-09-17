@@ -58,6 +58,9 @@ class FakeGlance:
         self.created.append(name)
         return img
 
+    def delete_image(self, image):
+        self.images = [i for i in self.images if i.id != image]
+
     def update_image(self, img, **kwargs):
         img.properties.update(kwargs)
 
@@ -214,3 +217,45 @@ def test_nocloud_installer_and_iso_urls_use_the_same_schematic():
     assert factory.nocloud_iso_url("abc123", "v1.13.9").endswith(
         "/image/abc123/v1.13.9/nocloud-amd64.iso"
     )
+
+
+# ---------------------------------------------------------------------------
+# remove_image: the legacy pre-schematic name is still matched
+# ---------------------------------------------------------------------------
+
+def _os_backend(images, talos_version="v1.13.9"):
+    from taloscluster.openstack.backend import OpenStackBackend
+
+    backend = object.__new__(OpenStackBackend)
+    backend.cfg = SimpleNamespace(talos_version=talos_version)
+    backend.conn = FakeConn(images)
+    return backend
+
+
+def test_remove_image_deletes_legacy_and_schematic_images(monkeypatch):
+    """`image remove` cleans up both the current and the legacy pre-schematic
+    image so the orphan left by the rename does not linger."""
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    backend = _os_backend(
+        images=[
+            SimpleNamespace(name="talos-v1.13.9-tailscale-abc123", id="img-new"),
+            SimpleNamespace(name="talos-v1.13.9-tailscale", id="img-legacy"),
+        ]
+    )
+
+    backend.remove_image(assume_yes=True)
+
+    assert [i.id for i in backend.conn.image.images] == []
+
+
+def test_remove_image_cleans_up_an_orphaned_legacy_image(monkeypatch):
+    """A cluster that only has the old schematicless image (the migration
+    orphan) can still remove it even when no current image exists."""
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    backend = _os_backend(
+        images=[SimpleNamespace(name="talos-v1.13.9-tailscale", id="img-legacy")]
+    )
+
+    backend.remove_image(assume_yes=True)
+
+    assert [i.id for i in backend.conn.image.images] == []

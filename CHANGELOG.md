@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Delete the legacy `talos-<version>-tailscale` image that predates the schematic name on `image remove`.
 - Name the timed-out kubectl command in timeout errors and give manifest apply/diff/delete a longer bound.
 - Apply machine configs to control planes one at a time, waiting for each restart to finish.
 - Require `talosctl health` after a control-plane upgrade, reboot or config apply before touching the next one; the kube-api VIP no longer counts as healthy.

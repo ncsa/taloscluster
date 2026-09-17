@@ -336,6 +336,25 @@ def test_boot_iso_uses_shared_tailscale_image_name():
     assert _boot_iso_name("v1.12.2", "abc123") == "talos-v1.12.2-tailscale-abc123.iso"
 
 
+def test_remove_image_also_deletes_the_legacy_schematicless_iso(proxmox_cfg, monkeypatch):
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    data = _data()
+    legacy = "isos:iso/talos-v1.13.9-tailscale.iso"
+    current = "isos:iso/talos-v1.13.9-tailscale-abc123.iso"
+    for node in ("pve001", "pve002"):
+        data[f"nodes/{node}/storage/isos/content"] = [{"volid": legacy}, {"volid": current}]
+    client = FakeClient(data)
+    backend = _backend(proxmox_cfg, client)
+    backend.load_inventory()
+
+    backend.remove_image(assume_yes=True)
+
+    deleted = [path for method, path, _data in client.mutations if method == "DELETE"]
+    assert len(deleted) == 4  # both names on both non-shared nodes
+    assert any("talos-v1.13.9-tailscale.iso" in path for path in deleted)
+    assert any("talos-v1.13.9-tailscale-abc123.iso" in path for path in deleted)
+
+
 def test_ensure_boot_artifact_uses_download_url(proxmox_cfg, monkeypatch):
     data = _data()
     # no existing ISO on either node — _find_iso returns ""

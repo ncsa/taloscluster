@@ -113,6 +113,16 @@ def image_name(talos_version: str, schematic: str) -> str:
     return f"talos-{talos_version}-tailscale-{schematic}"
 
 
+def legacy_image_name(talos_version: str) -> str:
+    """The boot-image name before the schematic was part of it.
+
+    Pre-schematic images were named ``talos-<version>-tailscale`` with no
+    suffix; ``image remove`` still matches them so the one-time orphan left by
+    the rename can be cleaned up.
+    """
+    return f"talos-{talos_version}-tailscale"
+
+
 # ---- Proxmox SDN ------------------------------------------------------------
 # The SDN zone and VNet share one id: `sdn.name`, defaulting to the cluster
 # name. Proxmox limits these ids to 8 characters ([a-zA-Z][a-zA-Z0-9]*, no

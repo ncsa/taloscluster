@@ -103,6 +103,13 @@ def test_image_name_encodes_the_schematic():
     assert naming.image_name("v1.8.3", "abc123") != naming.image_name("v1.8.3", "def456")
 
 
+def test_legacy_image_name_predates_the_schematic_suffix():
+    """Pre-schematic images were named without a suffix; `image remove` still
+    matches them so the orphan left by the rename can be cleaned up."""
+    assert naming.legacy_image_name("v1.8.3") == "talos-v1.8.3-tailscale"
+    assert not naming.legacy_image_name("v1.8.3").endswith("-abc123")
+
+
 def test_names_are_deterministic():
     """Same cluster input always yields the same names."""
     assert naming.network_name(CLUSTER) == naming.network_name(CLUSTER)

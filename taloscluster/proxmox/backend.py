@@ -1651,22 +1651,25 @@ class ProxmoxBackend:
         inventory = self._require_preflight()
         schematic = factory.schematic_id(naming.BASE_EXTENSIONS)
         filename = _boot_iso_name(self.cfg.talos_version, schematic)
+        legacy_file = f"{naming.legacy_image_name(self.cfg.talos_version)}.iso"
+        nodes = self._iso_nodes(inventory)
         volumes = {
-            node: self._find_iso(node, self.provider.iso_storage, filename)
-            for node in self._iso_nodes(inventory)
+            (node, name): self._find_iso(node, self.provider.iso_storage, name)
+            for node in nodes
+            for name in (filename, legacy_file)
         }
-        if not any(volumes.values()):
+        found = [(node, volume) for (node, _name), volume in volumes.items() if volume]
+        if not found:
             info(f"image {filename} not found, nothing to remove")
             return
         warn("other clusters on the same Talos version may share this image")
         if not assume_yes and not dry_run():
             if input(f"type '{filename}' to confirm: ").strip() != filename:
                 raise SystemExit("aborted")
-        action(f"delete image {filename}")
-        if not dry_run():
-            for node, volume in volumes.items():
-                if volume:
-                    self._delete_volume(node, self.provider.iso_storage, volume)
+        for node, volume in found:
+            action(f"delete image {volume}")
+            if not dry_run():
+                self._delete_volume(node, self.provider.iso_storage, volume)
 
     def destroy_summary(self, inventory: InfrastructureInventory) -> str:
         raw = self._raw(inventory)
