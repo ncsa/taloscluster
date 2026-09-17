@@ -603,6 +603,99 @@ def test_scale_down_removes_owned_machine_that_never_joined_kubernetes(monkeypat
     assert mutations == ["reset", "compute"]
 
 
+def test_scale_down_rerun_deletes_cp_with_known_address_whose_reset_fails_and_is_out_of_etcd(
+    monkeypatch,
+):
+    """A control plane whose kube Node is already gone but whose address the
+    provider still knows (a wiped/powered-off VM from a prior reset whose delete
+    failed) must not abort the scale-down forever on a rerun when its reset
+    fails: treat the failure as a request for evidence, fall through to the
+    authoritative etcd-member check, and delete the VM once the node is out of
+    etcd."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
+    monkeypatch.setattr(
+        converge.kubectl, "drain", lambda *_a: pytest.fail("must not drain a kube-less CP")
+    )
+    monkeypatch.setattr(
+        converge.kubectl, "delete_node",
+        lambda *_a: pytest.fail("must not delete a kube Node that does not exist"),
+    )
+
+    def fail_reset(*_a, **_k):
+        raise ReconcileError("graceful reset of control plane testcluster-controlplane-03 failed")
+    monkeypatch.setattr(converge.talosctl, "reset", fail_reset)
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    inventory = InfrastructureInventory(
+        machines={
+            "testcluster-controlplane-03": InfrastructureMachine(
+                "testcluster-controlplane-03",
+                attachments=(NetworkAttachment("cluster", "192.0.2.30"),),
+            )
+        }
+    )
+    # the wiped node is absent from the surviving control plane's etcd member list
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-02": "8c2aa1e0"},
+    )
+
+    converge._scale_down(
+        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), Path("talosconfig"),
+        Path("kubeconfig"), assume_yes=True,
+    )
+
+    assert mutations == ["compute"]
+
+
+def test_scale_down_rerun_aborts_cp_with_known_address_whose_reset_fails_but_is_still_in_etcd(
+    monkeypatch, tmp_path
+):
+    """Even with a known address and no kube Node, a control plane whose reset
+    fails must not delete the VM while it is still an etcd member: the reset
+    failure is treated as a request for evidence, and the authoritative
+    etcd-member check keeps the quorum safeguard."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3})
+    mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
+    monkeypatch.setattr(
+        converge.kubectl, "drain", lambda *_a: pytest.fail("must not drain a kube-less CP")
+    )
+    monkeypatch.setattr(
+        converge.kubectl, "delete_node",
+        lambda *_a: pytest.fail("must not delete a kube Node that does not exist"),
+    )
+
+    def fail_reset(*_a, **_k):
+        raise ReconcileError("graceful reset of control plane testcluster-controlplane-03 failed")
+    monkeypatch.setattr(converge.talosctl, "reset", fail_reset)
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    inventory = InfrastructureInventory(
+        machines={
+            "testcluster-controlplane-03": InfrastructureMachine(
+                "testcluster-controlplane-03",
+                attachments=(NetworkAttachment("cluster", "192.0.2.30"),),
+            )
+        }
+    )
+    # the wiped node is still a live etcd member on the surviving control plane
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-03": "9eb1f01d"},
+    )
+
+    with pytest.raises(ReconcileError, match="still an etcd member"):
+        converge._scale_down(
+            FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), talosconfig,
+            Path("kubeconfig"), assume_yes=True,
+        )
+
+    assert mutations == []
+
+
 def test_scale_down_preserves_etcd_safeguard_for_owned_control_plane_inventory_only(
     monkeypatch, tmp_path
 ):

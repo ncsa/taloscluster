@@ -1173,7 +1173,30 @@ def _scale_down(
                             "aborting to protect a potentially live node"
                         ) from None
                     warn(f"drain of {node} failed (node already NotReady); continuing")
-            talosctl.reset(talosconfig, endpoint, address, control_plane=is_cp)
+            if is_cp and not has_node:
+                # A control plane whose kube Node is already gone has no k8s Node
+                # to protect, but its address may be stale (the provider still
+                # remembers the fixed IP of a wiped/powered-off port from a prior
+                # run whose VM delete failed). A failed or unreachable reset is
+                # therefore not proof the node matters on a rerun: fall through to
+                # the authoritative etcd-member check rather than aborting forever.
+                try:
+                    talosctl.reset(talosconfig, endpoint, address, control_plane=True)
+                except ReconcileError:
+                    etcd = talosctl.etcd_members(talosconfig, endpoint)
+                    if node in etcd:
+                        raise ReconcileError(
+                            f"reset of control plane {node} failed (address {address} is "
+                            f"known but the node did not reset) and it is still an etcd "
+                            f"member (id {etcd[node]} on control plane {endpoint}); refusing "
+                            "to delete a member that could cost quorum"
+                        ) from None
+                    info(
+                        f"reset of control plane {node} failed but it is absent from the "
+                        f"surviving control plane's etcd member list; deleting"
+                    )
+            else:
+                talosctl.reset(talosconfig, endpoint, address, control_plane=is_cp)
         else:
             # node_ready reads the kube Node: for a node with no kube Node there
             # is nothing to be Ready, so only consult it when a Node exists.
