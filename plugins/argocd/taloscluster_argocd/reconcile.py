@@ -49,6 +49,32 @@ def _validate(target: ApplyTarget) -> None:
         )
 
 
+def _resolve_rancher(ctx: Context) -> None:
+    """Ensure argocd renders the same Rancher cluster id converge would.
+
+    Argocd's manifests take the id from ``ctx.results["rancher"]["cluster_id"]``,
+    which a core converge/check/status fills by running rancher first (argocd
+    declares ``AFTER = ("rancher",)``). But the standalone ``plugin argocd
+    converge|check`` runs argocd alone, so that context starts empty and the
+    rendered manifests would carry no Rancher annotation -- re-writing the
+    cluster Secret without it, or reporting drift against the just-applied one.
+    Read the downstream cluster's own cattle-cluster-agent id (the same value
+    rancher publishes) so both paths resolve the same identity. A best effort:
+    when rancher is not installed there is nothing to stamp, which is normal.
+    """
+    results = getattr(ctx, "results", None)
+    if not isinstance(results, dict):
+        return
+    if (results.get("rancher") or {}).get("cluster_id"):
+        return
+    root = getattr(ctx, "root", None)
+    if not root:
+        return
+    cid = kube.downstream_rancher_id(root)
+    if cid:
+        results["rancher"] = {"cluster_id": cid}
+
+
 def _deferred(ctx: Context) -> str | None:
     """Why argocd's converge is deferred during a `plan` before bootstrap.
 
@@ -84,6 +110,7 @@ def _ost(target: ApplyTarget) -> tuple[str, str] | None:
 def converge(ctx: Context, assume_yes: bool = False) -> dict:
     cfg, target = _load(ctx.root)
     _validate(target)
+    _resolve_rancher(ctx)
 
     reason = _deferred(ctx)
     if reason:
@@ -206,6 +233,7 @@ def status(ctx: Context) -> dict:
 
 def check(ctx: Context) -> dict:
     """Would converge apply anything? Not ok while a resource is missing or drifted."""
+    _resolve_rancher(ctx)
     matching = _matching(ctx)
     drifted = sorted(name for name, ok in matching.items() if not ok)
     return {"ok": not drifted, "drifted": drifted, "resources": matching}

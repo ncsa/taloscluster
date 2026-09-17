@@ -270,6 +270,69 @@ def test_collect_gathers_reports(monkeypatch, ctx):
     }
 
 
+def test_collect_results_reach_the_next_plugin(monkeypatch, ctx):
+    """The same cluster identity converge hands downstream plugins must also
+    reach them through check/status reports: rancher publishes its cluster_id
+    in check/status, argocd consumes it to render manifests."""
+    seen = {}
+
+    def first(ctx):
+        return {"cluster_id": "c-12345", "ok": True}
+
+    def second(ctx):
+        seen.update(ctx.results.get("first", {}))
+
+    install(
+        monkeypatch,
+        FakeEntryPoint("first", make_module("first", after=(), check=first)),
+        FakeEntryPoint("second", make_module("second", after=("first",), check=second)),
+    )
+    plugins.collect(plugins.discover(), "check", ctx)
+    assert ctx.results["first"] == {"cluster_id": "c-12345", "ok": True}
+    assert seen == {"cluster_id": "c-12345", "ok": True}
+
+
+def test_converge_then_check_delivers_the_same_identity(monkeypatch, tmp_path):
+    """The todo's regression: a converge that stamps the Rancher id on ArgoCD's
+    manifests is followed by a separate `check` that renders the SAME id, so it
+    reports the just-applied manifests as current rather than drifted.
+
+    Rancher and argocd are both enabled. Each leg uses a fresh context, as a
+    separate `taloscluster` invocation would, so nothing leaks between them:
+    the converge leg publishes `cluster_id` into ctx.results and the check leg's
+    collect must republish rancher's check report into the new context before
+    argocd renders."""
+    seen = {}
+
+    def rancher_converge(ctx, assume_yes=False):
+        return {"cluster_id": "c-abc12", "members": []}
+
+    def rancher_check(ctx):
+        return {"cluster_id": "c-abc12", "ok": True}
+
+    def argocd_converge(ctx, assume_yes=False):
+        seen["converge"] = (ctx.results.get("rancher") or {}).get("cluster_id")
+        return {"applied": ["secret"], "server": "unused"}
+
+    def argocd_check(ctx):
+        seen["check"] = (ctx.results.get("rancher") or {}).get("cluster_id")
+        return {"ok": True, "drifted": []}
+
+    install(
+        monkeypatch,
+        FakeEntryPoint("rancher", make_module(
+            "rancher", converge=rancher_converge, check=rancher_check)),
+        FakeEntryPoint("argocd", make_module(
+            "argocd", after=("rancher",), converge=argocd_converge, check=argocd_check)),
+    )
+
+    plugins.run(plugins.discover(), "converge", Context(root=tmp_path, cfg=None))
+    plugins.collect(plugins.discover(), "check", Context(root=tmp_path, cfg=None))
+
+    assert seen["converge"] == "c-abc12"
+    assert seen["check"] == "c-abc12"
+
+
 def test_collect_records_a_failure_rather_than_dropping_it(monkeypatch, ctx):
     def boom(ctx):
         raise RuntimeError("unreachable")

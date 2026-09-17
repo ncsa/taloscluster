@@ -83,6 +83,8 @@ def test_check_ok_when_everything_matches(cluster_dir, wire):
     assert report["ok"] is True
     assert report["missing_members"] == []
     assert report["stale_members"] == []
+    # the report carries the cluster id in the shape argocd consumes
+    assert report["cluster_id"] == "c-abc12"
 
 
 def test_creator_binding_is_never_stale(cluster_dir, wire):

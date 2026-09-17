@@ -31,7 +31,7 @@ A converge or destroy hook failure is reported, the other plugins still run, and
 
 ## Plugins depend on each other
 
-Plugins run in a defined order and can pass information forward. A plugin declares the names it wants to run after, and whatever its converge returns is stored for the plugins that follow. The rancher plugin publishes the Rancher cluster id it created; the argocd plugin runs after it and stamps that id on the ArgoCD cluster Secret so the two systems point at the same cluster. The dependency is soft: a name that is not installed is ignored, and a plugin must treat an earlier plugin's output as optional.
+Plugins run in a defined order and can pass information forward. A plugin declares the names it wants to run after, and whatever it returns — a converge result or a `check`/`status` report — is stored for the plugins that follow. The rancher plugin publishes the Rancher cluster id it resolved; the argocd plugin runs after it and stamps that id on the ArgoCD cluster Secret so the two systems point at the same cluster. The dependency is soft: a name that is not installed is ignored, and a plugin must treat an earlier plugin's output as optional.
 
 ## Rancher
 
@@ -71,7 +71,7 @@ def check(ctx) -> dict: ...               # must carry "ok": bool
 
 `ctx` is a `Context` carrying what taloscluster already knows, so a plugin never re-derives it: `ctx.root`, `ctx.cfg` (the parsed `cluster.yaml`), `ctx.kubeconfig` / `ctx.talosconfig`, and `ctx.infrastructure` / `ctx.openstack` / `ctx.kubernetes` / `ctx.ingress` (url, region, project; floating ips and VIPs). During a converge these are already in hand, so reading them costs nothing.
 
-Whatever `converge` returns is stored in `ctx.results[<name>]` before the next plugin runs — that is how `argocd` picks up the Rancher cluster id. `AFTER` is a wish, not a dependency: a name that is not installed is ignored, and a plugin must treat an earlier plugin's output as optional.
+Whatever a plugin's `converge` — or its `check`/`status` report — returns is stored in `ctx.results[<name>]` before the next plugin runs: `run` stores a converge result and `collect` stores each report dict. That is how `argocd` picks up the Rancher cluster id during both a converge and a subsequent check/status, so it renders the same downstream identity instead of an empty value. A standalone `taloscluster plugin argocd converge`/`check` runs without rancher (so `ctx.results` starts empty); the argocd plugin then reads the same cluster id off the downstream cluster's own `cattle-cluster-agent` and stamps it, so a standalone run still points ArgoCD at the same Rancher cluster. `AFTER` is a wish, not a dependency: a name that is not installed is ignored, and a plugin must treat an earlier plugin's output as optional.
 
 Print through `taloscluster.output` (`log` / `info` / `action`) and honour `dry_run()`, and `plan` works for free. Report data, never text — core renders `status` / `check` dicts for both text and yaml.
 

@@ -174,3 +174,74 @@ def test_present_probes_cinder_secret_downstream(monkeypatch):
     monkeypatch.setattr(reconcile.kube, "exists_downstream", lambda _r, doc: doc == "cr")
 
     assert reconcile._present(ctx) == {"secret": True, "cinder-secret": True}
+
+
+# ---- Rancher cluster identity ----------------------------------------------
+
+def test_standalone_converge_resolves_the_downstream_rancher_id(monkeypatch):
+    """`plugin argocd converge` runs without rancher, so argocd reads the same
+    cluster id off the downstream agent itself and stamps it -- a standalone
+    run must not re-write the cluster Secret with a blank Rancher annotation."""
+    ctx = SimpleNamespace(root="/some/root", results={})
+    monkeypatch.setattr(kube, "downstream_rancher_id", lambda root: "c-abc12")
+    monkeypatch.setattr(reconcile, "_load",
+                        lambda root: (SimpleNamespace(name="t", openstack=None),
+                                      ApplyTarget(context="argocd")))
+    monkeypatch.setattr(reconcile, "_validate", lambda _target: None)
+    monkeypatch.setattr(reconcile, "render",
+                        lambda *a, **k: {"secret": "s", "project": "p"})
+    monkeypatch.setattr(reconcile.kube, "apply", lambda _t, _r, _d: None)
+
+    assert reconcile.converge(ctx)["applied"] == ["project", "secret"]
+    assert ctx.results["rancher"]["cluster_id"] == "c-abc12"
+
+
+def test_standalone_check_resolves_the_downstream_rancher_id(monkeypatch):
+    """The standalone `plugin argocd check` renders with the same id before
+    diffing, so the just-applied annotated Secret reads as current, not drifted."""
+    ctx = SimpleNamespace(root="/some/root", results={})
+    monkeypatch.setattr(kube, "downstream_rancher_id", lambda root: "c-abc12")
+    monkeypatch.setattr(reconcile, "_load",
+                        lambda root: (object(), ApplyTarget(context="argocd")))
+    monkeypatch.setattr(reconcile, "render",
+                        lambda *a, **k: {"secret": "s", "project": "p"})
+    monkeypatch.setattr(reconcile.kube, "matches", lambda _t, _r, _d: True)
+
+    assert reconcile.check(ctx) == {
+        "ok": True, "drifted": [], "resources": {"secret": True, "project": True}
+    }
+    assert ctx.results["rancher"]["cluster_id"] == "c-abc12"
+
+
+def test_no_rancher_id_when_the_agent_is_absent(monkeypatch):
+    """An unregistered cluster (no cattle agent) is normal, not an error -- the
+    standalone run renders without the Rancher annotation, mirroring rancher
+    not being installed."""
+    ctx = SimpleNamespace(root="/some/root", results={})
+    monkeypatch.setattr(kube, "downstream_rancher_id", lambda root: None)
+    monkeypatch.setattr(reconcile, "_load",
+                        lambda root: (SimpleNamespace(name="t", openstack=None),
+                                      ApplyTarget(context="argocd")))
+    monkeypatch.setattr(reconcile, "_validate", lambda _target: None)
+    monkeypatch.setattr(reconcile, "render",
+                        lambda *a, **k: {"secret": "s", "project": "p"})
+    monkeypatch.setattr(reconcile.kube, "apply", lambda _t, _r, _d: None)
+
+    reconcile.converge(ctx)
+    assert "rancher" not in ctx.results
+
+
+def test_rancher_report_wins_without_a_kubectl_call(monkeypatch):
+    """When rancher ran first and put the id in ctx.results, argocd must reuse
+    it (authoritative and cheap) instead of shelling out to read it again."""
+    ctx = SimpleNamespace(root="/some/root", results={"rancher": {"cluster_id": "c-abc12"}})
+    called = []
+    monkeypatch.setattr(kube, "downstream_rancher_id", lambda root: called.append(root))
+    monkeypatch.setattr(reconcile, "_load",
+                        lambda root: (object(), ApplyTarget(context="argocd")))
+    monkeypatch.setattr(reconcile, "render",
+                        lambda *a, **k: {"secret": "s", "project": "p"})
+    monkeypatch.setattr(reconcile.kube, "matches", lambda _t, _r, _d: True)
+
+    assert reconcile.check(ctx)["ok"] is True
+    assert called == []

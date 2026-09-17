@@ -194,16 +194,26 @@ def run(plugins: list[Plugin], hook: str, ctx: Context, **kw) -> int:
 def collect(plugins: list[Plugin], hook: str, ctx: Context) -> dict[str, Any]:
     """Call a reporting hook (status/check) on each plugin, name -> its report.
 
-    A plugin that raises gets an ``{"error": ...}`` entry instead of being
-    dropped, so a broken plugin is visible in the report rather than silent.
+    A plugin that raises gets an ``{"ok": False, "error": ...}`` entry instead
+    of being dropped, so a broken plugin is visible in the report rather than
+    silent.
+
+    As with ``run``, each report — a success or a failure — is also recorded in
+    ``ctx.results[<name>]`` before the next plugin runs, so a downstream plugin
+    (argocd runs after rancher) resolves the same cluster identity during a
+    check/status that converge established in ``ctx.results`` -- e.g. the
+    Rancher cluster id -- instead of rendering an empty value.
     """
     out: dict[str, Any] = {}
     for p in plugins:
         if not p.has(hook):
             continue
         try:
-            out[p.name] = p.call(hook, ctx)
+            report = p.call(hook, ctx)
         except (Exception, Die) as e:
             warn(f"plugin {p.name!r} failed during {hook}: {e}")
-            out[p.name] = {"ok": False, "error": str(e)}
+            report = {"ok": False, "error": str(e)}
+        out[p.name] = report
+        if isinstance(report, dict):
+            ctx.results[p.name] = report
     return out
