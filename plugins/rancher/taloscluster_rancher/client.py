@@ -136,8 +136,13 @@ class Client:
             import;
           - anything else that merely shares the name (a healthy, or a
             live-but-disconnected, unrelated cluster with no matching agent):
-            abort rather than attach to it.
-        If no Rancher cluster named `name` exists, a new import cluster is created.
+            abort rather than attach to it;
+          - the downstream agent is registered (a non-None `downstream_id`) but
+            no Rancher cluster carries the name: refuse, since a fresh import
+            cluster could never match the agent's existing id and would strand
+            it — the registration was renamed or deleted in the Rancher UI.
+        If no Rancher cluster named `name` exists and the downstream cluster has
+        no agent, a new import cluster is created.
         """
         existing = self.find_cluster(name)
         if existing is not None:
@@ -156,6 +161,15 @@ class Client:
                 f"a Rancher cluster named {name!r} already exists ({existing.id}) and "
                 "its downstream cluster has no Rancher agent, so it is not this "
                 "cluster; choose a unique name or delete the existing cluster"
+            )
+        if downstream_id:
+            raise RancherError(
+                f"the downstream cluster's cattle-cluster-agent is registered as "
+                f"{downstream_id}, but no Rancher cluster named {name!r} exists; "
+                "the registration was probably renamed or deleted and recreated in "
+                "the Rancher UI, so importing a fresh cluster would strand the "
+                "agent under the old id. Delete the stale registration or rename "
+                "the Rancher cluster back, then re-run"
             )
         if dry_run():
             action(f"create import cluster {name} in Rancher")

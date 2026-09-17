@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 import yaml
+from taloscluster.context import Context
 from taloscluster.errors import ConfigError
 
 from taloscluster_rancher import reconcile
@@ -135,3 +136,40 @@ def test_unresolvable_never_created_member_aborts(tmp_path):
 
     assert client.removed == []
     assert client.added == []
+
+
+def test_converge_refuses_when_downstream_id_matches_no_rancher_cluster(tmp_path, monkeypatch):
+    """converge must refuse (not create a fresh import cluster) when the
+    downstream agent id matches no Rancher cluster bearing the configured name --
+    the renamed/deleted-in-UI case. If it created `c-new` under the agent's old
+    `c-old`, members would bind to a cluster that stays pending and destroy would
+    refuse c-old != c-new; converge must leave Rancher untouched instead."""
+    class ConvergeClient(FakeClient):
+        def __init__(self):
+            super().__init__(principals=PRINCIPALS)
+            self._cluster = None
+
+        def ensure_cluster(self, name, downstream_id=None):
+            # mirrors the real client: a registered agent that matches no named
+            # cluster is refused before create_import_cluster is reached
+            raise RancherError(
+                f"the downstream cluster's cattle-cluster-agent is registered as "
+                f"{downstream_id}, but no Rancher cluster named {name!r} exists"
+            )
+
+    client = ConvergeClient()
+    monkeypatch.setattr(reconcile, "_client", lambda secrets: client)
+    monkeypatch.setattr(reconcile, "downstream_rancher_id", lambda root: "c-old")
+    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({
+        "name": "testcluster",
+        "rancher": {"admins": ["alice"], "users": ["carol"]},
+    }))
+    (tmp_path / "secrets.yaml").write_text(yaml.safe_dump({
+        "rancher": {"url": "https://rancher.example.com", "token": "token-x:y"},
+    }))
+
+    with pytest.raises(RancherError, match="no Rancher cluster named 'testcluster'"):
+        reconcile.converge(Context(root=tmp_path, cfg=None))
+
+    assert client.added == []
+    assert client.removed == []

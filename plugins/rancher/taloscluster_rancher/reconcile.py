@@ -12,9 +12,13 @@
 
 Name collisions: if a Rancher cluster already bears the configured name but the
 downstream cluster has no Rancher agent (or a different id), we refuse to attach
-to it and abort — it is an unrelated cluster with the same name. Safe to re-run:
-an existing cluster matching the downstream agent id is reused, and member
-reconciliation is idempotent.
+to it and abort — it is an unrelated cluster with the same name. The mirror case
+is refused too: when the downstream agent is registered (a non-None id) but no
+Rancher cluster carries the configured name — the registration was renamed or
+deleted and recreated in the Rancher UI — a fresh import would strand the agent
+under the old id, so we refuse rather than create an inert cluster that can never
+match the agent. Safe to re-run: an existing cluster matching the downstream agent
+id is reused, and member reconciliation is idempotent.
 
 `destroy` deletes the cluster from Rancher and uninstalls the Rancher agent
 from the downstream cluster. Like `converge`, it refuses to touch a Rancher

@@ -222,6 +222,58 @@ def test_delete_cluster_deletes_via_the_api():
     assert deleted == ["/v3/clusters/c-7"]
 
 
+def test_ensure_cluster_creates_a_fresh_import_when_no_downstream_id():
+    """Without an agent (no downstream id) and no existing cluster, a fresh
+    import cluster is created -- the normal first-registration path."""
+    posted = []
+    client = Client("https://rancher.example.com", "token-x:y")
+    client._get = lambda path, **kw: {"data": []}
+    client._post = lambda path, body: posted.append((path, body)) or {
+        "id": "c-new", "name": "example", "state": "provisioning"
+    }
+    cluster = client.ensure_cluster("example", downstream_id=None)
+    assert posted == [("/v3/clusters", {"type": "cluster", "name": "example"})]
+    assert cluster.id == "c-new"
+
+
+def test_ensure_cluster_reuses_the_cluster_matching_the_downstream_id():
+    """A re-run on our own cluster: the existing Rancher id equals the downstream
+    id, so it is reused without creating anything."""
+    data = {"data": [{"id": "c-old", "name": "example", "state": "active"}]}
+    client = _http_client(get=lambda path, **kw: data)
+    client._post = lambda path, body: (_ for _ in ()).throw(
+        AssertionError("must not create a cluster on a re-run")
+    )
+    cluster = client.ensure_cluster("example", downstream_id="c-old")
+    assert cluster.id == "c-old"
+
+
+def test_ensure_cluster_refuses_when_downstream_id_matches_no_named_cluster():
+    """A registered agent (downstream id set) but no Rancher cluster bearing the
+    configured name means the registration was renamed or deleted and recreated
+    in the Rancher UI. Converge must refuse rather than create a fresh cluster
+    that can never match the agent's existing id (which stranded the members on a
+    cluster that stays pending and made destroy refuse c-old != c-new)."""
+    post_hits = []
+    client = _http_client(get=lambda path, **kw: {"data": []})
+    client._post = lambda path, body: post_hits.append((path, body)) or {}
+    with pytest.raises(
+        RancherError,
+        match="downstream cluster's cattle-cluster-agent is registered as c-old",
+    ):
+        client.ensure_cluster("example", downstream_id="c-old")
+    assert post_hits == []
+
+
+def test_ensure_cluster_refuses_an_existing_cluster_whose_id_differs():
+    """An existing Rancher cluster that shares the name but whose id does not
+    match the downstream agent is an unrelated cluster; do not attach to it."""
+    data = {"data": [{"id": "c-new", "name": "example", "state": "active"}]}
+    client = _http_client(get=lambda path, **kw: data)
+    with pytest.raises(RancherError, match="does not match the downstream"):
+        client.ensure_cluster("example", downstream_id="c-old")
+
+
 def _cluster_payload(conditions):
     return {"id": "c-1", "name": "example", "state": "pending", "conditions": conditions}
 
