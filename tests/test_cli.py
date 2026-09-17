@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from taloscluster import cli
+from taloscluster import plugins as _plugins
+
+
+def _stub_plugin(name, **hooks):
+    """A real :class:`Plugin` with a stub module exposing the given callables."""
+
+    class _Module:
+        pass
+
+    module = _Module()
+    for k, v in hooks.items():
+        setattr(module, k, v)
+    return _plugins.Plugin(name=name, module=module, after=())
 
 
 @pytest.mark.parametrize(
@@ -137,3 +152,183 @@ def test_openstack_transport_error_exits_cleanly_through_cli_main(
     err = capsys.readouterr().err
     assert "ERROR: OpenStack API error: Timed out connecting to the cloud endpoint" in err
     assert "Traceback" not in err
+
+
+# -- image -----------------------------------------------------------------
+
+def test_image_download_dispatches(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(cli, "set_dry_run", lambda enabled: seen.update(dry_run=enabled))
+    monkeypatch.setattr(cli._converge, "image_download", lambda root: seen.update(root=root))
+    assert cli.main(["image", "download", "-C", str(tmp_path), "--dry-run"]) == 0
+    assert seen == {"root": tmp_path, "dry_run": True}
+
+
+def test_image_remove_dispatches_with_yes(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(cli, "set_dry_run", lambda enabled: seen.update(dry_run=enabled))
+    monkeypatch.setattr(
+        cli._converge, "image_remove",
+        lambda root, assume_yes=False: seen.update(root=root, assume_yes=assume_yes),
+    )
+    assert cli.main(["image", "remove", "-C", str(tmp_path), "--yes"]) == 0
+    assert seen == {"root": tmp_path, "assume_yes": True, "dry_run": False}
+
+
+# -- destroy ---------------------------------------------------------------
+
+def test_destroy_dispatches_and_forwards_rc(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(cli, "set_dry_run", lambda enabled: seen.update(dry_run=enabled))
+    monkeypatch.setattr(
+        cli._converge, "destroy",
+        lambda root, assume_yes=False: seen.update(root=root, assume_yes=assume_yes) or 7,
+    )
+    assert cli.main(["destroy", "-C", str(tmp_path), "--yes", "--dry-run"]) == 7
+    assert seen == {"root": tmp_path, "assume_yes": True, "dry_run": True}
+
+
+# -- plugin -----------------------------------------------------------------
+
+def test_plugin_list_is_reserved_name(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli._plugins, "discover", lambda: [])
+    assert cli.main(["plugin", "list", "-C", str(tmp_path)]) == 0
+    assert "no plugins installed" in capsys.readouterr().out
+
+
+def test_plugin_named_list_cannot_be_run(monkeypatch, tmp_path, capsys):
+    listed = _stub_plugin("list", configured=lambda ctx: True)
+    monkeypatch.setattr(cli._plugins, "discover", lambda: [listed])
+    assert cli.main(["plugin", "list", "-C", str(tmp_path)]) == 0
+    # the reserved name routes to the listing, never to `_plugins.run`
+    out = capsys.readouterr().out
+    assert "list" in out
+
+
+def test_plugin_validate_runs_before_configured_check(make_config, monkeypatch, tmp_path):
+    make_config()  # a valid cluster.yaml so Context.load succeeds before the configured check
+    plugin = _stub_plugin("demo", configured=lambda ctx: False,
+                          converge=lambda ctx, assume_yes=False: {})
+    monkeypatch.setattr(cli._plugins, "discover", lambda: [plugin])
+    seen = {}
+    monkeypatch.setattr(
+        cli._plugins, "validate",
+        lambda ctx, only=None: seen.update(validated=only),
+    )
+    assert cli.main(["plugin", "demo", "-C", str(tmp_path)]) == 0
+    assert seen == {"validated": [plugin]}
+    assert not plugin.configured(object())  # sanity: it really is unconfigured
+
+
+def test_plugin_validate_refuses_unconfigured_plugin(make_config, monkeypatch, tmp_path):
+    make_config()
+    plugin = _stub_plugin("demo", configured=lambda ctx: False)
+
+    def reject(ctx, only=None):
+        raise cli.ConfigError("broken section")
+
+    monkeypatch.setattr(cli._plugins, "discover", lambda: [plugin])
+    monkeypatch.setattr(cli._plugins, "validate", reject)
+    assert cli.main(["plugin", "demo", "-C", str(tmp_path)]) == 1
+
+
+def test_plugin_destroy_confirmation_wrong_name_aborts(make_config, monkeypatch, tmp_path):
+    make_config()  # a valid cluster.yaml so ctx.cfg.name is "testcluster"
+    plugin = _stub_plugin("demo", configured=lambda ctx: True,
+                          destroy=lambda ctx, assume_yes=False: None)
+    monkeypatch.setattr(cli._plugins, "discover", lambda: [plugin])
+    monkeypatch.setattr(cli._plugins, "validate", lambda ctx, only=None: None)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "wrongcluster")
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["plugin", "demo", "destroy", "-C", str(tmp_path)])
+    assert exc.value.code == "aborted"
+
+
+def test_plugin_destroy_confirmation_matching_name_runs(make_config, monkeypatch, tmp_path):
+    make_config()
+    plugin = _stub_plugin("demo", configured=lambda ctx: True,
+                          destroy=lambda ctx, assume_yes=False: None)
+    monkeypatch.setattr(cli._plugins, "discover", lambda: [plugin])
+    monkeypatch.setattr(cli._plugins, "validate", lambda ctx, only=None: None)
+    seen = {}
+    monkeypatch.setattr(
+        cli._plugins, "run",
+        lambda plugins, hook, ctx, **kw: seen.update(hook=hook, assume_yes=kw["assume_yes"]) or 0,
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "testcluster")
+    assert cli.main(["plugin", "demo", "destroy", "-C", str(tmp_path)]) == 0
+    assert seen == {"hook": "destroy", "assume_yes": False}
+
+
+def test_plugin_destroy_skip_confirmation_with_yes(make_config, monkeypatch, tmp_path):
+    make_config()
+    plugin = _stub_plugin("demo", configured=lambda ctx: True,
+                          destroy=lambda ctx, assume_yes=False: None)
+    monkeypatch.setattr(cli._plugins, "discover", lambda: [plugin])
+    monkeypatch.setattr(cli._plugins, "validate", lambda ctx, only=None: None)
+    seen = {}
+    monkeypatch.setattr(
+        cli._plugins, "run",
+        lambda plugins, hook, ctx, **kw: seen.update(hook=hook, assume_yes=kw["assume_yes"]) or 0,
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("should not prompt"))
+    assert cli.main(["plugin", "demo", "destroy", "-C", str(tmp_path), "--yes"]) == 0
+    assert seen == {"hook": "destroy", "assume_yes": True}
+
+
+@pytest.mark.parametrize("ok,expected", [(True, 0), (False, 1)])
+def test_plugin_check_exit_reflects_ok(make_config, monkeypatch, tmp_path, ok, expected):
+    make_config()
+    plugin = _stub_plugin("demo", configured=lambda ctx: True,
+                          check=lambda ctx: {"ok": ok})
+    monkeypatch.setattr(cli._plugins, "discover", lambda: [plugin])
+    monkeypatch.setattr(cli._plugins, "collect",
+                        lambda plugins, hook, ctx: {"demo": {"ok": ok}})
+    assert cli.main(["plugin", "demo", "check", "-C", str(tmp_path)]) == expected
+
+
+def test_plugin_status_exits_zero(make_config, monkeypatch, tmp_path):
+    make_config()
+    plugin = _stub_plugin("demo", configured=lambda ctx: True,
+                          status=lambda ctx: {"state": "ok"})
+    monkeypatch.setattr(cli._plugins, "discover", lambda: [plugin])
+    monkeypatch.setattr(cli._plugins, "collect",
+                        lambda plugins, hook, ctx: {"demo": {"state": "ok"}})
+    assert cli.main(["plugin", "demo", "status", "-C", str(tmp_path)]) == 0
+
+
+# -- exception-to-exit-code mapping in main ---------------------------------
+
+def _bomb(exc):
+    def boom(root, assume_yes=False, reboot=False):
+        raise exc
+    return boom
+
+
+def test_main_maps_die_to_exit_1(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli._converge, "converge", _bomb(cli.Die("boom")))
+    assert cli.main(["converge", "-C", str(tmp_path)]) == 1
+    assert "ERROR: boom" in capsys.readouterr().err
+
+
+def test_main_maps_config_error_to_exit_1(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli._converge, "converge", _bomb(cli.ConfigError("bad config")))
+    assert cli.main(["converge", "-C", str(tmp_path)]) == 1
+    assert "ERROR: bad config" in capsys.readouterr().err
+
+
+def test_main_maps_called_process_error_to_exit_1(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        cli._converge, "converge",
+        _bomb(subprocess.CalledProcessError(1, ["talosctl", "get", "nodes"])),
+    )
+    assert cli.main(["converge", "-C", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert "ERROR: command failed" in err
+    assert "talosctl get nodes" in err
+
+
+def test_main_maps_keyboard_interrupt_to_130(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli._converge, "converge", _bomb(KeyboardInterrupt()))
+    assert cli.main(["converge", "-C", str(tmp_path)]) == 130
+    assert "interrupted" in capsys.readouterr().err

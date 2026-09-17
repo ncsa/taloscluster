@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+- Add CLI dispatch tests for the `image`, `destroy` and `plugin` commands (the reserved `list` name, validate-before-configured ordering, destroy confirmation, and the check exit code) and for the exception-to-exit-code mapping in `cli.main`, with the handlers stubbed.
 - Encode the base schematic in the OpenStack boot image (and Proxmox boot ISO) identity, so changing the base extension set builds a fresh image under a new name instead of silently reusing a stale one.
 - Sweep the remaining OpenStack-only wording out of provider-neutral code: the `plan`, `check`, `image` and `dashboard` CLI help (including the non-Tailscale dashboard path), the `print_env`/`image`/`destroy` prose, the `ReconcileError` and `Context` docstrings, and the `pyproject.toml` description, and extend the docstring-drift test to CLI help strings and `pyproject.toml`.
 - Bound every `kubectl` call (core wrapper, the shared Rancher `cluster_id` reader, and the argocd and rancher plugins) with a 30s wall-clock request timeout (330s for `drain`), so a kube-api that accepts TCP but never answers (a VIP owned by a half-dead control plane) fails converge with a clear error instead of hanging; callers distinguish a timed-out request from a negative answer.
