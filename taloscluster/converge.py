@@ -875,6 +875,12 @@ def _config_kubernetes_version(cfg: Config, kubeconfig: Path, up: bool) -> str:
         # unknown, but a real run writes or recovers the kubeconfig and steps
         # the minors -- keep the target so the plan completes (see `_upgrade`).
         return want
+    if not cur:
+        raise ReconcileError(
+            "could not determine the running cluster's kubernetes version while "
+            "the kube-api is up; refusing to generate machine configs against an "
+            "unknown version. Retry converge or investigate the cluster health."
+        )
     if cur == want:
         return want
     if versions.is_older(want, cur):
@@ -887,18 +893,21 @@ def _config_kubernetes_version(cfg: Config, kubeconfig: Path, up: bool) -> str:
 
 
 def _running_kubernetes_version(kubeconfig: Path) -> str | None:
-    """The running cluster's kubernetes version, retrying a transient read.
+    """The running kubernetes version, retrying a timed-out or empty read.
 
-    A reachable cluster answering an empty `kubectl version` is a strong sign of
-    a transient probe failure, not that the version is unknown for good --
+    A reachable cluster answering an empty `kubectl version` is a strong sign
+    of a transient probe failure, not that the version is unknown for good --
     reading it as the target version would push target kubelet/control-plane
     images through `_apply_existing_configs` and skip the minor-by-minor
-    upgrade. Retry the read and, if it still cannot be established, abort
-    before any config mutation. The one exception is a dry run with no
-    non-empty kubeconfig on disk -- any such plan (not only on a recovered
-    management machine): with nothing to read, return None and let
-    `_config_kubernetes_version` keep the target instead of aborting the plan
-    (mirrors `_upgrade`'s guard).
+    upgrade. Retry the read (a hung `kubectl version` that accepted TCP but
+    never answered is a failed read too, not a generic timeout to abort on)
+    and, if it still cannot be established, return "" and let the caller
+    decide the verdict -- `_config_kubernetes_version` aborts before any
+    config mutation, while `_upgrade` falls back to its stabilization wait.
+    A dry run with no non-empty kubeconfig on disk (any such plan, not only on
+    a recovered management machine) reads nothing: return None instead, so the
+    plan completes against the target rather than retrying and printing spurious
+    "retrying..." lines before reporting the version as unknown.
     """
     if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
         # a real run writes the kubeconfig (or recovers it); a dry run reads
@@ -906,33 +915,6 @@ def _running_kubernetes_version(kubeconfig: Path) -> str | None:
         # target so the plan completes, and a real run steps the minors
         info("kubernetes version unknown (missing kubeconfig); skipped in plan")
         return None
-    for attempt in range(1, 4):
-        try:
-            cur = kubectl.server_version(kubeconfig)
-        except subprocess.TimeoutExpired:
-            cur = ""  # a timed-out read is still a failed read; retry then abort
-        if cur:
-            return cur
-        if attempt < 3:
-            info(f"kubernetes version read failed (attempt {attempt}/3); retrying...")
-            time.sleep(2)
-    raise ReconcileError(
-        "could not determine the running cluster's kubernetes version while "
-        "the kube-api is up; refusing to generate machine configs against an "
-        "unknown version. Retry converge or investigate the cluster health."
-    )
-
-
-def _upgrade_read_version(kubeconfig: Path) -> str:
-    """The running kubernetes version, retrying a timed-out or empty read.
-
-    The upgrade runs after the version was already established once, so a hung
-    `kubectl version` (`TimeoutExpired`, a kube-api that accepted TCP but never
-    answered) is treated as a failed read and retried like `_running_kubernetes_version`
-    does rather than aborting the whole converge with the generic timeout message.
-    Returns "" when the read still fails, leaving the caller's stabilization and
-    error handling to decide the verdict.
-    """
     for attempt in range(1, 4):
         try:
             cur = kubectl.server_version(kubeconfig)
@@ -1555,21 +1537,20 @@ def _upgrade(
     discovered = talosctl.member_addresses(
         talosconfig, endpoint, exclude_vip=_cluster_vips(cfg, refs, kubeconfig)
     )
-    cur = _upgrade_read_version(kubeconfig)
+    cur = _running_kubernetes_version(kubeconfig)
+    if cur is None:
+        # a dry run with no non-empty kubeconfig on disk has no running
+        # version to report (a real run writes it, or recovers it from the
+        # restored identity, then steps the minors); there is nothing a dry
+        # run can upgrade, and the 30s retry + stabilization waits have no
+        # kube-api to probe.
+        return
     if not cur:
-        if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
-            # a dry run with no non-empty kubeconfig on disk has no running
-            # version to report (a real run writes it, or recovers it from the
-            # restored identity, then steps the minors); there is nothing a dry
-            # run can upgrade, and the 30s retry + stabilization waits have no
-            # kube-api to probe.
-            info("kubernetes version unknown (missing kubeconfig); skipped in plan")
-            return
         # the api server is briefly unreachable after a machine-config apply,
         # and an unknown current version costs us the minor-stepping path
         info("kube-api did not answer; retrying version check in 30s")
         time.sleep(30)
-        cur = _upgrade_read_version(kubeconfig)
+        cur = _running_kubernetes_version(kubeconfig)
     if cur == cfg.kubernetes_version:
         info(f"{cur}, ok")
         return
@@ -1599,7 +1580,7 @@ def _upgrade(
             time.sleep(10)
         else:
             raise ReconcileError("kube-api did not stabilize before k8s upgrade")
-        cur = _upgrade_read_version(kubeconfig)
+        cur = _running_kubernetes_version(kubeconfig)
         if not cur:
             raise ReconcileError("kube-api stabilized but server version is still unavailable")
         for step in _k8s_upgrade_path(cur, cfg.kubernetes_version):

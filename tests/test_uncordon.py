@@ -486,6 +486,39 @@ def test_upgrade_retries_a_timed_out_version_read(monkeypatch):
     assert calls["n"] >= 2  # the timed-out first read was retried
 
 
+def test_upgrade_dry_run_with_no_kubeconfig_skips_version_read_retries(monkeypatch, capsys):
+    """A plan (dry run) with no non-empty kubeconfig on disk short-circuits
+    before reading the version: the merged helper returns up front, so version
+    reads and their 2s retry sleeps never run and no "retrying..." line prints
+    before the "skipped in plan" verdict."""
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8")
+    machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_kw: "ep")
+    monkeypatch.setattr(converge, "_cluster_vips", lambda *_a, **_kw: [])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    seen = {"reads": 0, "sleeps": []}
+
+    def fake_version(*_a):
+        seen["reads"] += 1
+        return "v1.34.2"
+
+    monkeypatch.setattr(converge.kubectl, "server_version", fake_version)
+    monkeypatch.setattr(converge.time, "sleep", lambda s: seen["sleeps"].append(s))
+
+    converge._upgrade(
+        cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
+        {("base",): "sch-123"}, Path("talosconfig"), Path("/nonexistent/kubeconfig"),
+    )
+    out = capsys.readouterr().out
+    assert seen["reads"] == 0  # no version read in a dry run with no kubeconfig
+    assert seen["sleeps"] == []  # no retry sleeps either
+    assert "skipped in plan" in out
+    assert "retrying" not in out.lower()
+
+
 def test_upgrade_stabilization_retries_a_timed_out_probe(monkeypatch):
     """A hung `cluster_up` probe in the stabilization loop counts as not-up and
     is retried, so one timeout does not abort the upgrade."""

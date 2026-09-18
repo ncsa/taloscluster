@@ -41,6 +41,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Refuse to generate machine configs when a running cluster's Kubernetes version cannot be read.
 - Refuse a Kubernetes upgrade when the running version cannot be determined instead of skipping it.
 - Retry a hung kube-api read during the upgrade phase instead of aborting converge.
+- Skip the version-read retries from `plan` when there is no kubeconfig on disk.
 - Retry the kube-api probe and warn when an existing cluster is unreachable instead of treating it as new; converge then exits 1 and defers plugin changes.
 - Recover a missing kubeconfig from the Talos identity before deciding a cluster is new, on clusters with or without Tailscale.
 - Refuse to generate a fresh `talossecrets.yaml` when machines already exist.
