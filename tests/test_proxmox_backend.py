@@ -390,6 +390,46 @@ def test_remove_image_refuses_when_the_current_iso_is_still_booted(proxmox_cfg, 
     assert all(method != "DELETE" for method, _path, _data in client.mutations)
 
 
+def test_remove_image_refusal_names_the_qm_set_detach_step(proxmox_cfg, monkeypatch):
+    """The refusal tells the operator how to detach the boot cdrom by hand:
+    `qm set <vmid> --delete ide2`, with the VMID still booting the image."""
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    data = _data()
+    legacy = "isos:iso/talos-v1.13.9-tailscale.iso"
+    for node in ("pve001", "pve002"):
+        data[f"nodes/{node}/storage/isos/content"] = [{"volid": legacy}]
+    data["nodes/pve001/qemu/800/config"]["ide2"] = f"{legacy},media=cdrom"
+    client = FakeClient(data)
+    backend = _backend(proxmox_cfg, client)
+    backend.load_inventory()
+
+    with pytest.raises(ReconcileError) as exc:
+        backend.remove_image(assume_yes=True)
+
+    assert "qm set 800 --delete ide2" in str(exc.value)
+    assert all(method != "DELETE" for method, _path, _data in client.mutations)
+
+
+def test_remove_image_refusal_names_the_actual_slot(proxmox_cfg, monkeypatch):
+    """The refusal keys each detach command off the slot the VM actually
+    references, not a hardcoded `ide2`."""
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    data = _data()
+    legacy = "isos:iso/talos-v1.13.9-tailscale.iso"
+    for node in ("pve001", "pve002"):
+        data[f"nodes/{node}/storage/isos/content"] = [{"volid": legacy}]
+    data["nodes/pve001/qemu/800/config"]["ide3"] = f"{legacy},media=cdrom"
+    client = FakeClient(data)
+    backend = _backend(proxmox_cfg, client)
+    backend.load_inventory()
+
+    with pytest.raises(ReconcileError) as exc:
+        backend.remove_image(assume_yes=True)
+
+    assert "qm set 800 --delete ide3" in str(exc.value)
+    assert "qm set 800 --delete ide2" not in str(exc.value)
+
+
 def test_remove_image_prompts_with_legacy_name_when_only_it_exists(
     proxmox_cfg, monkeypatch
 ):
@@ -448,6 +488,50 @@ def test_remove_image_prompts_with_both_names_when_both_exist(
     assert prompts == [
         "type 'talos-v1.13.9-tailscale-abc123.iso, talos-v1.13.9-tailscale.iso' to confirm: "
     ]
+
+
+def test_finalize_machines_detaches_the_boot_iso_cdrom(proxmox_cfg):
+    """Once a node boots from its disk, converge drops the `ide2` cdrom and
+    trims the boot order to leave no stale reference, so `image remove` is no
+    longer blocked from deleting the ISO it installed."""
+    data = _data()
+    legacy = "isos:iso/talos-v1.13.9-tailscale.iso"
+    data["nodes/pve001/qemu/800/config"]["ide2"] = f"{legacy},media=cdrom"
+    data["nodes/pve001/qemu/800/config"]["boot"] = "order=scsi0;ide2"
+    client = FakeClient(data)
+    backend = _backend(proxmox_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.finalize_machines(inventory)
+
+    detaches = [
+        (path, payload["delete"])
+        for method, path, payload in client.mutations
+        if method == "PUT" and payload and "delete" in payload
+    ]
+    assert ("nodes/pve001/qemu/800/config", "ide2") in detaches
+    boots = [
+        payload["boot"]
+        for method, _path, payload in client.mutations
+        if method == "PUT" and payload and "delete" in payload
+    ]
+    assert "order=scsi0;ide2" not in boots
+    assert "order=scsi0" in boots
+
+
+def test_finalize_machines_leaves_a_detached_vm_alone(proxmox_cfg):
+    """A VM whose cdrom is already gone (a rerun) must not be touched again."""
+    data = _data()  # config has no ide2
+    client = FakeClient(data)
+    backend = _backend(proxmox_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.finalize_machines(inventory)
+
+    assert all(
+        not (method == "PUT" and payload and payload.get("delete") == "ide2")
+        for method, _path, payload in client.mutations
+    )
 
 
 def test_ensure_boot_artifact_uses_download_url(proxmox_cfg, monkeypatch):

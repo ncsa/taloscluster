@@ -1594,6 +1594,17 @@ class ProxmoxBackend:
         for vm in raw.vms.values():
             if not self._owns_vm(raw, vm):
                 continue
+            config = self.client.get(f"nodes/{vm.node}/qemu/{vm.vmid}/config")
+            if isinstance(config, dict) and isinstance(config.get("ide2"), str):
+                # the boot ISO cdrom is only needed to install to disk; once the
+                # cluster is healthy the node boots from scsi0, so drop the ide2
+                # reference so `image remove` can delete the ISO it boots from
+                action(f"detach boot ISO cdrom from {vm.name}")
+                self.client.mutate(
+                    "PUT",
+                    f"nodes/{vm.node}/qemu/{vm.vmid}/config",
+                    data={"delete": "ide2", "boot": "order=scsi0"},
+                )
             filename = _cidata_name(self.cfg.name, vm.name)
             volume = self._find_iso(vm.node, self.provider.cidata_storage, filename)
             if not volume:
@@ -1663,12 +1674,18 @@ class ProxmoxBackend:
             info(f"image {filename} not found, nothing to remove")
             return
         referenced = self._boot_iso_in_use(inventory)
-        in_use = sorted({volume for _node, volume in found} & referenced)
+        in_use = sorted({volume for _node, volume in found} & set(referenced))
         if in_use:
+            detaches = sorted(
+                f"qm set {vmid} --delete {slot}"
+                for volume in in_use
+                for vmid, slot in referenced[volume]
+            )
             raise ReconcileError(
                 "refusing to remove image(s) still booted by an owned Proxmox VM: "
                 + ", ".join(in_use)
-                + "; detach the cdrom on those VMs before removing the image"
+                + "; detach the cdrom on those VMs before removing the image, e.g. "
+                + ", ".join(detaches)
             )
         warn("other clusters on the same Talos version may share this image")
         if not assume_yes and not dry_run():
@@ -1682,17 +1699,20 @@ class ProxmoxBackend:
             if not dry_run():
                 self._delete_volume(node, self.provider.iso_storage, volume)
 
-    def _boot_iso_in_use(self, inventory: ProxmoxInventory) -> set[str]:
+    def _boot_iso_in_use(self, inventory: ProxmoxInventory) -> dict[str, set[tuple[int, str]]]:
         """Boot volumes (``ide2`` cdroms) that owned VMs still point at.
 
-        Every VM is created with the boot ISO on ``ide2`` and converge only
-        ever detaches ``ide3`` (the cidata volume), so VMs created before the
-        image rename still reference the legacy ``talos-<version>-tailscale``
-        ISO. Proxmox does not block deleting a referenced ISO, but a VM whose
-        cdrom volume is gone fails to start, so ``remove_image`` refuses while
-        any owned VM still boots from a volume it would delete.
+        Every VM is created with the boot ISO on ``ide2`` and converge
+        detaches it once the node has installed to disk (in ``finalize_machines``,
+        alongside the cidata ``ide3``), so a VM that has not reached a healthy
+        finalize still references the ISO it would boot again. Proxmox does not
+        block deleting a referenced ISO, but a VM whose cdrom volume is gone
+        fails to start, so ``remove_image`` refuses while any owned VM still
+        boots from a volume it would delete. Returns the referenced volume ids
+        keyed by the VMIDs and their slots that boot them, so a refusal can name
+        the exact ``qm set <vmid> --delete <slot>`` step for each VM.
         """
-        referenced: set[str] = set()
+        referenced: dict[str, set[tuple[int, str]]] = {}
         for _name, vm in inventory.vms.items():
             if not self._owns_vm(inventory, vm):
                 continue
@@ -1702,7 +1722,9 @@ class ProxmoxBackend:
             for key in ("ide2", "ide0", "ide1", "ide3", "sata0", "sata1"):
                 value = config.get(key)
                 if isinstance(value, str):
-                    referenced.add(value.split(",", 1)[0].strip())
+                    referenced.setdefault(value.split(",", 1)[0].strip(), set()).add(
+                        (vm.vmid, key)
+                    )
         return referenced
 
     def destroy_summary(self, inventory: InfrastructureInventory) -> str:
