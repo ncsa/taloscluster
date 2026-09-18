@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Bound every `kubectl` call with a request timeout so a hung kube-api fails converge instead of hanging it.
+- Bound every `kubectl` call with a request timeout so a hung kube-api fails converge.
 - Report a machine missing from both Talos discovery and Kubernetes as an incomplete `check`.
 - Exit nonzero from `check` when version data is incomplete, with `incomplete` and `incomplete_reasons` in the report.
 - Detect extension-only changes from the running schematic so adding or removing an extension reinstalls the node.
@@ -26,14 +26,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Validate Rancher settings and require the `BackingNamespaceCreated` condition to be `True` before creating registration tokens.
 - Split ArgoCD sync settings: `argocd.sync` sets the chart value, new `argocd.automated` controls automated sync, pruning and self-healing.
 - Require real YAML types for ArgoCD booleans, member lists, URLs and apply targets; refuse unknown per-app keys and version overrides on apps that ignore them.
-- Add a live workflow test script that drives the CLI against a disposable cluster.
 - Add guides for OpenStack setup, backup and recovery, node maintenance, load balancers and ingress, and both management access paths.
 - Expand troubleshooting with diagnostics and recovery for the new refusals, missing Talos secrets, failed drains, incomplete checks, plugin failures and interrupted upgrades.
 
 ### Changed
 
 - Delete the legacy `talos-<version>-tailscale` image that predates the schematic name on `image remove`.
-- Name the timed-out kubectl command in timeout errors and give manifest apply/diff/delete a longer bound.
+- Name the timed-out kubectl command in timeout errors, with a longer bound for manifest apply, diff and delete.
 - Apply machine configs to control planes one at a time, waiting for each restart to finish.
 - Require `talosctl health` after a control-plane upgrade, reboot or config apply before touching the next one; the kube-api VIP no longer counts as healthy.
 - Remove owned machines that never joined Kubernetes, or whose VM delete failed earlier, during scale-down.
@@ -58,10 +57,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Deliver the OpenStack Cinder cloud.conf as a Secret instead of embedding credentials in ArgoCD values.
 - Activate the ArgoCD plugin only with a `kubeconfig` or `context` apply target.
 - Reorganize the documentation around installation, quickstart, usage, commands, configuration, plugins and troubleshooting, and shorten the README.
-- Correct the etcd-member scale-down and upgrade-abort troubleshooting entries, move the kubectl-timeout note with the control-plane rollouts, and point the Rancher guide at the orphan refusal.
 
 ### Fixed
 
+- Parse the `talosctl etcd members` table by column offset so a member with an empty hostname fails closed during scale-down.
 - Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.
 - Abort a control-plane scale-down when the graceful reset fails or times out, and health-check between removals.
 - Boot nodes scaled up in the same run as a Kubernetes upgrade at the upgraded version.
