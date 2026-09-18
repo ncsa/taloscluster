@@ -31,18 +31,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Refuse `image remove` while any cluster-managed Proxmox VM still boots the image it would delete.
-- Point the orphaned-agent recovery message at the rancher plugin's own `destroy` rather than the whole-cluster `destroy`.
-- Delete the legacy `talos-<version>-tailscale` image that predates the schematic name on `image remove`.
-- Name the timed-out kubectl command in timeout errors, with a longer bound for manifest apply, diff and delete.
-- Show the full trimmed kubectl command in the Rancher plugin's timeout error instead of just the verb.
+- Delete the legacy `talos-<version>-tailscale` image on `image remove`, refusing while a managed Proxmox VM still boots from it.
+- Name the timed-out kubectl command in timeout errors and allow manifest apply, diff and delete more time than a probe.
 - Apply machine configs to control planes one at a time, waiting for each restart to finish.
 - Require `talosctl health` after a control-plane upgrade, reboot or config apply before touching the next one; the kube-api VIP no longer counts as healthy.
 - Remove owned machines that never joined Kubernetes, or whose VM delete failed earlier, during scale-down.
 - Refuse to generate machine configs when a running cluster's Kubernetes version cannot be read.
 - Refuse a Kubernetes upgrade when the running version cannot be determined instead of skipping it.
 - Retry a hung kube-api read during the upgrade phase instead of aborting converge.
-- Skip the version-read retries from `plan` when there is no kubeconfig on disk.
 - Retry the kube-api probe and warn when an existing cluster is unreachable instead of treating it as new; converge then exits 1 and defers plugin changes.
 - Recover a missing kubeconfig from the Talos identity before deciding a cluster is new, on clusters with or without Tailscale.
 - Refuse to generate a fresh `talossecrets.yaml` when machines already exist.
@@ -55,7 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Scaffold the Proxmox `kubeapi_vip` outside the managed-SDN static layout.
 - Create `talossecrets.yaml` with mode 0600 from the start.
 - Forward plugin `check`/`status` results to later plugins so ArgoCD renders the same Rancher cluster id as converge.
-- Refuse Rancher converge and destroy when the Rancher cluster's id does not match the downstream agent, or when the agent matches no Rancher cluster; `check`/`status` report the mismatch and `destroy` removes an orphaned agent.
+- Refuse Rancher converge and destroy when the Rancher cluster's id does not match the downstream agent, or when the agent matches no Rancher cluster; `check`/`status` report the mismatch and `plugin rancher destroy` removes an orphaned agent.
 - Resolve Rancher members on an exact id match, and reject a user listed under both `admins` and `users` or under both via an alias.
 - Render ArgoCD manifests through a YAML serializer so values with quotes, colons or newlines are preserved.
 - Deliver the OpenStack Cinder cloud.conf as a Secret instead of embedding credentials in ArgoCD values.
@@ -64,7 +60,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- Don't double the `kubectl` binary name in the timed-out kubectl command shown in timeout errors.
 - Parse the `talosctl etcd members` table by column offset so a member with an empty hostname fails closed during scale-down.
 - Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.
 - Abort a control-plane scale-down when the graceful reset fails or times out, and health-check between removals.
@@ -78,7 +73,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Fix OpenStack security-group normalization so allowlists are enforced and `0.0.0.0/0` is not recreated on every run.
 - Fix the hostname-length check for pools with 100 or more nodes.
 - Contain a plugin's fatal error so one plugin cannot abort the whole run; warn on duplicate plugin entry-point names.
-- Confirm the image name `image remove` will actually delete.
 - Fail Rancher member reconciliation when a configured user cannot be resolved instead of removing their binding.
 - Fix Rancher API error messages that were joined character by character.
 - Pass the Proxmox `ingress_pool` to ArgoCD so MetalLB address pools render for both providers.
