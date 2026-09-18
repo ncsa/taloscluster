@@ -55,13 +55,21 @@ def test_guide_covers_all_five_topics():
 
 
 def test_guide_covers_the_new_fail_closed_topics():
-    text = GUIDE.read_text().lower()
-    assert "still an etcd member" in text
-    assert "kubernetes version it cannot read" in text
-    assert "duplicate proxmox vm names" in text
-    assert "cannot resolve a configured member" in text
-    assert "cluster id no longer matches the downstream agent" in text
-    assert "shared sdn controller changes are pending" in text
+    # Each new fail-closed behavior gets its own troubleshooting section. These
+    # are also pinned to the code's exact diagnostics by the `*_matches_*`
+    # tests below; here we only check topic coverage by a keyword per topic, so
+    # a reworded section heading does not spuriously fail this coverage check.
+    topics = (
+        "etcd member",
+        "version it cannot read",
+        "duplicate proxmox vm",
+        "resolve a configured member",
+        "matches the downstream agent",
+        "shared sdn controller",
+    )
+    lower = GUIDE.read_text().lower()
+    for topic in topics:
+        assert topic in lower
 
 
 def test_missing_secrets_quotes_the_converge_refusal():

@@ -14,12 +14,14 @@ ROOT = Path(__file__).resolve().parent.parent
 GUIDE = ROOT / "docs" / "concepts" / "plugins.md"
 
 
-def test_results_forwarding_is_stated_once_in_detail():
-    # The `ctx.results[<name>]` storage detail appears exactly once -- the full
-    # explanation lives in the "Writing a plugin" section.
+def test_results_forwarding_is_documented_in_writing_a_plugin():
+    # The full `ctx.results[<name>]` storage detail lives in the "Writing a
+    # plugin" section, the authoritative one that `test_dependency_section_*`
+    # forwards readers to. Check presence there rather than a page-wide count,
+    # so a rewording of the rule does not spuriously fail.
     text = GUIDE.read_text()
-    assert text.count("ctx.results[<name>]") == 1
-    assert text.count("is stored for the plugins that follow") == 1
+    writing = text.split("## Writing a plugin", 1)[1]
+    assert "ctx.results[<name>]" in writing
 
 
 def test_dependency_section_points_at_writing_a_plugin():

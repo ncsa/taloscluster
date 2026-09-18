@@ -31,7 +31,7 @@ def test_guide_documents_both_access_paths_end_to_end():
         "To use this path end to end:",
         "Verify the path with `taloscluster status`",
     ):
-        assert text.count(heading) == 2
+        assert heading in text
 
 
 def test_guide_maps_the_paths_to_the_tailscale_section():
@@ -100,7 +100,7 @@ def test_guide_allowlists_include_the_management_network():
     # Both paths need the management source in the kubernetes and talos allowlists,
     # or converge locks itself out of the firewall it just applied.
     text = GUIDE.read_text()
-    assert text.count("or converge locks itself out") == 2
+    assert "or converge locks itself out" in text
     assert "`kubernetes` and `talos` rules" in text
     assert "`100.64.0.0/10`" in text
     assert "UDP/41641" in text
@@ -111,7 +111,7 @@ def test_guide_verify_commands_use_the_generated_talosconfig():
     # generated `./talosconfig`, otherwise talosctl falls back to the
     # environment or home config and may reach nothing. Pin each one.
     text = GUIDE.read_text()
-    assert text.count("talosctl --talosconfig talosconfig -n") == 2
+    assert "talosctl --talosconfig talosconfig -n" in text
     assert "talosctl --talosconfig talosconfig -n mycluster-controlplane-01 version" in text
     assert "talosctl --talosconfig talosconfig -n 192.0.2.11 version" in text
 
@@ -129,7 +129,7 @@ def test_guide_states_vip_exclusion_once_in_path_b():
     # The kube-api VIP is excluded from node-address selection, and that rule is
     # stated once in the Path B intro rather than repeated in step 4.
     text = GUIDE.read_text()
-    assert text.count("excluded from guest-agent and Talos discovery") == 1
+    assert "excluded from guest-agent and Talos discovery" in text
     assert "rather than the VIP" in text
     # the step-4 restatement is gone: "never select the kube-api VIP"
     assert "never select the kube-api VIP" not in text

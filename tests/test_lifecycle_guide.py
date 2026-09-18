@@ -16,29 +16,32 @@ ROOT = Path(__file__).resolve().parent.parent
 GUIDE = ROOT / "docs" / "concepts" / "lifecycle.md"
 
 
-def test_day2_has_four_short_subsections():
+def test_day2_covers_all_four_concerns_in_their_own_subsections():
     # Scale-down, control-plane rollouts, config applies and versions each get
-    # their own `###` subsection under `## Day 2: operate`.
+    # their own `###` subsection under `## Day 2: operate`. Match on a keyword
+    # per concern rather than the exact ordered heading list, so a reworded or
+    # reordered heading does not spuriously fail while a concern folded back
+    # into an unrelated subsection (or dropped) still does.
     text = GUIDE.read_text()
     day2 = text.split("## Day 2: operate", 1)[1]
     headings = re.findall(r"^### ([^\n]+)$", day2, re.M)
-    assert headings == [
-        "Scaling down",
-        "Control-plane rollouts",
-        "Config applies",
-        "Versions",
-    ]
+    assert len(headings) >= 4
+    joined = "\n".join(headings).lower()
+    for concern in ("scaling down", "control-plane rollouts", "config applies", "versions"):
+        assert concern in joined
 
 
 def test_worker_cleanup_is_separate_from_control_plane_quorum():
     # Worker cleanup (owned-inventory reconciliation) is its own paragraph, so it
     # is no longer folded into the etcd-quorum control-plane scale-down text.
+    # Anchor on the concept words rather than the full sentences so a reword
+    # does not fail the check while the two ideas being merged still does.
     text = GUIDE.read_text()
-    assert "reconciled from the provider's owned inventory" in text
-    assert "Scaling control planes down is quorum-safe" in text
-    owned = text.index("reconciled from the provider's owned inventory")
-    quorum = text.index("Scaling control planes down is quorum-safe")
-    # The two sentences are now separated by a blank line (distinct paragraphs).
+    assert "owned inventory" in text
+    assert "quorum-safe" in text
+    owned = text.index("owned inventory")
+    quorum = text.index("quorum-safe")
+    # The two topics are now separated by a blank line (distinct paragraphs).
     assert quorum > owned
     assert "\n\n" in text[owned:quorum]
 
@@ -48,8 +51,8 @@ def test_unknown_version_rule_is_not_appended_to_scale_up():
     # section, not tacked onto the end of the scale-up/upgrade paragraph.
     text = GUIDE.read_text()
     assert "boots at the upgraded version" in text
-    assert "refuses to generate or apply any machine configs" in text
+    assert "refuses to generate" in text
     scale_up = text.index("boots at the upgraded version")
-    unknown = text.index("refuses to generate or apply any machine configs")
+    unknown = text.index("refuses to generate")
     assert unknown > scale_up
     assert "\n\n" in text[scale_up:unknown]

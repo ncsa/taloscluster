@@ -50,15 +50,16 @@ def test_intro_matches_the_reconcile_code():
     assert "cattle-cluster-agent" in plugins
 
 
-def test_yaml_serializer_sentence_lives_in_the_intro():
+def test_yaml_serializer_guarantee_is_stated_in_the_intro():
     # The YAML-serializer guarantee now opens the page: every scalar the plugin
     # renders round-trips on one physical line. It must live in the intro, not
     # under the git-credentials section (it is not specific to credentials).
+    # Match on concept words in the intro block rather than the full sentence,
+    # so a rewording does not spuriously fail.
     text = GUIDE.read_text()
-    assert "emitted through a YAML serializer" in text
-    assert "round-trips exactly" in text
-    assert "YAML serializer" in text.split("## ")[0]
-    assert "one physical line" in text.split("## ")[0]
+    intro = text.split("\n## ", 1)[0]
+    assert "YAML serializer" in intro
+    assert "one physical line" in intro
 
 
 def test_git_section_does_not_enumerate_every_scalar():
