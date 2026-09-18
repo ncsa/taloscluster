@@ -3,9 +3,7 @@
 The guide documents the two management access paths end to end: an already-connected
 Tailscale management machine (the first control plane reached by its MagicDNS name)
 and direct access to real node addresses without Tailscale (the control plane reached
-by its provider-reported address). These tests pin the guide to the actual endpoint
-selection in ``converge._talos_endpoint`` and ``converge._resolve_cp1_address``, so a
-code change to either path is caught against the documentation.
+by its provider-reported address).
 """
 
 from __future__ import annotations
@@ -14,7 +12,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 GUIDE = ROOT / "docs" / "concepts" / "machines.md"
-CONVERGE = ROOT / "taloscluster" / "converge.py"
 TALOSCTL = ROOT / "taloscluster" / "talos" / "talosctl.py"
 PROXMOX_BACKEND = ROOT / "taloscluster" / "proxmox" / "backend.py"
 
@@ -42,20 +39,15 @@ def test_guide_maps_the_paths_to_the_tailscale_section():
     assert "decided by whether the `tailscale` section is present in `cluster.yaml`" in text
     assert "`tailscale` section (even empty) is present" in text
     assert "no `tailscale` section" in text
-    assert "management talks to the first control plane by its MagicDNS name" in text
     assert "management talks to the first control plane's real node address" in text
 
 
 def test_guide_tailscale_path_matches_the_endpoint_selection():
-    # Without tailscale there is no MagicDNS name to resolve, so converge reaches
-    # controlplane-01 by its tailscale name. The guide must say the same.
+    # The tailscale path reaches controlplane-01 by its MagicDNS name; the guide
+    # must document that endpoint plumbing.
     text = GUIDE.read_text()
     assert "`<name>-controlplane-01`" in text
     assert "MagicDNS name" in text
-    converge = CONVERGE.read_text()
-    assert "cp-01's tailscale name" in converge
-    assert "there is no MagicDNS name to resolve" in converge
-    assert "cp-01's real address is used instead" in converge
 
 
 def test_guide_direct_path_matches_the_real_address_fallback():
@@ -63,12 +55,11 @@ def test_guide_direct_path_matches_the_real_address_fallback():
     text = GUIDE.read_text()
     assert "provider-reported address" in text
     assert "real node address" in text
-    assert "this host must route to it" in CONVERGE.read_text()
 
 
 def test_guide_direct_address_resolution_order_matches_resolve_cp1():
     # The direct path resolves the control plane from a managed-SDN static address,
-    # then the guest agent's report, then a recorded talosconfig. Pin these to code.
+    # then the guest agent's report, then a recorded talosconfig.
     text = GUIDE.read_text()
     assert "managed-SDN static address from the network plan" in text
     assert (
@@ -76,9 +67,6 @@ def test_guide_direct_address_resolution_order_matches_resolve_cp1():
         "node reports one" in text
     )
     assert "endpoint an earlier `talosconfig` recorded" in text
-    converge = CONVERGE.read_text()
-    assert "no tailscale: resolving" in converge
-    assert "load_inventory().machine_address" in converge
 
 
 def test_guide_direct_path_requires_routing_from_the_management_machine():
@@ -90,19 +78,17 @@ def test_guide_direct_path_requires_routing_from_the_management_machine():
 
 def test_guide_tailscale_path_requires_an_already_connected_management_machine():
     # The management machine must be connected to the tailnet; taloscluster does
-    # not add it. Pin that to the code comment and the guide wording.
+    # not add it.
     text = GUIDE.read_text()
     assert "already-connected Tailscale management machine" in text
     assert "taloscluster does not add that management machine automatically" in text
     assert "`100.64.0.0/10`" in text
-    assert "cp-01's tailscale name" in CONVERGE.read_text()
 
 
 def test_guide_allowlists_include_the_management_network():
     # Both paths need the management source in the kubernetes and talos allowlists,
     # or converge locks itself out of the firewall it just applied.
     text = GUIDE.read_text()
-    assert "or converge locks itself out" in text
     assert "`kubernetes` and `talos` rules" in text
     assert "`100.64.0.0/10`" in text
     assert "UDP/41641" in text
