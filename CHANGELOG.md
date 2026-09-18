@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Point the orphaned-agent recovery message at the rancher plugin's own `destroy` rather than the whole-cluster `destroy`.
 - Delete the legacy `talos-<version>-tailscale` image that predates the schematic name on `image remove`.
 - Name the timed-out kubectl command in timeout errors, with a longer bound for manifest apply, diff and delete.
+- Show the full trimmed kubectl command in the Rancher plugin's timeout error instead of just the verb.
 - Apply machine configs to control planes one at a time, waiting for each restart to finish.
 - Require `talosctl health` after a control-plane upgrade, reboot or config apply before touching the next one; the kube-api VIP no longer counts as healthy.
 - Remove owned machines that never joined Kubernetes, or whose VM delete failed earlier, during scale-down.
@@ -63,6 +64,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Don't double the `kubectl` binary name in the timed-out kubectl command shown in timeout errors.
 - Parse the `talosctl etcd members` table by column offset so a member with an empty hostname fails closed during scale-down.
 - Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.
 - Abort a control-plane scale-down when the graceful reset fails or times out, and health-check between removals.

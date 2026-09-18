@@ -34,6 +34,22 @@ def _kc(kubeconfig: Path) -> list[str]:
     return [BIN, "--kubeconfig", str(kubeconfig)]
 
 
+def display(args: list[str]) -> str:
+    """"kubectl …" with the verbose flags/values trimmed, for a message."""
+    if args and args[0] == BIN:
+        args = args[1:]
+    rest, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in ("--kubeconfig", "--context"):
+            skip = True
+            continue
+        rest.append(a)
+    return "kubectl " + " ".join(rest)
+
+
 def _run(
     args: list[str],
     capture: bool = False,

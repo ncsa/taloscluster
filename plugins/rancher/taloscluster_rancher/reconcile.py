@@ -75,8 +75,9 @@ def _kubectl(root: Path, *args: str) -> str | None:
         )
     except subprocess.TimeoutExpired as e:
         raise RancherError(
-            f"kubectl {args[0] if args else ''} against the downstream cluster timed "
-            f"out ({kubectl.RUN_TIMEOUT:.0f}s); investigate the cluster's kube-api and retry"
+            f"{kubectl.display([kubectl.BIN, '--kubeconfig', str(root / 'kubeconfig'), *args])} "
+            f"against the downstream cluster timed out ({kubectl.RUN_TIMEOUT:.0f}s); "
+            f"investigate the cluster's kube-api and retry"
         ) from e
     if proc.returncode != 0:
         return None

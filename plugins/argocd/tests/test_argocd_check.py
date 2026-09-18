@@ -84,8 +84,11 @@ def test_delete_turns_a_timeout_into_apply_error(monkeypatch, tmp_path):
         raise subprocess.TimeoutExpired(args, kw.get("timeout", 30))
 
     monkeypatch.setattr(kube.kubectl, "_run", hung)
-    with pytest.raises(ApplyError, match="kubectl delete -f - --ignore-not-found timed out"):
+    with pytest.raises(ApplyError) as exc:
         kube.delete(ApplyTarget(context="argocd"), tmp_path, "kind: Secret\n")
+    message = str(exc.value)
+    assert message.startswith("kubectl delete -f - --ignore-not-found timed out")
+    assert "kubectl kubectl" not in message
 
 
 def test_check_reports_drifted_resources(monkeypatch):

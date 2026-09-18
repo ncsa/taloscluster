@@ -9,6 +9,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from taloscluster.errors import ReconcileError
 from taloscluster.k8s import kubectl, rancher
 from taloscluster.output import action, dry_run, info
 
@@ -69,7 +70,10 @@ def downstream_rancher_id(root: Path) -> str | None:
     and re-writing the cluster Secret without it (or reporting drift against the
     just-applied one).
     """
-    return rancher.cluster_id(root / "kubeconfig")
+    try:
+        return rancher.cluster_id(root / "kubeconfig")
+    except ReconcileError as e:
+        raise ApplyError(str(e)) from e
 
 
 def _run_get(base: list[str], manifest: str) -> bool:
@@ -193,20 +197,6 @@ def delete_secret_downstream(root: Path, namespace: str, name: str) -> None:
     )
 
 
-def _display(args: list[str]) -> str:
-    """"kubectl …" with the verbose flags/values trimmed, for a message."""
-    rest, skip = [], False
-    for a in args:
-        if skip:
-            skip = False
-            continue
-        if a in ("--kubeconfig", "--context"):
-            skip = True
-            continue
-        rest.append(a)
-    return "kubectl " + " ".join(rest)
-
-
 def _delete(args: list[str], manifest: str, message: str, label: str) -> None:
     if dry_run():
         action(f"kubectl delete {label} " + " ".join(args[1:]))
@@ -217,7 +207,7 @@ def _delete(args: list[str], manifest: str, message: str, label: str) -> None:
             args, input=manifest, capture=True, check=False, timeout=kubectl.MANIFEST_TIMEOUT,
         )
     except subprocess.TimeoutExpired as e:
-        raise ApplyError(_timed_out(_display(args))) from e
+        raise ApplyError(_timed_out(kubectl.display(args))) from e
     if proc.returncode != 0:
         raise ApplyError(f"kubectl delete failed: {proc.stderr.strip()}")
     for line in proc.stdout.splitlines():

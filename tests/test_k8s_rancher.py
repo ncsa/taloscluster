@@ -178,3 +178,49 @@ def test_argocd_kubectl_calls_are_bounded(monkeypatch, tmp_path):
     assert captured[:2] == [argocd_kube.kubectl.RUN_TIMEOUT] * 2
     assert captured[2:] == [argocd_kube.kubectl.MANIFEST_TIMEOUT] * 3
     assert argocd_kube.kubectl.MANIFEST_TIMEOUT > argocd_kube.kubectl.RUN_TIMEOUT
+
+
+def test_argocd_wraps_the_reader_timeout_in_apply_error(monkeypatch):
+    """The standalone argocd `downstream_rancher_id` must surface the shared
+    reader's hung-kubectl error as an `ApplyError` (the type every other failure
+    in kube.py uses), so a caller catches one error class for the whole plugin
+    instead of having to also catch the core `ReconcileError` the reader raises.
+    """
+    from taloscluster_argocd import kube as argocd_kube
+    from taloscluster_argocd.errors import ApplyError
+
+    from taloscluster.errors import ReconcileError
+
+    def _hung(_kc):
+        raise ReconcileError("reading the downstream cluster's Rancher identity timed out")
+
+    monkeypatch.setattr(rancher, "cluster_id", _hung)
+    with pytest.raises(ApplyError) as exc:
+        argocd_kube.downstream_rancher_id(Path("/root"))
+    assert "Rancher identity timed out" in str(exc.value)
+
+
+def test_rancher_kubectl_timeout_shows_the_trimmed_command(monkeypatch, tmp_path):
+    """The rancher `_kubectl` timeout message names the full trimmed command
+    (kubeconfig flag dropped, resource kept) rather than only the verb, so an
+    operator sees which read hung instead of a bare `kubectl get`."""
+    import subprocess
+
+    from taloscluster_rancher import reconcile
+
+    root = tmp_path
+    (root / "kubeconfig").write_text("clusters: []\n")
+    full_args = []
+
+    def hung(args, **kw):
+        full_args.append(args)
+        raise subprocess.TimeoutExpired(args, 30)
+
+    monkeypatch.setattr(reconcile.kubectl, "_run", hung)
+    with pytest.raises(reconcile.RancherError) as exc:
+        reconcile._kubectl(root, "get", "ns", "cattle-system")
+    message = str(exc.value)
+    assert message.startswith("kubectl get ns cattle-system")
+    assert "kubectl kubectl" not in message
+    assert "--kubeconfig" not in message
+    assert full_args[0][0] == "kubectl"
