@@ -390,6 +390,66 @@ def test_remove_image_refuses_when_the_current_iso_is_still_booted(proxmox_cfg, 
     assert all(method != "DELETE" for method, _path, _data in client.mutations)
 
 
+def test_remove_image_prompts_with_legacy_name_when_only_it_exists(
+    proxmox_cfg, monkeypatch
+):
+    """When only the legacy pre-schematic ISO is present, `image remove`
+    asks the operator to confirm that legacy name, not the current schematic
+    name that is not present on any node."""
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    monkeypatch.setattr("taloscluster.proxmox.backend.dry_run", lambda: False)
+    data = _data()
+    legacy = "isos:iso/talos-v1.13.9-tailscale.iso"
+    for node in ("pve001", "pve002"):
+        data[f"nodes/{node}/storage/isos/content"] = [{"volid": legacy}]
+    client = FakeClient(data)
+    backend = _backend(proxmox_cfg, client)
+    backend.load_inventory()
+
+    prompts = []
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt: prompts.append(prompt) or "talos-v1.13.9-tailscale.iso",
+    )
+
+    backend.remove_image()
+
+    assert prompts == ["type 'talos-v1.13.9-tailscale.iso' to confirm: "]
+    assert not any(
+        "tailscale-abc123" in prompt for prompt in prompts
+    ), "prompt should not ask for the schematic ISO name that is not present"
+
+
+def test_remove_image_prompts_with_both_names_when_both_exist(
+    proxmox_cfg, monkeypatch
+):
+    """When both the schematic and legacy pre-schematic ISOs are present,
+    `image remove` asks the operator to confirm every name it will delete."""
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    monkeypatch.setattr("taloscluster.proxmox.backend.dry_run", lambda: False)
+    data = _data()
+    legacy = "isos:iso/talos-v1.13.9-tailscale.iso"
+    current = "isos:iso/talos-v1.13.9-tailscale-abc123.iso"
+    for node in ("pve001", "pve002"):
+        data[f"nodes/{node}/storage/isos/content"] = [{"volid": legacy}, {"volid": current}]
+    client = FakeClient(data)
+    backend = _backend(proxmox_cfg, client)
+    backend.load_inventory()
+
+    prompts = []
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt: prompts.append(prompt)
+        or "talos-v1.13.9-tailscale-abc123.iso, talos-v1.13.9-tailscale.iso",
+    )
+
+    backend.remove_image()
+
+    assert prompts == [
+        "type 'talos-v1.13.9-tailscale-abc123.iso, talos-v1.13.9-tailscale.iso' to confirm: "
+    ]
+
+
 def test_ensure_boot_artifact_uses_download_url(proxmox_cfg, monkeypatch):
     data = _data()
     # no existing ISO on either node — _find_iso returns ""

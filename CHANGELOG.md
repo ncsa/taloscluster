@@ -76,6 +76,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Fix OpenStack security-group normalization so allowlists are enforced and `0.0.0.0/0` is not recreated on every run.
 - Fix the hostname-length check for pools with 100 or more nodes.
 - Contain a plugin's fatal error so one plugin cannot abort the whole run; warn on duplicate plugin entry-point names.
+- Confirm the image name `image remove` will actually delete.
 - Fail Rancher member reconciliation when a configured user cannot be resolved instead of removing their binding.
 - Fix Rancher API error messages that were joined character by character.
 - Pass the Proxmox `ingress_pool` to ArgoCD so MetalLB address pools render for both providers.

@@ -248,8 +248,8 @@ class OpenStackBackend:
         log(f"remove image {found}")
         warn("other clusters on the same talos version may share this image")
         if not assume_yes and not dry_run():
-            resp = input(f"type '{name}' to confirm: ").strip()
-            if resp != name:
+            resp = input(f"type '{found}' to confirm: ").strip()
+            if resp != found:
                 raise SystemExit("aborted")
         for img in images:
             action(f"delete image {img.name}")

@@ -1672,7 +1672,10 @@ class ProxmoxBackend:
             )
         warn("other clusters on the same Talos version may share this image")
         if not assume_yes and not dry_run():
-            if input(f"type '{filename}' to confirm: ").strip() != filename:
+            prompt_name = ", ".join(
+                sorted({volume.rsplit("/", 1)[-1] for _node, volume in found})
+            )
+            if input(f"type '{prompt_name}' to confirm: ").strip() != prompt_name:
                 raise SystemExit("aborted")
         for node, volume in found:
             action(f"delete image {volume}")

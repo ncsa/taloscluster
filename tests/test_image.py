@@ -259,3 +259,50 @@ def test_remove_image_cleans_up_an_orphaned_legacy_image(monkeypatch):
     backend.remove_image(assume_yes=True)
 
     assert [i.id for i in backend.conn.image.images] == []
+
+
+def test_remove_image_prompts_with_legacy_name_when_only_it_exists(monkeypatch):
+    """When only the legacy pre-schematic image is present, `image remove`
+    asks the operator to confirm the legacy name actually found, not the
+    current schematic name that is not being deleted."""
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    monkeypatch.setattr("taloscluster.openstack.backend.dry_run", lambda: False)
+    backend = _os_backend(
+        images=[SimpleNamespace(name="talos-v1.13.9-tailscale", id="img-legacy")]
+    )
+    prompts = []
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt: prompts.append(prompt) or "talos-v1.13.9-tailscale",
+    )
+
+    backend.remove_image()
+
+    assert prompts == ["type 'talos-v1.13.9-tailscale' to confirm: "]
+    assert all("tailscale-abc123" not in p for p in prompts)
+
+
+def test_remove_image_prompts_with_both_names_when_both_exist(monkeypatch):
+    """When both the schematic and legacy pre-schematic images are present,
+    `image remove` asks the operator to confirm every name it will delete."""
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    monkeypatch.setattr("taloscluster.openstack.backend.dry_run", lambda: False)
+    backend = _os_backend(
+        images=[
+            SimpleNamespace(name="talos-v1.13.9-tailscale-abc123", id="img-new"),
+            SimpleNamespace(name="talos-v1.13.9-tailscale", id="img-legacy"),
+        ]
+    )
+    prompts = []
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt: prompts.append(prompt)
+        or "talos-v1.13.9-tailscale-abc123, talos-v1.13.9-tailscale",
+    )
+
+    backend.remove_image()
+
+    assert prompts == [
+        "type 'talos-v1.13.9-tailscale-abc123, talos-v1.13.9-tailscale' to confirm: "
+    ]
+    assert [i.id for i in backend.conn.image.images] == []
