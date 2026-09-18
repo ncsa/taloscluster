@@ -51,7 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Scaffold the Proxmox `kubeapi_vip` outside the managed-SDN static layout.
 - Create `talossecrets.yaml` with mode 0600 from the start.
 - Forward plugin `check`/`status` results to later plugins so ArgoCD renders the same Rancher cluster id as converge.
-- Refuse Rancher converge and destroy when the Rancher cluster's id does not match the downstream agent, or when the agent matches no Rancher cluster; `check`/`status` report the mismatch and `plugin rancher destroy` removes an orphaned agent.
+- Refuse Rancher converge and destroy on a downstream-agent id mismatch; `check`/`status` report it and `plugin rancher destroy` removes an orphaned agent.
 - Resolve Rancher members on an exact id match, and reject a user listed under both `admins` and `users` or under both via an alias.
 - Render ArgoCD manifests through a YAML serializer so values with quotes, colons or newlines are preserved.
 - Deliver the OpenStack Cinder cloud.conf as a Secret instead of embedding credentials in ArgoCD values.
