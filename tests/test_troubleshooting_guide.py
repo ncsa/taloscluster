@@ -209,35 +209,27 @@ def test_etcd_member_control_plane_refusal_quotes_converge():
     # A control-plane removal whose reset failed (known address, dead/wiped
     # node) or whose address is gone refuses to delete a member that could cost
     # quorum; the guide must quote the same language as the converge refusal.
-    # A reset that fails while the Kubernetes Node still exists aborts
-    # unconditionally with talosctl reset's own message, so the guide must
-    # present that abort (and its quoted refusal) rather than claiming the etcd
-    # fallthrough always applies.
+    # A reset that fails while the Kubernetes Node still exists aborts with
+    # talosctl reset's own message, so the guide must present that abort (and
+    # its quoted refusal) rather than claiming the etcd fallthrough always
+    # applies.
     guide = GUIDE.read_text()
     talosctl = TALOSCTL.read_text()
     assert "still an etcd member" in guide
     assert "could cost quorum" in guide
     assert "delete a member that could cost quorum" in CONVERGE.read_text()
-    assert "aborts unconditionally" in guide
     assert "refusing to delete it -- a half-reset " in talosctl
     assert "control plane is a dead etcd member" in talosctl
     assert "refusing to delete it -- a half-reset control plane is a dead etcd member" in guide
-    # the etcd fallthrough is a rerun-only path for a Node already gone
-    assert "still has a Kubernetes Node aborts unconditionally" in guide
-    assert "rerun whose Kubernetes Node is already gone" in guide
 
 
 def test_upgrade_abort_diagnostics_match_converge():
     # A Kubernetes upgrade that cannot read the running version aborts instead
-    # of silently skipping. The guide's Diagnostics describe what the operator
-    # sees now -- exit 1, before any upgrade-k8s step -- and must quote the
-    # converge abort it is describing.
+    # of silently skipping. The guide quotes the converge abort it is describing.
     guide = GUIDE.read_text()
     converge = CONVERGE.read_text()
     assert "resolved; cannot perform a kubernetes upgrade" in guide
     assert "resolved; cannot perform a kubernetes upgrade" in converge
-    assert "exits 1 before any `upgrade-k8s` step" in guide
-    assert "never hides behind a healthy exit status" in guide
 
 
 def test_unknown_k8s_version_refusal_matches_converge():

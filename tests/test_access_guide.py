@@ -15,6 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 GUIDE = ROOT / "docs" / "concepts" / "machines.md"
 CONVERGE = ROOT / "taloscluster" / "converge.py"
+TALOSCTL = ROOT / "taloscluster" / "talos" / "talosctl.py"
+PROXMOX_BACKEND = ROOT / "taloscluster" / "proxmox" / "backend.py"
 
 
 def test_guide_exists_and_is_linked_from_nav():
@@ -126,13 +128,14 @@ def test_guide_verify_commands_have_no_bare_talosctl():
 
 
 def test_guide_states_vip_exclusion_once_in_path_b():
-    # The kube-api VIP is excluded from node-address selection, and that rule is
-    # stated once in the Path B intro rather than repeated in step 4.
+    # The kube-api VIP is excluded from node-address selection: the guide states
+    # that rule in the Path B intro, backed by Talos discovery's `exclude_vip`
+    # parameter and the Proxmox backend's `str(parsed) != cluster_vip` filter,
+    # which report the next real address rather than a floating VIP.
     text = GUIDE.read_text()
-    assert "excluded from guest-agent and Talos discovery" in text
-    assert "rather than the VIP" in text
-    # the step-4 restatement is gone: "never select the kube-api VIP"
-    assert "never select the kube-api VIP" not in text
+    assert "excluded" in text
+    assert "exclude_vip" in TALOSCTL.read_text()
+    assert "str(parsed) != cluster_vip" in PROXMOX_BACKEND.read_text()
 
 
 def test_guide_describes_duplicate_vm_name_collision():

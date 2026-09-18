@@ -48,11 +48,15 @@ def test_worker_cleanup_is_separate_from_control_plane_quorum():
 
 def test_unknown_version_rule_is_not_appended_to_scale_up():
     # The unknown-version refusal is a standalone paragraph in the Versions
-    # section, not tacked onto the end of the scale-up/upgrade paragraph.
+    # section, not tacked onto the end of the scale-up/upgrade paragraph. Anchor
+    # on the section heading and the refusal phrase so the refusal must open a
+    # paragraph of its own past the scale-up paragraph, while a reword of the
+    # surrounding scale-up prose does not fail the check.
     text = GUIDE.read_text()
-    assert "boots at the upgraded version" in text
-    assert "refuses to generate" in text
-    scale_up = text.index("boots at the upgraded version")
-    unknown = text.index("refuses to generate")
-    assert unknown > scale_up
-    assert "\n\n" in text[scale_up:unknown]
+    refusal = "unknown version"
+    assert refusal in text
+    section = text.split("### Versions", 1)[1]
+    paragraphs = [p for p in section.split("\n\n") if p.strip()]
+    # the refusal is its own paragraph, not folded into the scale-up paragraph
+    assert any(refusal in p for p in paragraphs[1:])
+    assert not any(refusal in p for p in paragraphs[:1])
