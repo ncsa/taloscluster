@@ -1662,6 +1662,14 @@ class ProxmoxBackend:
         if not found:
             info(f"image {filename} not found, nothing to remove")
             return
+        referenced = self._boot_iso_in_use(inventory)
+        in_use = sorted({volume for _node, volume in found} & referenced)
+        if in_use:
+            raise ReconcileError(
+                "refusing to remove image(s) still booted by an owned Proxmox VM: "
+                + ", ".join(in_use)
+                + "; detach the cdrom on those VMs before removing the image"
+            )
         warn("other clusters on the same Talos version may share this image")
         if not assume_yes and not dry_run():
             if input(f"type '{filename}' to confirm: ").strip() != filename:
@@ -1670,6 +1678,29 @@ class ProxmoxBackend:
             action(f"delete image {volume}")
             if not dry_run():
                 self._delete_volume(node, self.provider.iso_storage, volume)
+
+    def _boot_iso_in_use(self, inventory: ProxmoxInventory) -> set[str]:
+        """Boot volumes (``ide2`` cdroms) that owned VMs still point at.
+
+        Every VM is created with the boot ISO on ``ide2`` and converge only
+        ever detaches ``ide3`` (the cidata volume), so VMs created before the
+        image rename still reference the legacy ``talos-<version>-tailscale``
+        ISO. Proxmox does not block deleting a referenced ISO, but a VM whose
+        cdrom volume is gone fails to start, so ``remove_image`` refuses while
+        any owned VM still boots from a volume it would delete.
+        """
+        referenced: set[str] = set()
+        for _name, vm in inventory.vms.items():
+            if not self._owns_vm(inventory, vm):
+                continue
+            config = self.client.get(f"nodes/{vm.node}/qemu/{vm.vmid}/config")
+            if not isinstance(config, dict):
+                continue
+            for key in ("ide2", "ide0", "ide1", "ide3", "sata0", "sata1"):
+                value = config.get(key)
+                if isinstance(value, str):
+                    referenced.add(value.split(",", 1)[0].strip())
+        return referenced
 
     def destroy_summary(self, inventory: InfrastructureInventory) -> str:
         raw = self._raw(inventory)

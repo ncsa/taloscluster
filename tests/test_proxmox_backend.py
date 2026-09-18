@@ -355,6 +355,41 @@ def test_remove_image_also_deletes_the_legacy_schematicless_iso(proxmox_cfg, mon
     assert any("talos-v1.13.9-tailscale-abc123.iso" in path for path in deleted)
 
 
+def test_remove_image_refuses_when_an_owned_vm_still_boots_the_iso(proxmox_cfg, monkeypatch):
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    data = _data()
+    legacy = "isos:iso/talos-v1.13.9-tailscale.iso"
+    for node in ("pve001", "pve002"):
+        data[f"nodes/{node}/storage/isos/content"] = [{"volid": legacy}]
+    # the owned VM still boots the legacy ISO on ide2 (created before the rename)
+    data["nodes/pve001/qemu/800/config"]["ide2"] = f"{legacy},media=cdrom"
+    client = FakeClient(data)
+    backend = _backend(proxmox_cfg, client)
+    backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="refusing to remove image"):
+        backend.remove_image(assume_yes=True)
+
+    assert all(method != "DELETE" for method, _path, _data in client.mutations)
+
+
+def test_remove_image_refuses_when_the_current_iso_is_still_booted(proxmox_cfg, monkeypatch):
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    data = _data()
+    current = "isos:iso/talos-v1.13.9-tailscale-abc123.iso"
+    for node in ("pve001", "pve002"):
+        data[f"nodes/{node}/storage/isos/content"] = [{"volid": current}]
+    data["nodes/pve001/qemu/800/config"]["ide2"] = f"{current},media=cdrom"
+    client = FakeClient(data)
+    backend = _backend(proxmox_cfg, client)
+    backend.load_inventory()
+
+    with pytest.raises(ReconcileError, match="refusing to remove image"):
+        backend.remove_image(assume_yes=True)
+
+    assert all(method != "DELETE" for method, _path, _data in client.mutations)
+
+
 def test_ensure_boot_artifact_uses_download_url(proxmox_cfg, monkeypatch):
     data = _data()
     # no existing ISO on either node — _find_iso returns ""

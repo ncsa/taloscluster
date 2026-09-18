@@ -91,7 +91,7 @@ taloscluster image download [--dry-run]
 taloscluster image remove [--dry-run] [--yes]
 ```
 
-`download` builds or downloads the shared boot image for the configured Talos version and base schematic, then uploads it to the provider if missing. Converge normally handles this automatically. `remove` deletes the shared image and requires confirmation unless `--yes` is set. The image can be used by multiple clusters; neither converge nor destroy removes it automatically. `remove` also deletes the legacy `talos-<version>-tailscale` image a cluster still carries from before the schematic id joined the name.
+`download` builds or downloads the shared boot image for the configured Talos version and base schematic, then uploads it to the provider if missing. Converge normally handles this automatically. `remove` deletes the shared image and requires confirmation unless `--yes` is set. The image can be used by multiple clusters; neither converge nor destroy removes it automatically. `remove` also deletes the legacy `talos-<version>-tailscale` image a cluster still carries from before the schematic id joined the name; on Proxmox it refuses to delete an image that any cluster-managed VM still boots from, since a VM whose cdrom volume is gone fails to start.
 
 ## `destroy`
 
