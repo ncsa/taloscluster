@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Point the orphaned-agent recovery message at the rancher plugin's own `destroy` rather than the whole-cluster `destroy`.
 - Delete the legacy `talos-<version>-tailscale` image that predates the schematic name on `image remove`.
 - Name the timed-out kubectl command in timeout errors, with a longer bound for manifest apply, diff and delete.
 - Apply machine configs to control planes one at a time, waiting for each restart to finish.

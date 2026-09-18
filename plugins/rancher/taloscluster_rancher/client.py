@@ -173,7 +173,8 @@ class Client:
                 "and is now orphaned, so importing a fresh cluster would strand the "
                 "agent under the old id. The stale Rancher cluster is already gone, "
                 "so deleting the registration will not clear the downstream agent -- "
-                "run 'taloscluster destroy' to uninstall the orphaned agent, then re-run"
+                "run 'taloscluster plugin rancher destroy' to "
+                "uninstall the orphaned agent, then re-run"
             )
         if dry_run():
             action(f"create import cluster {name} in Rancher")

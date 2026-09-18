@@ -265,12 +265,15 @@ def test_ensure_cluster_refuses_when_downstream_id_matches_no_named_cluster():
     assert post_hits == []
 
 
-def test_ensure_cluster_orphan_message_directs_to_destroy():
+def test_ensure_cluster_orphan_message_directs_to_plugin_destroy():
     """Deleting the stale registration in Rancher will not clear the downstream
-    agent, so the refuse message must tell the operator that `destroy` uninstalls
-    the orphaned agent -- the only exit from the deadlock."""
+    agent, so the refuse message must direct the operator to the *plugin's*
+    `destroy` -- not the top-level `taloscluster destroy`, which would tear the
+    whole cluster down -- the only exit from the deadlock."""
     client = _http_client(get=lambda path, **kw: {"data": []})
-    with pytest.raises(RancherError, match="run 'taloscluster destroy'"):
+    with pytest.raises(
+        RancherError, match="run 'taloscluster plugin rancher destroy'"
+    ):
         client.ensure_cluster("example", downstream_id="c-old")
 
 

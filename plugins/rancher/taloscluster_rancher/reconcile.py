@@ -325,7 +325,8 @@ def _orphan_reason(name: str, downstream_id: str) -> str:
         "registration was renamed or deleted in the Rancher UI and is now orphaned, "
         "so converge refuses to re-register the cluster under a fresh id. The stale "
         "Rancher cluster is already gone, so deleting the registration will not clear "
-        "the downstream agent -- run 'taloscluster destroy' to uninstall it, then re-run"
+        "the downstream agent -- run 'taloscluster plugin rancher destroy' to uninstall it, "
+        "then re-run"
     )
 
 

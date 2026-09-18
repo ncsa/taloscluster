@@ -224,6 +224,7 @@ def test_check_reports_orphaned_agent_when_no_rancher_cluster(cluster_dir, wire)
     assert report["id_match"] is False
     assert "no Rancher cluster named 'testcluster'" in report["orphan_reason"]
     assert "c-old" in report["orphan_reason"]
+    assert "plugin rancher destroy" in report["orphan_reason"]
 
 
 def test_status_reports_orphaned_agent_when_no_rancher_cluster(cluster_dir, wire):
