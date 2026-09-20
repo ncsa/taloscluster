@@ -2,7 +2,7 @@
 
 A cluster directory holds two files that taloscluster reads together. `cluster.yaml` describes the desired state and is safe to commit. `secrets.yaml` holds credentials and is gitignored; it is merged into `cluster.yaml` before validation — always first, ahead of anything [`include`](configuration/general.md#include) names — so its keys are ordinary `cluster.yaml` keys that happen to live in a file you do not commit. `taloscluster init [--openstack|--proxmox] NAME` scaffolds both, and the core loader validates required fields and supported values. A top-level key neither core nor an installed plugin owns is refused — a misspelled or unsupported section is caught instead of silently ignored. A miscapped or unsupported key inside a fixed-schema section is refused too, including in nested fixed-schema blocks such as `proxmox.network` — `talos.extensons`, `network.dnss`, `openstack.regoin` or `proxmox.network.clustr` no longer load quietly (a typo like `openstack.regoin` used to silently fall back to the `RegionOne` default). Freeform maps are left open: cluster and pool `tags` are arbitrary label maps, security host labels are free-form, and `config_patches` hold arbitrary YAML. Sections owned by an installed plugin (e.g. `argocd`, `rancher`) are retained as valid; each plugin's `validate` hook runs in converge's validate phase for every installed plugin before any mutation, so a malformed or contradictory plugin section is refused up front instead of being checked only when the plugin's hooks run later.
 
-All example addresses and hostnames in these pages are placeholders (RFC 5737 documentation ranges and `example.edu`).
+All example addresses and hostnames in these pages are placeholders: RFC 5737 documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) for routed networks, RFC 1918 ranges for private node networks, and `example.edu` hostnames.
 
 ## cluster.yaml
 
@@ -16,8 +16,8 @@ All example addresses and hostnames in these pages are placeholders (RFC 5737 do
 | `controlplane` | yes | Control plane pool: count and sizing | [Pools](configuration/pools.md) |
 | `workers` | no | Worker pools by name: count, sizing, extensions, tags | [Pools](configuration/pools.md) |
 | `openstack` | one of | OpenStack endpoint, availability zone, external network, optional region | [OpenStack](configuration/openstack.md) |
-| `proxmox` | one of | Proxmox endpoint, storages, placement, bridges | [Proxmox](configuration/proxmox.md) |
-| `network` | yes | The cluster and external L2 networks, DNS and NTP servers | [Network](configuration/network.md) |
+| `proxmox` | one of | Proxmox endpoint, storages, placement, and the bridge, VNet or SDN each network is reached through | [Proxmox](configuration/proxmox.md) |
+| `network` | yes | The node L2 (`network.cluster`), the optional routed L2 (`network.external`), DNS and NTP servers | [Network](configuration/network.md) |
 | `security` | no | Named ingress allowlists per port | [Security](configuration/security.md) |
 | `tailscale` | no | Opt into the tailscale extension, login server | [Tailscale](configuration/tailscale.md) |
 | `rancher` | no | Rancher plugin: members to grant access | [Rancher](configuration/rancher.md) |

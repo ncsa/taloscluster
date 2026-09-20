@@ -185,7 +185,7 @@ Restrict the zone to these hosts. Also set `proxmox.nodes` to a matching compute
 
 Optional · mapping
 
-Adds a second NIC on a directly routed external subnet, described in [`network.external`](network.md#networkexternal). It can carry the API VIP and MetalLB ingress addresses without NAT; the API VIP may instead remain on the private cluster link. Adding or removing this section on a running cluster is refused. Control planes get an external routing table when the API VIP is external. With `ingress_pool`, every node gets the routing table and a connection-marking static pod for ingress replies.
+Adds a second NIC on a directly routed external subnet, described in [`network.external`](network.md#networkexternal); neither half works without the other, so a bridge here without that block, or that block without a bridge here, is refused. It can carry the API VIP and MetalLB ingress addresses without NAT; the API VIP may instead remain on the private cluster link. Adding or removing this section on a running cluster is refused. Control planes get an external routing table when the API VIP is external. With `ingress_pool`, every node gets the routing table and a connection-marking static pod for ingress replies.
 
 ### `bridge`
 

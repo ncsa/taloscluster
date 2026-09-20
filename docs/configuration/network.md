@@ -14,45 +14,116 @@ network:
 
 Required · mapping
 
-The layer-2 network the nodes sit on: `cidr` (required), optional `gateway`, optional `vlan` (1-4094), optional `mtu` (default 1500, at least 1280) and, on Proxmox, `kubeapi_vip` (IPv4 inside `cidr`). `anchor_cidr` and `ingress_pool` describe the external network and are refused here. `vlan` and `kubeapi_vip` are Proxmox settings and are refused with `openstack`: the tenant network carries no VLAN tag, and converge reserves the API address as a port with a floating IP in front of it.
+The layer-2 network the nodes sit on, described in one place for every provider. Which bridge, VNet or SDN the network is reached through is Proxmox plumbing and stays in [`proxmox.network.cluster`](proxmox.md#proxmoxnetworkcluster).
 
-`cidr` is the network the nodes' private addresses come from, written as a network address (`10.0.0.0/24`, not a host inside it). What it means depends on the provider:
+```yaml
+network:
+  cluster:
+    cidr: 10.0.0.0/24
+    gateway: 10.0.0.1       # accepted; not applied to nodes yet
+    vlan: 100               # Proxmox only
+    mtu: 9000               # validated; not applied to nodes yet
+    kubeapi_vip: 10.0.0.200 # Proxmox only
+```
+
+### `network.cluster.cidr`
+
+Required · IPv4 network
+
+The network the nodes' private addresses come from, written as a network address (`10.0.0.0/24`, not a host inside it). What it means depends on the provider:
 
 - **OpenStack**: becomes the tenant subnet converge creates.
 - **Proxmox with `bridge` or `vnet`**: must match the DHCP-served subnet on that link.
 - **Proxmox managed SDN**: the overlay subnet. Nodes get static addresses from it, so it cannot change once the cluster runs. See [Proxmox](proxmox.md#proxmoxnetworkclustersdn).
 
-On Proxmox, `vlan` is the VM NIC tag and is not allowed together with a managed SDN; which bridge or VNet the network is reached through stays in [`proxmox.network.cluster`](proxmox.md#proxmoxnetworkcluster).
+### `network.cluster.gateway`
 
-On Proxmox, `kubeapi_vip` is the address control planes share as a Layer 2 VIP for the Kubernetes API, and must be set in exactly one of `network.cluster` or `network.external`. Changing it later moves the API endpoint of the running cluster by re-applying it through the machine config; it is not guaranteed to avoid a restart. On a managed Proxmox SDN it may not collide with the anycast gateway, a node's static address, or any address the static layout reserves.
+Optional · IPv4 address inside `cidr` · default none
 
-```yaml
-network:
-  cluster:
-    cidr: 192.0.2.0/24
-    gateway: 192.0.2.1
-    mtu: 9000
-    kubeapi_vip: 192.0.2.200 # Proxmox only
-```
+The default gateway on this network. Nothing reads it today: DHCP supplies the gateway on a Proxmox bridge or VNet, a managed SDN uses the first host of `cidr` as its anycast gateway, and OpenStack sets the subnet's gateway itself. It is accepted and validated for the statically addressed machines the bare-metal support will add.
+
+### `network.cluster.vlan`
+
+Optional · 1 to 4094 · default untagged
+
+VLAN tag for the node NIC. Proxmox only: it becomes the VM NIC tag, and it is refused together with a managed SDN and with `openstack`, whose tenant network carries no tag.
+
+### `network.cluster.mtu`
+
+Optional · integer, at least 1280 · default `1500`
+
+The MTU of this layer-2 network. The value is validated today but not yet written into the generated machine configuration: it is reserved for the jumbo-frame support, which will set the link MTU and clamp the route MTU. Every node on one layer-2 network must agree on the MTU.
+
+### `network.cluster.kubeapi_vip`
+
+One of `network.cluster` / `network.external` on Proxmox · IPv4 inside `cidr` · default none
+
+The address control planes share as a Layer 2 VIP for the Kubernetes API. Set it in exactly one of `network.cluster` and `network.external`. Changing it later moves the API endpoint of the running cluster by re-applying it through the machine config; it is not guaranteed to avoid a restart. On a managed Proxmox SDN it may not collide with the anycast gateway, a node's static address, or any address the static layout reserves. It is refused with `openstack`, where converge reserves the API address as a port with a floating IP in front of it. Like `ingress_pool`, it must sit outside any DHCP range on that network; see [Addresses outside the DHCP range](#addresses-outside-the-dhcp-range).
 
 ## `network.external`
 
-Optional · mapping · no external network
+Optional · mapping · default no external network
 
-The externally routed layer-2 network, for clusters that reach the outside world directly instead of through a provider-allocated network (Proxmox only; the bridge it is reached through stays in [`proxmox.network.external`](proxmox.md#proxmoxnetworkexternal)). It is refused with `openstack`, which allocates the external network itself from [`openstack.external_net`](openstack.md#openstackexternal_net) — a router plus floating IPs for the API and ingress ports — at converge. It takes the same keys as `network.cluster` plus `anchor_cidr` (a range inside `169.254.0.0/16`) and `ingress_pool` (a `start-end` range inside its `cidr`). A cluster that has this network at all must describe it fully: `cidr`, `gateway` and `anchor_cidr` are required, and `cidr` must not overlap the cluster network. Exactly one of `network.cluster.kubeapi_vip` and `network.external.kubeapi_vip` may be set, and the VIP must not fall inside `ingress_pool`. Both `kubeapi_vip` and `ingress_pool` must lie outside any DHCP range on that network; taloscluster cannot check that for you.
+The externally routed layer-2 network, for clusters that reach the outside world directly instead of through a provider-allocated network. Proxmox only: the bridge it is reached through stays in [`proxmox.network.external`](proxmox.md#proxmoxnetworkexternal), and the block is refused with `openstack`, which allocates the external network itself from [`openstack.external_net`](openstack.md#openstackexternal_net) — a router plus floating IPs for the API and ingress ports — at converge.
 
-`anchor_cidr` is the range each machine draws a deterministic link-local `/32` anchor address from, because Talos will not use an interface without an address; use `/20` or larger, as an address collision aborts the run. `ingress_pool` is the range reserved in your address plan for MetalLB ingress: install and configure MetalLB separately to announce it, as core taloscluster does not create an address pool. When it is set, every machine runs a small static pod that marks connections entering the external NIC so replies to reverse-NATed traffic return through the external gateway; edits apply through the machine config on the next converge.
+A cluster that has this network at all must describe it fully: `cidr`, `gateway` and `anchor_cidr` are required, and `cidr` must not overlap `network.cluster.cidr`.
 
 ```yaml
 network:
   external:
-    cidr: 198.51.100.0/24
-    gateway: 198.51.100.1
+    cidr: 203.0.113.0/24
+    gateway: 203.0.113.1
     vlan: 100
-    kubeapi_vip: 198.51.100.10
+    kubeapi_vip: 203.0.113.10
     anchor_cidr: 169.254.32.0/20
-    ingress_pool: 198.51.100.190-198.51.100.199
+    ingress_pool: 203.0.113.190-203.0.113.199
 ```
+
+### `network.external.cidr`
+
+Required · IPv4 network
+
+The externally routed subnet. It must not overlap `network.cluster.cidr`.
+
+### `network.external.gateway`
+
+Required · IPv4 address inside `cidr`
+
+The subnet's gateway. Replies to externally initiated traffic are routed back through it.
+
+### `network.external.vlan`
+
+Optional · 1 to 4094 · default untagged
+
+VLAN tag for the external NIC.
+
+### `network.external.mtu`
+
+Optional · integer, at least 1280 · default `1500`
+
+The MTU of the external network, validated but not yet written into the machine configuration (see [`network.cluster.mtu`](#networkclustermtu)).
+
+### `network.external.kubeapi_vip`
+
+One of `network.cluster` / `network.external` on Proxmox · IPv4 inside `cidr`, outside `ingress_pool` · default none
+
+The API VIP on the external subnet. Set it here or under `network.cluster`, not both; see [`network.cluster.kubeapi_vip`](#networkclusterkubeapi_vip) for what moving it costs. Like `ingress_pool`, it must sit outside any DHCP range on that network; see [Addresses outside the DHCP range](#addresses-outside-the-dhcp-range).
+
+### `network.external.anchor_cidr`
+
+Required · IPv4 network inside `169.254.0.0/16`
+
+The range each machine draws a deterministic link-local `/32` anchor address from, because Talos will not use an interface without an address. Use `/20` or larger; an address collision aborts the run.
+
+### `network.external.ingress_pool`
+
+Optional · `start-end` IPv4 range inside `cidr` · default none
+
+The range reserved in your address plan for MetalLB ingress. Install and configure MetalLB separately to announce it; core taloscluster does not create an address pool. When it is set, every machine runs a small static pod that marks connections entering the external NIC so replies to reverse-NATed traffic return through the external gateway; edits apply through the machine config on the next converge. See [Load balancers and ingress](../load-balancer.md#proxmox).
+
+## Addresses outside the DHCP range
+
+`kubeapi_vip` and `ingress_pool` name addresses taloscluster hands to the cluster itself, so they must lie outside any DHCP range serving that layer-2 network, and outside the addresses your own hosts use. taloscluster cannot see the DHCP server's pool and does not check this: a VIP inside the pool works until the day the server leases it to something else.
 
 ## `network.dns`
 

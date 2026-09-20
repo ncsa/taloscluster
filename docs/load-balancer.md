@@ -96,7 +96,7 @@ Clients reach `app.example.edu` through the floating IP `203.0.113.80`; MetalLB 
 
 ## Proxmox
 
-There is no single ingress VIP. Beyond the two physical NICs (the private cluster link, and the optional `external` NIC), you reserve a range for MetalLB in `network.external.ingress_pool`. Core configures the routing and the connection-marking static pod so announcements on the external NIC work, but a MetalLB address pool is *yours* to create:
+There is no single ingress VIP. Beyond the two physical NICs (the private cluster link, and the optional `external` NIC), you reserve a range for MetalLB in [`network.external.ingress_pool`](configuration/network.md#networkexternalingress_pool) — outside any DHCP range on that network, which [taloscluster cannot check](configuration/network.md#addresses-outside-the-dhcp-range). Core configures the routing and the connection-marking static pod so announcements on the external NIC work, but a MetalLB address pool is *yours* to create:
 
 ```yaml
 proxmox:

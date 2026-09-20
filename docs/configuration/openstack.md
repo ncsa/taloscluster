@@ -2,7 +2,7 @@
 
 Back to the [configuration index](../configuration.md).
 
-Pools on OpenStack size their servers with `flavor` (see [Pools](pools.md)). Converge creates a tenant network from `network.cluster.cidr`, a router on `external_net`, a security group from `security`, and separate reserved ports and floating IPs for the API and ingress. The provider connects in the configured `region` (default `RegionOne`). The session, the reported status/`env` output, and the region ArgoCD emits into the cluster-apps values all follow it.
+Pools on OpenStack size their servers with `flavor` (see [Pools](pools.md)). Converge creates a tenant network from [`network.cluster.cidr`](network.md#networkclustercidr), a router on `external_net`, a security group from `security`, and separate reserved ports and floating IPs for the API and ingress. Because OpenStack allocates that external connectivity itself, the keys that would describe one by hand — [`network.external`](network.md#networkexternal), `network.cluster.kubeapi_vip` and `network.cluster.vlan` — are refused here rather than silently ignored. The provider connects in the configured `region` (default `RegionOne`). The session, the reported status/`env` output, and the region ArgoCD emits into the cluster-apps values all follow it.
 
 ## cluster.yaml
 
