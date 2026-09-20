@@ -137,13 +137,13 @@ def _ensure_network(conn, cluster, inv, tags):
 
 def _ensure_subnet(conn, cfg, network, inv, tags):
     name = naming.subnet_name(cfg.name)
-    desired_dns = list(cfg.dns)
+    desired_dns = list(cfg.network.dns)
     sub = inv.get("subnets", name)
     if sub:
         info(f"subnet {name} exists")
         _reconcile_subnet_dns(conn, sub, desired_dns)
         return sub
-    action(f"create subnet {name} ({cfg.cidr})")
+    action(f"create subnet {name} ({cfg.network.cluster.cidr})")
     if dry_run() or network is None:
         return None
     sub = create_tagged(
@@ -153,7 +153,7 @@ def _ensure_subnet(conn, cfg, network, inv, tags):
         name=name,
         network_id=network.id,
         ip_version=4,
-        cidr=cfg.cidr,
+        cidr=cfg.network.cluster.cidr,
         dns_nameservers=desired_dns,
     )
     return inv.put("subnets", sub)

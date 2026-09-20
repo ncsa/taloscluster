@@ -1313,8 +1313,6 @@ def test_network_blocks_are_parsed(make_config):
     assert cfg.network.external.kubeapi_vip == "203.0.113.10"
     assert cfg.network.external.anchor_cidr == "169.254.32.0/20"
     assert cfg.network.external.ingress_pool == "203.0.113.20-203.0.113.40"
-    # the block still feeds the existing cidr field until it is removed
-    assert cfg.cidr == "192.168.0.0/21"
 
 
 def test_network_block_mtu_defaults_to_1500(make_config):
@@ -1557,3 +1555,9 @@ def test_explicitly_null_l2_keys_are_treated_as_absent(make_config):
 
     assert cfg.network.cluster.vlan is None
     assert cfg.network.cluster.mtu == 1500
+
+
+@pytest.mark.parametrize("attribute", ["cidr", "dns", "ntp"])
+def test_network_facts_are_only_reachable_through_the_network_blocks(make_config, attribute):
+    """The network settings read the way the config does, with no forwarders."""
+    assert not hasattr(make_config(), attribute)

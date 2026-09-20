@@ -274,7 +274,12 @@ class L2Network:
 
 
 def l2_facts(l2: L2Network) -> dict[str, Any]:
-    """The facts an L2 sets, as the mapping the provider code reads them from."""
+    """The facts an L2 sets, as the mapping the provider code reads them from.
+
+    `mtu` is deliberately absent: these mappings feed the Proxmox plumbing,
+    which has no MTU key, and the machine configuration reads the MTU from the
+    :class:`L2Network` itself.
+    """
     facts: dict[str, Any] = {
         key: getattr(l2, key)
         for key in ("cidr", "gateway", "kubeapi_vip", "anchor_cidr", "ingress_pool")
@@ -311,9 +316,6 @@ class Config:
 
     provider: ProviderConfig
 
-    cidr: str
-    dns: list[str]
-    ntp: list[str]
     network: NetworkConfig
 
     # named ingress allowlists, in cluster.yaml order
@@ -908,9 +910,6 @@ def load_config(root: Path) -> Config:
         controlplane=controlplane,
         workers=workers,
         provider=_provider_config(d, where),
-        cidr=network.cluster.cidr,
-        dns=network.dns,
-        ntp=network.ntp,
         network=network,
         security=_security_rules(security, where),
         login_server=tailscale.get("login_server"),
@@ -1190,17 +1189,18 @@ def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:
             )
     if resolved.exit_nodes and resolved.primary_exit_node not in resolved.exit_nodes:
         raise ConfigError(f"{where}.primary_exit_node must be one of the exit nodes")
-    if not cfg.dns:
+    if not cfg.network.dns:
         raise ConfigError(
             "cluster.yaml: network.dns is required with proxmox.network.cluster.sdn "
             "(static addressing has no DHCP-provided DNS)"
         )
 
     # static address layout: node_address raises on overflow; check VIP collisions
-    gateway = naming.sdn_gateway(cfg.cidr)
+    cidr = cfg.network.cluster.cidr
+    gateway = naming.sdn_gateway(cidr)
     worker_pools = tuple(cfg.workers)
     addresses = {
-        m.name: naming.node_address(cfg.cidr, m.name, m.role, m.pool, worker_pools).ip
+        m.name: naming.node_address(cidr, m.name, m.role, m.pool, worker_pools).ip
         for m in cfg.machines.values()
     }
     if isinstance(cluster_vip, str):
@@ -1221,7 +1221,7 @@ def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:
             )
         # the layout reserves slots for nodes a pool has not grown to yet;
         # a VIP parked there collides the moment that node is added
-        if vip in naming.sdn_reserved(cfg.cidr, worker_pools):
+        if vip in naming.sdn_reserved(cidr, worker_pools):
             raise ConfigError(
                 "cluster.yaml: proxmox.network.cluster.kubeapi_vip sits inside the "
                 "SDN static address layout (controlplane range or a worker pool "
@@ -1296,13 +1296,11 @@ def _validate(cfg: Config) -> None:
         if len(f"{cfg.name}-{pool_name}-{count:02d}") > 63:
             raise ConfigError("cluster and pool names make a hostname longer than 63 characters")
 
-    if not isinstance(cfg.cidr, str):
-        raise ConfigError("cluster.yaml: network.cidr must be a CIDR string")
     try:
-        network = ipaddress.ip_network(cfg.cidr, strict=True)
+        network = ipaddress.ip_network(cfg.network.cluster.cidr, strict=True)
     except (TypeError, ValueError):
         raise ConfigError(
-            f"cluster.yaml: network.cidr is not a valid network: {cfg.cidr!r}"
+            f"cluster.yaml: network.cidr is not a valid network: {cfg.network.cluster.cidr!r}"
         ) from None
     if network.version != 4:
         raise ConfigError("cluster.yaml: network.cidr must be IPv4")
@@ -1338,9 +1336,6 @@ def _validate(cfg: Config) -> None:
         cluster_network = _mapping(
             provider.network.get("cluster"), "cluster.yaml: proxmox.network.cluster"
         )
-        _reject_unknown_keys(
-            cluster_network, "cluster.yaml: proxmox.network.cluster", _PROXMOX_CLUSTER_KEYS
-        )
         links = [name for name in ("bridge", "vnet") if cluster_network.get(name)]
         if "sdn" in cluster_network:
             if links or cfg.network.cluster.vlan is not None:
@@ -1368,9 +1363,6 @@ def _validate(cfg: Config) -> None:
 
         external_network = _mapping(
             provider.network.get("external"), "cluster.yaml: proxmox.network.external"
-        )
-        _reject_unknown_keys(
-            external_network, "cluster.yaml: proxmox.network.external", _PROXMOX_EXTERNAL_KEYS
         )
         # the VIPs are taken from the resolved blocks, so either location -- the
         # `network.*` blocks or the old `proxmox.network.*` keys -- satisfies the
@@ -1400,7 +1392,7 @@ def _validate(cfg: Config) -> None:
     if cfg.login_server is not None and not isinstance(cfg.login_server, str):
         raise ConfigError("cluster.yaml: tailscale.login_server must be a string")
 
-    for dns in cfg.dns:
+    for dns in cfg.network.dns:
         try:
             ipaddress.ip_address(dns)
         except ValueError:
@@ -1433,7 +1425,7 @@ def validate_warnings(cfg: Config) -> list[str]:
         warnings.append("single controlplane, no HA")
     if (
         isinstance(cfg.provider, ProxmoxConfig)
-        and cfg.dns
+        and cfg.network.dns
         and not proxmox_sdn(cfg.name, cfg.provider)
     ):
         warnings.append(

@@ -357,7 +357,7 @@ class ProxmoxBackend:
                         name="cluster",
                         address=str(
                             naming.node_address(
-                                self.cfg.cidr, m.name, m.role, m.pool, worker_pools
+                                self.cfg.network.cluster.cidr, m.name, m.role, m.pool, worker_pools
                             ).ip
                         ),
                     ),
@@ -443,7 +443,7 @@ class ProxmoxBackend:
                 if not subnet.get("state") and not isinstance(subnet.get("pending"), dict):
                     continue
                 cidr = str(self._sdn_effective(subnet).get("cidr") or "")
-                if vnet_id == our_vnet and cidr == self.cfg.cidr:
+                if vnet_id == our_vnet and cidr == self.cfg.network.cluster.cidr:
                     continue
                 foreign.append(f"subnet {subnet.get('subnet')}")
         if foreign:
@@ -490,13 +490,14 @@ class ProxmoxBackend:
             if str(item.get("vnet")) != self.sdn.name:
                 continue
             for subnet in self._sdn_subnets_of(item):
-                if str(self._sdn_effective(subnet).get("cidr") or "") != self.cfg.cidr:
+                effective = str(self._sdn_effective(subnet).get("cidr") or "")
+                if effective != self.cfg.network.cluster.cidr:
                     continue
                 pending = _pending_state(subnet)
                 if not pending and isinstance(subnet.get("pending"), dict):
                     pending = "changed"
                 if pending and pending != "new":
-                    dangerous.append(f"subnet {self.cfg.cidr} ({pending})")
+                    dangerous.append(f"subnet {self.cfg.network.cluster.cidr} ({pending})")
 
         if dangerous:
             raise ReconcileError(
@@ -843,7 +844,7 @@ class ProxmoxBackend:
     def _ensure_subnet(self, state: dict[str, list[dict[str, Any]]]) -> bool:
         assert self.sdn is not None
         vnet_id = self.sdn.name
-        gateway = str(naming.sdn_gateway(self.cfg.cidr))
+        gateway = str(naming.sdn_gateway(self.cfg.network.cluster.cidr))
         vnet_item = next(
             (item for item in state["vnets"] if str(item.get("vnet")) == vnet_id), None
         )
@@ -857,18 +858,18 @@ class ProxmoxBackend:
             (
                 item
                 for item in subnets
-                if str(self._sdn_effective(item).get("cidr") or "") == self.cfg.cidr
+                if str(self._sdn_effective(item).get("cidr") or "") == self.cfg.network.cluster.cidr
             ),
             None,
         )
         desired: dict[str, Any] = {"gateway": gateway, "snat": 1}
         if existing is None:
-            action(f"create SDN subnet {self.cfg.cidr} (gateway {gateway}, snat)")
+            action(f"create SDN subnet {self.cfg.network.cluster.cidr} (gateway {gateway}, snat)")
             if not dry_run():
                 self.client.mutate(
                     "POST",
                     f"cluster/sdn/vnets/{vnet_id}/subnets",
-                    data={"subnet": self.cfg.cidr, "type": "subnet", **desired},
+                    data={"subnet": self.cfg.network.cluster.cidr, "type": "subnet", **desired},
                 )
             return True
         drift = self._sdn_drift(self._sdn_effective(existing), desired)
@@ -877,9 +878,9 @@ class ProxmoxBackend:
                 # staged (possibly by an interrupted run) but never applied;
                 # the zone/vnet resumable scan cannot see subnets
                 return True
-            info(f"SDN subnet {self.cfg.cidr} exists")
+            info(f"SDN subnet {self.cfg.network.cluster.cidr} exists")
             return False
-        action(f"update SDN subnet {self.cfg.cidr} ({', '.join(drift)})")
+        action(f"update SDN subnet {self.cfg.network.cluster.cidr} ({', '.join(drift)})")
         if not dry_run():
             subnet_id = quote(str(existing.get("subnet")), safe="")
             self.client.mutate(
@@ -1002,7 +1003,7 @@ class ProxmoxBackend:
                 continue
             expected = str(
                 naming.node_address(
-                    self.cfg.cidr, name, machine.role, machine.pool, worker_pools
+                    self.cfg.network.cluster.cidr, name, machine.role, machine.pool, worker_pools
                 ).ip
             )
             if actual != expected:
@@ -1383,8 +1384,8 @@ class ProxmoxBackend:
         for rule in self.cfg.security.values():
             for name, cidr in rule.hosts.items():
                 rules[("tcp", rule.port, cidr)] = f"{rule.name} from {name}"
-        rules[("tcp", None, self.cfg.cidr)] = "intra-cluster tcp"
-        rules[("udp", None, self.cfg.cidr)] = "intra-cluster udp"
+        rules[("tcp", None, self.cfg.network.cluster.cidr)] = "intra-cluster tcp"
+        rules[("udp", None, self.cfg.network.cluster.cidr)] = "intra-cluster udp"
         return rules
 
     @staticmethod
@@ -1438,7 +1439,7 @@ class ProxmoxBackend:
         proto, port, source = key
         if proto == "icmp" and port is None and source is None:
             return True
-        if proto in ("tcp", "udp") and port is None and source == self.cfg.cidr:
+        if proto in ("tcp", "udp") and port is None and source == self.cfg.network.cluster.cidr:
             return True
         return proto == "tcp" and port in self._managed_firewall_ports()
 
@@ -1805,7 +1806,7 @@ class ProxmoxBackend:
                 foreign_subnets: list[str] = []
                 for subnet in self._sdn_subnets_of(vnet):
                     cidr = str(self._sdn_effective(subnet).get("cidr") or "")
-                    if cidr != self.cfg.cidr:
+                    if cidr != self.cfg.network.cluster.cidr:
                         foreign_subnets.append(cidr or str(subnet.get("subnet")))
                         continue
                     action(f"delete SDN subnet {cidr}")
@@ -1874,7 +1875,7 @@ class ProxmoxBackend:
         except ReconcileError:
             return ""
         interfaces = data.get("result", []) if isinstance(data, dict) else []
-        network = ipaddress.ip_network(self.cfg.cidr)
+        network = ipaddress.ip_network(self.cfg.network.cluster.cidr)
         # The guest reports every address on the private link, including the
         # Layer 2 kube-api VIP the control plane currently owns. The VIP names
         # whatever node happens to hold it, never a specific machine, so it must

@@ -89,10 +89,10 @@ def _private_link_docs(m: Machine, cfg: Config) -> list[dict]:
     managed = sdn(cfg)
     if managed:
         address = naming.node_address(
-            cfg.cidr, m.name, m.role, m.pool, tuple(cfg.workers)
+            cfg.network.cluster.cidr, m.name, m.role, m.pool, tuple(cfg.workers)
         )
         link["addresses"] = [{"address": str(address)}]
-        link["routes"] = [{"gateway": str(naming.sdn_gateway(cfg.cidr))}]
+        link["routes"] = [{"gateway": str(naming.sdn_gateway(cfg.network.cluster.cidr))}]
         docs.append(link)
     else:
         docs.append(link)
@@ -361,7 +361,7 @@ def _nameservers_patch(cfg: Config) -> TalosPatch:
             {
                 "apiVersion": "v1alpha1",
                 "kind": "ResolverConfig",
-                "nameservers": [{"address": dns} for dns in cfg.dns],
+                "nameservers": [{"address": dns} for dns in cfg.network.dns],
             }
         ],
     )

@@ -34,8 +34,8 @@ def test_firewall_documents_mirror_the_security_rules(make_config):
     }
     rules = _rules(docs)
     assert rules["cluster-tcp"]["portSelector"] == {"ports": ["1-65535"], "protocol": "tcp"}
-    assert rules["cluster-tcp"]["ingress"] == [{"subnet": cfg.cidr}]
-    assert rules["cluster-udp"]["ingress"] == [{"subnet": cfg.cidr}]
+    assert rules["cluster-tcp"]["ingress"] == [{"subnet": cfg.network.cluster.cidr}]
+    assert rules["cluster-udp"]["ingress"] == [{"subnet": cfg.network.cluster.cidr}]
     assert rules["dhcp-client"]["portSelector"] == {"ports": [68], "protocol": "udp"}
     assert rules["tailscale"]["portSelector"] == {"ports": [41641], "protocol": "udp"}
     # http stays open because nothing claims 80; https is claimed and restricted

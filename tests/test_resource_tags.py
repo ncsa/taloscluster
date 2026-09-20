@@ -75,8 +75,9 @@ def test_all_neutron_creates_include_ownership_tags():
     inv = EmptyInventory()
     cfg = SimpleNamespace(
         name="testcluster",
-        cidr="192.0.2.0/24",
-        dns=["1.1.1.1"],
+        network=SimpleNamespace(
+            cluster=SimpleNamespace(cidr="192.0.2.0/24"), dns=["1.1.1.1"]
+        ),
         security={},
         open_ports=lambda: (80, 443),
     )

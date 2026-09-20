@@ -116,14 +116,14 @@ def test_machine_patch_user_tag_overrides_default(make_config, ep):
 def test_machine_patch_kubelet_node_ip_pinned_to_cidr(cfg, ep):
     m = cfg.machines["testcluster-controlplane-01"]
     patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER, DISK)
-    assert patch["machine"]["kubelet"]["nodeIP"]["validSubnets"] == [cfg.cidr]
+    assert patch["machine"]["kubelet"]["nodeIP"]["validSubnets"] == [cfg.network.cluster.cidr]
     assert patch["machine"]["kubelet"]["extraArgs"]["rotate-server-certificates"] is True
 
 
 def test_machine_patch_time_servers_from_cfg(cfg, ep):
     m = cfg.machines["testcluster-controlplane-01"]
     patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER, DISK)
-    assert patch["machine"]["time"]["servers"] == cfg.ntp
+    assert patch["machine"]["time"]["servers"] == cfg.network.ntp
 
 
 # ---------------------------------------------------------------------------

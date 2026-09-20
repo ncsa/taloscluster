@@ -996,8 +996,8 @@ def test_firewall_matches_openstack_security_group(make_config, monkeypatch):
     assert by_port[("tcp", 6443, "100.64.0.0/10")]["action"] == "ACCEPT"
     assert by_port[("tcp", 6443, "203.0.113.0/24")]["action"] == "ACCEPT"
     # Intra-cluster TCP and UDP
-    assert by_port[("tcp", None, cfg.cidr)]["action"] == "ACCEPT"
-    assert by_port[("udp", None, cfg.cidr)]["action"] == "ACCEPT"
+    assert by_port[("tcp", None, cfg.network.cluster.cidr)]["action"] == "ACCEPT"
+    assert by_port[("udp", None, cfg.network.cluster.cidr)]["action"] == "ACCEPT"
 
     # all rules are ingress
     assert all(r["type"] == "in" for r in rules)

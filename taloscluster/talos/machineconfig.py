@@ -68,14 +68,14 @@ def _machine_patch(m: Machine, cfg: Config, endpoint: Endpoint, installer_image:
             "kubelet": {
                 "extraArgs": {"rotate-server-certificates": True},
                 # pin node ip to the private net so pod traffic never rides tailscale
-                "nodeIP": {"validSubnets": [cfg.cidr]},
+                "nodeIP": {"validSubnets": [cfg.network.cluster.cidr]},
             },
             "install": {
                 "disk": install_disk,
                 "image": installer_image,
                 "wipe": True,
             },
-            "time": {"servers": cfg.ntp},
+            "time": {"servers": cfg.network.ntp},
         }
     }
 
@@ -98,7 +98,7 @@ def _cluster_patch(cfg: Config, endpoint: Endpoint) -> dict:
             "extraManifests": EXTRA_MANIFESTS,
             "apiServer": {"certSANs": [endpoint.advertised_address]},
             # keep etcd peering on the private network, off tailscale
-            "etcd": {"advertisedSubnets": [cfg.cidr]},
+            "etcd": {"advertisedSubnets": [cfg.network.cluster.cidr]},
         }
     }
 
@@ -131,8 +131,8 @@ def _firewall_docs(cfg: Config) -> list[dict]:
     """
     docs: list[dict] = [
         {"apiVersion": "v1alpha1", "kind": "NetworkDefaultActionConfig", "ingress": "block"},
-        _network_rule("cluster-tcp", "tcp", ["1-65535"], [cfg.cidr]),
-        _network_rule("cluster-udp", "udp", ["1-65535"], [cfg.cidr]),
+        _network_rule("cluster-tcp", "tcp", ["1-65535"], [cfg.network.cluster.cidr]),
+        _network_rule("cluster-udp", "udp", ["1-65535"], [cfg.network.cluster.cidr]),
         _network_rule("dhcp-client", "udp", [DHCP_CLIENT_PORT], ["0.0.0.0/0"]),
     ]
     if cfg.tailscale_enabled:
