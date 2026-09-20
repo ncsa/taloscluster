@@ -1530,3 +1530,27 @@ def test_old_network_key_is_rejected_with_its_new_location(make_config, section,
         where = f"proxmox.network.{section}"
     with pytest.raises(ConfigError, match=f"{where}.{key} has moved to {moved_to}"):
         make_config(overrides, remove=("openstack",))
+
+
+@pytest.mark.parametrize(
+    ("block", "message"),
+    [
+        (
+            {"external": {
+                "cidr": "203.0.113.0/24",
+                "gateway": "203.0.113.1",
+                "anchor_cidr": "169.254.40.0/24",
+            }},
+            "network.external is not valid with openstack",
+        ),
+        (
+            {"cluster": {"kubeapi_vip": "192.168.0.10"}},
+            "network.cluster.kubeapi_vip is not valid with openstack",
+        ),
+        ({"cluster": {"vlan": 100}}, "network.cluster.vlan is not valid with openstack"),
+    ],
+)
+def test_proxmox_only_network_keys_are_rejected_on_openstack(make_config, block, message):
+    """OpenStack builds its own external network, VIP and ingress at converge."""
+    with pytest.raises(ConfigError, match=message):
+        make_config({"network": block})

@@ -1107,6 +1107,25 @@ def _validate(cfg: Config) -> None:
     for field_name, value in provider_fields:
         if not isinstance(value, str) or not value.strip():
             raise ConfigError(f"cluster.yaml: {field_name} must be a non-empty string")
+    if isinstance(cfg.provider, OpenStackConfig):
+        # OpenStack builds its own external connectivity at converge, so the
+        # keys that describe one by hand would be silently ignored here
+        if cfg.network.external is not None:
+            raise ConfigError(
+                "cluster.yaml: network.external is not valid with openstack: OpenStack "
+                "allocates the external network itself from openstack.external_net "
+                "(a router, and floating IPs for the API and ingress ports)"
+            )
+        if cfg.network.cluster.kubeapi_vip:
+            raise ConfigError(
+                "cluster.yaml: network.cluster.kubeapi_vip is not valid with openstack: "
+                "converge reserves the API address as a port on the tenant network"
+            )
+        if cfg.network.cluster.vlan is not None:
+            raise ConfigError(
+                "cluster.yaml: network.cluster.vlan is not valid with openstack: the VLAN "
+                "tag is the Proxmox VM NIC setting; the tenant network carries no tag"
+            )
     if isinstance(cfg.provider, ProxmoxConfig):
         provider = cfg.provider
         for field_name, value in (
