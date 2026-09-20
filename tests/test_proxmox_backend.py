@@ -862,6 +862,125 @@ def test_current_network_metallb_empty_without_external_network(make_config):
     assert refs.metallb == ()
 
 
+# ---------------------------------------------------------------------------
+# MTU: bridge inheritance on the VM NIC + low-bridge warning
+# ---------------------------------------------------------------------------
+
+def _jumbo_cfg(make_config):
+    return make_config(
+        {
+            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10", "mtu": 9000}},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "nodes": ["pve001", "pve002"],
+                "network": {"cluster": {"bridge": "vmbr0"}},
+            },
+        },
+        remove=("openstack",),
+    )
+
+
+def _create_first_vm(cfg, data, monkeypatch):
+    data["cluster/nextid"] = 801
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+    monkeypatch.setattr(cidata, "build", lambda _src, dst, _h, _c: dst.write_text(""))
+    monkeypatch.setattr(ProxmoxBackend, "_upload_iso", lambda _self, _n, _s, _p: None)
+
+    backend.reconcile_machines(
+        cfg.machines, inventory, "isos:iso/talos.iso",
+        {name: "config" for name in cfg.machines},
+    )
+    return next(
+        payload for method, path, payload in client.mutations
+        if method == "POST" and path.endswith("/qemu")
+    )
+
+
+def test_vm_create_states_mtu1_on_a_jumbo_cluster(make_config, monkeypatch):
+    """Proxmox mtu=1 makes the NIC inherit the bridge MTU, so the guest sees
+    the jumbo L2 the machine configuration states."""
+    payload = _create_first_vm(_jumbo_cfg(make_config), _data(), monkeypatch)
+
+    assert payload["net0"].endswith(",mtu=1")
+
+
+def test_vm_create_omits_mtu_at_the_default(proxmox_cfg, monkeypatch):
+    payload = _create_first_vm(proxmox_cfg, _data(), monkeypatch)
+
+    assert "mtu" not in payload["net0"]
+
+
+def test_plan_warns_when_a_bridge_is_below_the_cluster_mtu(make_config, capsys):
+    """An interface without an explicit MTU reads as the Proxmox 1500 default,
+    so a bridge left unconfigured warns on every target node."""
+    cfg = _jumbo_cfg(make_config)
+    data = _data()
+    data["nodes/pve001/network"] = [{"iface": "vmbr0", "type": "bridge", "mtu": "1500"}]
+    data["nodes/pve002/network"] = [{"iface": "vmbr0", "type": "bridge"}]
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+    set_dry_run(True)
+
+    backend.reconcile_network(cfg.machines, inventory)
+
+    err = capsys.readouterr().err
+    assert "bridge vmbr0 MTU is below the cluster MTU 9000" in err
+    assert "pve001 (1500)" in err
+    assert "pve002 (1500)" in err
+    assert all(method == "GET" for method, _path in client.calls)
+
+
+def test_bridge_mtu_warning_names_only_the_low_nodes(make_config, capsys):
+    cfg = _jumbo_cfg(make_config)
+    data = _data()
+    data["nodes/pve001/network"] = [{"iface": "vmbr0", "type": "bridge", "mtu": 4000}]
+    data["nodes/pve002/network"] = [{"iface": "vmbr0", "type": "bridge", "mtu": 9000}]
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(cfg.machines, inventory)
+
+    err = capsys.readouterr().err
+    assert "pve001 (4000)" in err
+    assert "pve002" not in err
+
+
+def test_no_bridge_mtu_warning_when_the_bridge_carries_the_cluster_mtu(
+    make_config, capsys
+):
+    cfg = _jumbo_cfg(make_config)
+    data = _data()
+    data["nodes/pve001/network"] = [{"iface": "vmbr0", "type": "bridge", "mtu": 9000}]
+    data["nodes/pve002/network"] = [{"iface": "vmbr0", "type": "bridge", "mtu": 9000}]
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(cfg.machines, inventory)
+
+    assert capsys.readouterr().err == ""
+
+
+def test_no_bridge_mtu_warning_at_the_default_mtu(proxmox_cfg, capsys):
+    """A 1500 cluster on a default (unset-MTU) bridge is consistent, so no
+    warning fires."""
+    client = FakeClient(_data())
+    backend = _backend(proxmox_cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(proxmox_cfg.machines, inventory)
+
+    assert capsys.readouterr().err == ""
+
+
 def test_provider_status_includes_ingress_pool(make_config):
     cfg = _external_cfg(make_config)
     client = FakeClient(_data())

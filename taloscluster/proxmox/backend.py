@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 from .. import naming
 from ..config import (
+    DEFAULT_MTU,
     Config,
     Machine,
     ProxmoxConfig,
@@ -31,6 +32,7 @@ from ..infrastructure import (
     NetworkAttachment,
     NetworkResult,
     TalosContribution,
+    stated_mtu,
 )
 from ..output import action, dry_run, info, warn
 from ..talos import factory
@@ -335,6 +337,8 @@ class ProxmoxBackend:
             self._require_preflight()
             self._check_static_addresses(machines, inventory)
             self._reconcile_sdn()
+        else:
+            self._check_bridge_mtu()
         return self.current_network(inventory)
 
     def current_network(self, inventory: InfrastructureInventory) -> NetworkResult:
@@ -364,6 +368,46 @@ class ProxmoxBackend:
             metallb=(ingress_pool,) if ingress_pool else (),
             machine_attachments=attachments,
         )
+
+    def _check_bridge_mtu(self) -> None:
+        """Warn when a target node's cluster bridge cannot carry the cluster MTU.
+
+        A VM NIC inherits the MTU of the bridge it attaches to (the NIC is
+        created with Proxmox `mtu=1`), so the bridge, not the machine
+        configuration, caps the guest link. The node network listing is the
+        persisted config the API offers: an interface without an explicit
+        `mtu` runs at the Proxmox default of 1500.
+        """
+        wanted = self.cfg.network.cluster.mtu
+        low: list[str] = []
+        for node in self._compute_nodes:
+            interfaces = self.client.get(
+                f"nodes/{node}/network", params={"type": "any_bridge"}
+            )
+            listing = interfaces if isinstance(interfaces, list) else []
+            bridge = next(
+                (
+                    item
+                    for item in listing
+                    if isinstance(item, dict)
+                    and str(item.get("iface")) == self.cluster_link
+                ),
+                None,
+            )
+            if bridge is None:
+                continue
+            try:
+                mtu = int(bridge.get("mtu") or DEFAULT_MTU)
+            except (TypeError, ValueError):
+                continue
+            if mtu < wanted:
+                low.append(f"{node} ({mtu})")
+        if low:
+            warn(
+                f"bridge {self.cluster_link} MTU is below the cluster MTU "
+                f"{wanted} on: {', '.join(low)}; VM NICs inherit the bridge "
+                "MTU, so raise it on those nodes"
+            )
 
     # ---- managed SDN (EVPN zone + VNet + subnet) ----------------------------
 
@@ -1315,6 +1359,10 @@ class ProxmoxBackend:
             )
             if self.cfg.network.cluster.vlan is not None:
                 net0 += f",tag={self.cfg.network.cluster.vlan}"
+            # Proxmox `mtu=1` makes the NIC inherit the bridge's MTU, so a
+            # jumbo cluster L2 reaches the guest whatever the bridge carries.
+            if stated_mtu(self.cfg.network.cluster.mtu) is not None:
+                net0 += ",mtu=1"
             data: dict[str, Any] = {
                 "vmid": vmid,
                 "name": machine.name,

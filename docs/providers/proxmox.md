@@ -32,7 +32,7 @@ network:
   ntp: [ntp.example.edu]
 ```
 
-Use `vnet:` instead of `bridge:` for an existing VNet. A pool may set `node:` to pin all of its machines; otherwise placement spreads creates across the configured online nodes while reserving memory for earlier choices in the same run. `cidata_storage` must be node-local because cidata temporarily contains the Talos machine configuration and provider/extension secrets.
+Use `vnet:` instead of `bridge:` for an existing VNet. A pool may set `node:` to pin all of its machines; otherwise placement spreads creates across the configured online nodes while reserving memory for earlier choices in the same run. The bridge's MTU is the VM NIC's: NICs are created with Proxmox's `mtu=1` inherit setting when [`network.cluster.mtu`](../configuration/network.md#networkclustermtu) is above 1500, so raise the bridge MTU on every node yourself — `plan` warns when a node's bridge reads below the configured value. `cidata_storage` must be node-local because cidata temporarily contains the Talos machine configuration and provider/extension secrets.
 
 Set `proxmox.url` to the Proxmox server origin; taloscluster adds `/api2/json` internally. Existing configurations that include the API path remain supported.
 
