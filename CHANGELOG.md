@@ -8,7 +8,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Add `network.cluster` and `network.external` blocks describing the node and external L2 networks, with optional `mtu`.
 - Bound every `kubectl` call with a request timeout so a hung kube-api fails converge.
 - Report a machine missing from both Talos discovery and Kubernetes as an incomplete `check`.
 - Exit nonzero from `check` when version data is incomplete, with `incomplete` and `incomplete_reasons` in the report.
@@ -32,7 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Scaffold and document the network in `network.cluster` / `network.external`; `taloscluster init` writes the new shape.
+- **Breaking:** the network settings, including a new `mtu`, move into `network.cluster` and `network.external`; the old `network.cidr` and `proxmox.network` address keys are refused with their new location.
 - Delete the legacy `talos-<version>-tailscale` image on `image remove`, refusing while a managed VM still boots it, and converge detaches the boot ISO cdrom once a node boots from disk.
 - Name the timed-out kubectl command in timeout errors and allow manifest apply, diff and delete more time than a probe.
 - Apply machine configs to control planes one at a time, waiting for each restart to finish.

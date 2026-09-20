@@ -65,3 +65,21 @@ On OpenStack, these are the subnet's DHCP nameservers; converge reconciles them 
 Required · list of hostnames or addresses
 
 NTP servers configured on every node.
+
+## Moving from the old keys
+
+The L2 settings used to live partly under `network.cidr` and partly under `proxmox.network`. They are now all in `network.cluster` / `network.external`, and the old locations are refused at load with the name of their new home, so an old `cluster.yaml` fails fast instead of converging against half a configuration:
+
+| Old key | New key |
+| --- | --- |
+| `network.cidr` | `network.cluster.cidr` |
+| `proxmox.network.cluster.vlan` | `network.cluster.vlan` |
+| `proxmox.network.cluster.kubeapi_vip` | `network.cluster.kubeapi_vip` |
+| `proxmox.network.external.cidr` | `network.external.cidr` |
+| `proxmox.network.external.gateway` | `network.external.gateway` |
+| `proxmox.network.external.anchor_cidr` | `network.external.anchor_cidr` |
+| `proxmox.network.external.kubeapi_vip` | `network.external.kubeapi_vip` |
+| `proxmox.network.external.vlan` | `network.external.vlan` |
+| `proxmox.network.external.ingress_pool` | `network.external.ingress_pool` |
+
+`proxmox.network.cluster` keeps only `bridge`, `vnet` or `sdn`, and `proxmox.network.external` only `bridge`: the Proxmox section says which link the network is reached through, the `network` section says what is on it. Moving the keys changes no addresses, so a cluster converged from the old shape stays as it is.

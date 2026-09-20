@@ -445,14 +445,15 @@ def test_proxmox_provider_section_is_typed(make_config):
 
 
 @pytest.mark.parametrize(
-    ("proxmox", "message"),
+    ("proxmox", "network", "message"),
     [
         (
             {
                 "url": "https://pve.example",
                 "iso_storage": "isos",
-                "network": {"cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}},
+                "network": {"cluster": {"bridge": "vmbr0"}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox.storage",
         ),
         (
@@ -462,6 +463,7 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "iso_storage": "isos",
                 "network": {"cluster": {"bridge": "vmbr0", "vnet": "talos"}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "exactly one of bridge, vnet, or sdn",
         ),
         (
@@ -469,19 +471,19 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "url": "https://pve.example",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {"cluster": {"bridge": "vmbr0", "kubeapi_vip": "203.0.113.10"}},
+                "network": {"cluster": {"bridge": "vmbr0"}},
             },
-            "inside network.cidr",
+            {"cluster": {"kubeapi_vip": "203.0.113.10"}},
+            "inside network.cluster.cidr",
         ),
         (
             {
                 "url": "https://pve.example",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {
-                    "cluster": {"bridge": "vmbr0", "sdn": {}, "kubeapi_vip": "192.168.0.9"}
-                },
+                "network": {"cluster": {"bridge": "vmbr0", "sdn": {}}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "mutually exclusive",
         ),
         (
@@ -489,10 +491,9 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "url": "https://pve.example",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {
-                    "cluster": {"sdn": {"zone": "vlan"}, "kubeapi_vip": "192.168.0.9"}
-                },
+                "network": {"cluster": {"sdn": {"zone": "vlan"}}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "only supports 'evpn'",
         ),
         (
@@ -500,10 +501,9 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "url": "https://pve.example",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {
-                    "cluster": {"sdn": {"vrf_tag": 16777215}, "kubeapi_vip": "192.168.0.9"}
-                },
+                "network": {"cluster": {"sdn": {"vrf_tag": 16777215}}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "set an explicit tag",
         ),
         (
@@ -511,13 +511,9 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "url": "https://pve.example",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {
-                    "cluster": {
-                        "sdn": {"nodes": ["pve001"], "exit_nodes": ["pve002"]},
-                        "kubeapi_vip": "192.168.0.9",
-                    }
-                },
+                "network": {"cluster": {"sdn": {"nodes": ["pve001"], "exit_nodes": ["pve002"]}}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "exit_nodes must be members",
         ),
         (
@@ -526,13 +522,9 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "storage": "vms",
                 "iso_storage": "isos",
                 "nodes": ["pve001", "pve003"],
-                "network": {
-                    "cluster": {
-                        "sdn": {"nodes": ["pve001", "pve002"]},
-                        "kubeapi_vip": "192.168.0.9",
-                    }
-                },
+                "network": {"cluster": {"sdn": {"nodes": ["pve001", "pve002"]}}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "must include every proxmox.nodes",
         ),
         (
@@ -540,8 +532,9 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "url": "https://pve.example",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.1"}},
+                "network": {"cluster": {"sdn": {}}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.1"}},
             "collides with the SDN anycast gateway",
         ),
         (
@@ -549,8 +542,9 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "url": "https://pve.example",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.11"}},
+                "network": {"cluster": {"sdn": {}}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.11"}},
             "collides with the static address",
         ),
         (
@@ -559,8 +553,9 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "url": "https://pve.example",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.12"}},
+                "network": {"cluster": {"sdn": {}}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.12"}},
             "sits inside the SDN static address layout",
         ),
         (
@@ -568,13 +563,9 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "url": "https://pve.example",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {
-                    "cluster": {
-                        "sdn": {"vrf_tag": 100, "tag": 100},
-                        "kubeapi_vip": "192.168.0.9",
-                    }
-                },
+                "network": {"cluster": {"sdn": {"vrf_tag": 100, "tag": 100}}},
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "tag must differ from vrf_tag",
         ),
         (
@@ -588,20 +579,21 @@ def test_proxmox_provider_section_is_typed(make_config):
                             "exit_nodes": ["pve001", "pve002"],
                             "primary_exit_node": "pve003",
                         },
-                        "kubeapi_vip": "192.168.0.9",
-                    }
+                    },
                 },
             },
+            {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "primary_exit_node must be one of the exit nodes",
         ),
     ],
 )
-def test_proxmox_compute_configuration_is_validated(make_config, proxmox, message):
+def test_proxmox_compute_configuration_is_validated(make_config, proxmox, network, message):
     with pytest.raises(ConfigError, match=message):
         make_config(
             {
                 "name": "testc",  # sdn cases need a name that fits the SDN id format
                 "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+                "network": network,
                 "proxmox": proxmox,
             },
             remove=("openstack",),
@@ -624,29 +616,6 @@ def test_proxmox_sdn_rejects_cluster_name_unfit_for_sdn_ids(make_config):
             },
             remove=("openstack",),
         )
-
-
-def _legacy_proxmox_external_overrides() -> dict:
-    """The same cluster with every L2 fact still in its old key location."""
-    return {
-        "network": {"cidr": "192.168.0.0/21"},
-        "proxmox": {
-            "url": "https://pve.example:8006",
-            "storage": "vms",
-            "iso_storage": "isos",
-            "network": {
-                "cluster": {"bridge": "vmbr0"},
-                "external": {
-                    "bridge": "vmbr1",
-                    "cidr": "203.0.113.0/24",
-                    "gateway": "203.0.113.1",
-                    "anchor_cidr": "169.254.40.0/24",
-                    "kubeapi_vip": "203.0.113.10",
-                    "ingress_pool": "203.0.113.20-203.0.113.40",
-                },
-            },
-        },
-    }
 
 
 def _proxmox_external_overrides() -> dict:
@@ -1220,28 +1189,33 @@ def test_typo_region_no_longer_silently_selects_regionone(make_config):
          r"proxmox.network: unknown key\(s\): clustr"),
         ({"network": {"cluster": {"bridge": "vmbr0", "vlna": 321}}},
          r"proxmox.network.cluster: unknown key\(s\): vlna"),
-        ({"network": {"cluster": {"bridge": "vmbr0"}, "external": {
-            "bridge": "vmbr1", "cidr": "203.0.113.0/24", "gateway": "203.0.113.1",
-            "anchor_cidr": "169.254.40.0/24", "kubeapi_vip": "203.0.113.10",
-            "ingress_pool": "203.0.113.20-203.0.113.40"}}},
-         None),  # valid external, no error
-        ({"network": {"cluster": {"bridge": "vmbr0"}, "external": {
-            "bridge": "vmbr1", "cidr": "203.0.113.0/24", "gatway": "203.0.113.1",
-            "anchor_cidr": "169.254.40.0/24", "kubeapi_vip": "203.0.113.10",
-            "ingress_pool": "203.0.113.20-203.0.113.40"}}},
-         r"proxmox.network.external: unknown key\(s\): gatway"),
-        ({"network": {"cluster": {"sdn": {"muta": 8950}, "kubeapi_vip": "192.168.0.9"}}},
+        ({"network": {"cluster": {"bridge": "vmbr0"}, "external": {"bridge": "vmbr1"}}},
+         None),  # valid plumbing, no error
+        ({"network": {"cluster": {"bridge": "vmbr0"},
+                      "external": {"bridge": "vmbr1", "bridg": "vmbr2"}}},
+         r"proxmox.network.external: unknown key\(s\): bridg"),
+        ({"network": {"cluster": {"sdn": {"muta": 8950}}}},
          r"proxmox.network.cluster.sdn: unknown key\(s\): muta"),
-        ({"network": {"cluster": {"sdn": {"exit_ndoes": ["pve1"]},
-                                  "kubeapi_vip": "192.168.0.9"}}},
+        ({"network": {"cluster": {"sdn": {"exit_ndoes": ["pve1"]}}}},
          r"proxmox.network.cluster.sdn: unknown key\(s\): exit_ndoes"),
     ],
 )
 def test_proxmox_network_nested_key_is_rejected(make_config, overrides, field):
     """A miscapped or unsupported key inside a `proxmox.network` block is refused
     instead of loading and being silently ignored."""
+    external = "external" in overrides["network"]
     cfg_overrides = {
+        "name": "testc",  # the sdn cases need a name that fits the SDN id format
         "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+        "network": {
+            "cluster": {"kubeapi_vip": "192.168.0.9"},
+            **({"external": {
+                "cidr": "203.0.113.0/24",
+                "gateway": "203.0.113.1",
+                "anchor_cidr": "169.254.40.0/24",
+                "ingress_pool": "203.0.113.20-203.0.113.40",
+            }} if external else {}),
+        },
         "proxmox": {
             "url": "https://pve.example",
             "storage": "vms",
@@ -1251,7 +1225,7 @@ def test_proxmox_network_nested_key_is_rejected(make_config, overrides, field):
     }
     if field is None:
         cfg = make_config(cfg_overrides, remove=("openstack",))
-        assert cfg.network.external.kubeapi_vip == "203.0.113.10"
+        assert cfg.network.external.ingress_pool == "203.0.113.20-203.0.113.40"
     else:
         with pytest.raises(ConfigError, match=field):
             make_config(cfg_overrides, remove=("openstack",))
@@ -1362,43 +1336,8 @@ def test_network_block_mtu_defaults_to_1500(make_config):
     assert cfg.network.external is None
 
 
-def test_old_keys_still_populate_the_network_blocks(make_config):
-    cfg = make_config(
-        {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
-         **_legacy_proxmox_external_overrides()},
-        remove=("openstack",),
-    )
-
-    assert cfg.network.cluster.cidr == "192.168.0.0/21"
-    assert cfg.network.external is not None
-    assert cfg.network.external.gateway == "203.0.113.1"
-    assert cfg.network.external.kubeapi_vip == "203.0.113.10"
-    assert cfg.network.external.mtu == 1500
-
-
-def test_old_and_new_cidr_may_agree(make_config):
-    cfg = make_config({"network": {"cidr": "192.168.0.0/21"}})
-
-    assert cfg.network.cluster.cidr == "192.168.0.0/21"
-
-
-def test_conflicting_old_and_new_cidr_is_rejected(make_config):
-    with pytest.raises(ConfigError, match="conflicts with network.cidr"):
-        make_config({"network": {"cidr": "10.0.0.0/24"}})
-
-
-def test_conflicting_old_and_new_external_key_is_rejected(make_config):
-    overrides = _legacy_proxmox_external_overrides()
-    overrides["network"]["external"] = {"gateway": "203.0.113.2"}
-    with pytest.raises(ConfigError, match="conflicts with proxmox.network.external.gateway"):
-        make_config(
-            {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40}, **overrides},
-            remove=("openstack",),
-        )
-
-
 def test_missing_cluster_cidr_is_rejected(make_config):
-    with pytest.raises(ConfigError, match="network.cidr"):
+    with pytest.raises(ConfigError, match="network.cluster.cidr must be an IPv4 CIDR"):
         make_config(remove=("network.cluster.cidr",))
 
 
@@ -1463,16 +1402,6 @@ def test_kubeapi_vip_in_both_new_blocks_is_rejected(make_config):
         make_config(overrides, remove=("openstack",))
 
 
-def test_kubeapi_vip_in_new_cluster_and_old_external_is_rejected(make_config):
-    overrides = _legacy_proxmox_external_overrides()
-    overrides["network"]["cluster"] = {"kubeapi_vip": "192.168.0.10"}
-    with pytest.raises(ConfigError, match="only one of network.cluster or network.external"):
-        make_config(
-            {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40}, **overrides},
-            remove=("openstack",),
-        )
-
-
 def test_kubeapi_vip_in_the_new_cluster_block_satisfies_proxmox(make_config):
     overrides = _proxmox_new_network()
     overrides["network"]["cluster"]["kubeapi_vip"] = "192.168.0.10"
@@ -1485,9 +1414,9 @@ def test_kubeapi_vip_in_the_new_cluster_block_satisfies_proxmox(make_config):
     assert cfg.network.external is None
 
 
-def test_bridge_only_external_section_is_rejected(make_config):
-    """An external section that names only a bridge is still incomplete."""
-    with pytest.raises(ConfigError, match="network.external.cidr must be an IPv4 CIDR"):
+def test_proxmox_external_bridge_without_a_network_block_is_rejected(make_config):
+    """The bridge alone does not describe the externally routed subnet."""
+    with pytest.raises(ConfigError, match="needs a network.external block"):
         make_config(
             {
                 "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
@@ -1534,20 +1463,8 @@ def test_external_cidr_overlapping_the_cluster_cidr_is_rejected(make_config):
         {"cidr": "192.168.0.0/24", "gateway": "192.168.0.1", "kubeapi_vip": "192.168.0.10"}
     )
     del overrides["network"]["external"]["ingress_pool"]
-    with pytest.raises(ConfigError, match="must not overlap network.cidr"):
+    with pytest.raises(ConfigError, match="must not overlap network.cluster.cidr"):
         make_config(overrides, remove=("openstack",))
-
-
-def test_new_vip_inside_an_old_ingress_pool_is_rejected(make_config):
-    """The pair is checked whichever location supplied the VIP and the pool."""
-    overrides = _legacy_proxmox_external_overrides()
-    del overrides["proxmox"]["network"]["external"]["kubeapi_vip"]
-    overrides["network"]["external"] = {"kubeapi_vip": "203.0.113.30"}
-    with pytest.raises(ConfigError, match="must not be inside ingress_pool"):
-        make_config(
-            {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40}, **overrides},
-            remove=("openstack",),
-        )
 
 
 def test_new_vlan_is_rejected_together_with_proxmox_sdn(make_config):
@@ -1567,27 +1484,6 @@ def test_new_vlan_is_rejected_together_with_proxmox_sdn(make_config):
         )
 
 
-def test_the_same_fact_written_differently_is_not_a_conflict(make_config):
-    """`vlan: 21` and `vlan: "21"` are one value, not two conflicting ones."""
-    cfg = make_config(
-        {
-            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
-            "network": {"cluster": {"vlan": "21"}},
-            "proxmox": {
-                "url": "https://pve.example:8006",
-                "storage": "vms",
-                "iso_storage": "isos",
-                # the same fact in its old location, written as an integer
-                "network": {"cluster": {"bridge": "vmbr0", "vlan": 21,
-                                        "kubeapi_vip": "192.168.0.10"}},
-            },
-        },
-        remove=("openstack",),
-    )
-
-    assert cfg.network.cluster.vlan == 21
-
-
 def test_explicitly_null_l2_keys_are_treated_as_absent(make_config):
     cfg = make_config({"network": {"cluster": {"vlan": None, "mtu": None}}})
 
@@ -1599,3 +1495,38 @@ def test_explicitly_null_l2_keys_are_treated_as_absent(make_config):
 def test_network_facts_are_only_reachable_through_the_network_blocks(make_config, attribute):
     """The network settings read the way the config does, with no forwarders."""
     assert not hasattr(make_config(), attribute)
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "moved_to"),
+    [
+        ("network", "cidr", "network.cluster.cidr"),
+        ("cluster", "vlan", "network.cluster.vlan"),
+        ("cluster", "kubeapi_vip", "network.cluster.kubeapi_vip"),
+        ("external", "cidr", "network.external.cidr"),
+        ("external", "gateway", "network.external.gateway"),
+        ("external", "anchor_cidr", "network.external.anchor_cidr"),
+        ("external", "kubeapi_vip", "network.external.kubeapi_vip"),
+        ("external", "vlan", "network.external.vlan"),
+        ("external", "ingress_pool", "network.external.ingress_pool"),
+    ],
+)
+def test_old_network_key_is_rejected_with_its_new_location(make_config, section, key, moved_to):
+    """Every key that moved names its new home instead of failing obscurely."""
+    values = {
+        "cidr": "203.0.113.0/24",
+        "gateway": "203.0.113.1",
+        "anchor_cidr": "169.254.40.0/24",
+        "kubeapi_vip": "203.0.113.10",
+        "vlan": 100,
+        "ingress_pool": "203.0.113.20-203.0.113.40",
+    }
+    overrides = _proxmox_new_network()
+    if section == "network":
+        overrides["network"][key] = values[key]
+        where = "network"
+    else:
+        overrides["proxmox"]["network"][section][key] = values[key]
+        where = f"proxmox.network.{section}"
+    with pytest.raises(ConfigError, match=f"{where}.{key} has moved to {moved_to}"):
+        make_config(overrides, remove=("openstack",))

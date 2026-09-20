@@ -41,7 +41,7 @@ _SECRETS_KEYS = {"tailscale", "openstack", "proxmox"}
 # enumerated here: `tags`/pool `tags` and security host labels are label maps,
 # and `config_patches` hold freeform YAML documents.
 _TALOS_KEYS = {"version", "extensions", "config_patches"}
-_NETWORK_KEYS = {"cidr", "dns", "ntp", "cluster", "external"}
+_NETWORK_KEYS = {"dns", "ntp", "cluster", "external"}
 #: Direct keys an L2 block (`network.cluster`, `network.external`) accepts.
 _L2_KEYS = {"cidr", "gateway", "vlan", "mtu", "kubeapi_vip"}
 #: L2 keys that only describe the externally routed network, never the node L2.
@@ -57,14 +57,29 @@ _PROVIDER_KEYS = {
 #: a miscapped `clustr`/`extrnl` section is refused instead of ignored.
 _PROXMOX_NETWORK_KEYS = {"cluster", "external"}
 #: Direct keys `proxmox.network.cluster` accepts; exactly one of `bridge`,
-#: `vnet` or `sdn` is required (see :func:`_validate`).
-_PROXMOX_CLUSTER_KEYS = {"bridge", "vnet", "vlan", "kubeapi_vip", "sdn"}
+#: `vnet` or `sdn` is required (see :func:`_validate`). The addresses on that
+#: network live in `network.cluster`.
+_PROXMOX_CLUSTER_KEYS = {"bridge", "vnet", "sdn"}
 #: Direct keys `proxmox.network.cluster.sdn` accepts.
 _PROXMOX_SDN_KEYS = {"name", "zone", "controller", "asn", "vrf_tag", "tag",
                      "mtu", "nodes", "exit_nodes", "primary_exit_node"}
-#: Direct keys `proxmox.network.external` accepts.
-_PROXMOX_EXTERNAL_KEYS = {"bridge", "cidr", "gateway", "anchor_cidr",
-                          "kubeapi_vip", "vlan", "ingress_pool"}
+#: Direct keys `proxmox.network.external` accepts; the addresses on that
+#: network live in `network.external`.
+_PROXMOX_EXTERNAL_KEYS = {"bridge"}
+#: Keys that moved into the `network` blocks, by the section they used to live
+#: in, so an old cluster.yaml is refused with the new location rather than a
+#: bare "unknown key".
+_MOVED_KEYS: dict[tuple[str, ...], dict[str, str]] = {
+    ("network",): {"cidr": "network.cluster.cidr"},
+    ("proxmox", "network", "cluster"): {
+        key: f"network.cluster.{key}" for key in ("vlan", "kubeapi_vip")
+    },
+    ("proxmox", "network", "external"): {
+        key: f"network.external.{key}"
+        for key in ("cidr", "gateway", "anchor_cidr", "kubeapi_vip", "vlan",
+                    "ingress_pool")
+    },
+}
 #: Keys a pool may carry; `tags` is a freeform label map and both `extensions` /
 #: `config_patches` are freeform lists, so only the structural keys are fixed.
 _POOL_KEYS = {"count", "flavor", "disk", "cores", "memory", "node",
@@ -657,131 +672,85 @@ def _ip_range(value: Any, where: str) -> tuple[ipaddress.IPv4Address, ipaddress.
     return start, end
 
 
-def _parse_ipv4_network(value: Any) -> ipaddress.IPv4Network | None:
-    """The network `value` describes, or None when it is not one (unreported)."""
-    try:
-        net = ipaddress.ip_network(value, strict=False)
-    except (TypeError, ValueError):
-        return None
-    return net if isinstance(net, ipaddress.IPv4Network) else None
+def _validate_l2(block: dict[str, Any], where: str, *, external: bool) -> None:
+    """Validate one `network.cluster` / `network.external` block.
 
-
-def _parse_ipv4_address(value: Any) -> ipaddress.IPv4Address | None:
-    """The address `value` describes, or None when it is not one (unreported)."""
-    try:
-        addr = ipaddress.ip_address(value.strip() if isinstance(value, str) else value)
-    except (TypeError, ValueError, AttributeError):
-        return None
-    return addr if isinstance(addr, ipaddress.IPv4Address) else None
-
-
-def _parse_ip_range(value: Any) -> tuple[ipaddress.IPv4Address, ipaddress.IPv4Address] | None:
-    """The `start-end` range `value` describes, or None (unreported)."""
-    if not isinstance(value, str) or value.count("-") != 1:
-        return None
-    start = _parse_ipv4_address(value.split("-")[0])
-    end = _parse_ipv4_address(value.split("-")[1])
-    if start is None or end is None or start > end:
-        return None
-    return start, end
-
-
-def _validate_l2(
-    new: dict[str, Any], merged: dict[str, Any], where: str, *, external: bool
-) -> None:
-    """Validate the fields a `network.cluster`/`network.external` block sets.
-
-    Only the keys given in the new block are checked; the same fact taken from
-    an old location keeps being reported by the provider validators. The
-    ingress pool and the VIP are checked against each other on the merged
-    values, so the pair is caught whichever location supplied each half.
+    An external block is only usable when it is fully described, so `cidr`,
+    `gateway` and `anchor_cidr` are required there; a cluster block needs only
+    its `cidr`.
     """
-    block: ipaddress.IPv4Network | None = None
-    if "cidr" in new:
-        block = _ipv4_network(new["cidr"], f"{where}.cidr", strict=not external)
-    elif merged.get("cidr") is not None:
-        block = _parse_ipv4_network(merged["cidr"])  # invalid: the old key reports it
-    if "gateway" in new:
-        gateway = _ipv4_address(new["gateway"], f"{where}.gateway")
-        if block is not None and gateway not in block:
+    cidr = _ipv4_network(block.get("cidr"), f"{where}.cidr", strict=not external)
+    if external or "gateway" in block:
+        gateway = _ipv4_address(block.get("gateway"), f"{where}.gateway")
+        if gateway not in cidr:
             raise ConfigError(f"cluster.yaml: {where}.gateway must be inside {where}.cidr")
-    if "vlan" in new and not 1 <= _int(new["vlan"], "vlan", f"cluster.yaml: {where}") <= 4094:
+    if "vlan" in block and not 1 <= _int(block["vlan"], "vlan", f"cluster.yaml: {where}") <= 4094:
         raise ConfigError(f"cluster.yaml: {where}.vlan must be 1-4094")
-    if "mtu" in new and _int(new["mtu"], "mtu", f"cluster.yaml: {where}") < MIN_MTU:
+    if "mtu" in block and _int(block["mtu"], "mtu", f"cluster.yaml: {where}") < MIN_MTU:
         raise ConfigError(f"cluster.yaml: {where}.mtu must be {MIN_MTU} or greater")
-    if "kubeapi_vip" in new:
-        vip = _ipv4_address(new["kubeapi_vip"], f"{where}.kubeapi_vip")
-        if block is not None and vip not in block:
+    vip: ipaddress.IPv4Address | None = None
+    if "kubeapi_vip" in block:
+        vip = _ipv4_address(block["kubeapi_vip"], f"{where}.kubeapi_vip")
+        if vip not in cidr:
             raise ConfigError(
                 f"cluster.yaml: {where}.kubeapi_vip must be inside {where}.cidr"
             )
-    if "anchor_cidr" in new:
-        anchor = _ipv4_network(new["anchor_cidr"], f"{where}.anchor_cidr", strict=False)
+    if external:
+        anchor = _ipv4_network(
+            block.get("anchor_cidr"), f"{where}.anchor_cidr", strict=False
+        )
         if not anchor.subnet_of(ipaddress.IPv4Network("169.254.0.0/16")):
             raise ConfigError(
                 f"cluster.yaml: {where}.anchor_cidr must be inside 169.254.0.0/16"
             )
-    if "ingress_pool" in new:
-        start, end = _ip_range(new["ingress_pool"], f"{where}.ingress_pool")
-        if block is not None and (start not in block or end not in block):
+    if "ingress_pool" in block:
+        start, end = _ip_range(block["ingress_pool"], f"{where}.ingress_pool")
+        if start not in cidr or end not in cidr:
             raise ConfigError(
                 f"cluster.yaml: {where}.ingress_pool must be inside {where}.cidr"
             )
-    pool = _parse_ip_range(merged.get("ingress_pool"))
-    vip_address = _parse_ipv4_address(merged.get("kubeapi_vip"))
-    if pool is not None and vip_address is not None and pool[0] <= vip_address <= pool[1]:
-        raise ConfigError(
-            f"cluster.yaml: {where}.kubeapi_vip must not be inside ingress_pool "
-            "(MetalLB could hand the API address to a service)"
-        )
-
-
-def _l2_network(
-    new: dict[str, Any],
-    old: dict[str, Any],
-    old_paths: dict[str, str],
-    where: str,
-    *,
-    external: bool,
-) -> L2Network:
-    """One L2 block, merged from the new `network.*` keys and the old locations."""
-    keys = _L2_KEYS | _L2_EXTERNAL_ONLY_KEYS if external else _L2_KEYS
-    merged: dict[str, Any] = {}
-    for key in sorted(keys):
-        fresh, legacy = new.get(key), old.get(key)
-        # compare rendered values so `vlan: 21` and `vlan: "21"` are one fact
-        if fresh is not None and legacy is not None and str(fresh) != str(legacy):
+        if vip is not None and start <= vip <= end:
             raise ConfigError(
-                f"cluster.yaml: {where}.{key} ({fresh!r}) conflicts with "
-                f"{old_paths[key]} ({legacy!r}); set it in one place"
+                f"cluster.yaml: {where}.kubeapi_vip must not be inside ingress_pool "
+                "(MetalLB could hand the API address to a service)"
             )
-        value = fresh if fresh is not None else legacy
-        if value is not None:
-            merged[key] = value
-    _validate_l2(new, merged, where, external=external)
+
+
+def _l2_network(block: dict[str, Any], where: str, *, external: bool) -> L2Network:
+    """One validated L2 block."""
+    _validate_l2(block, where, external=external)
     return L2Network(
-        cidr=str(merged.get("cidr", "")),
-        gateway=str(merged.get("gateway", "")),
-        vlan=_int(merged["vlan"], "vlan", f"cluster.yaml: {where}")
-        if merged.get("vlan") is not None
+        cidr=str(block["cidr"]),
+        gateway=str(block.get("gateway", "")),
+        vlan=_int(block["vlan"], "vlan", f"cluster.yaml: {where}")
+        if "vlan" in block
         else None,
-        mtu=_int(merged["mtu"], "mtu", f"cluster.yaml: {where}")
-        if merged.get("mtu") is not None
+        mtu=_int(block["mtu"], "mtu", f"cluster.yaml: {where}")
+        if "mtu" in block
         else DEFAULT_MTU,
-        kubeapi_vip=str(merged.get("kubeapi_vip", "")),
-        anchor_cidr=str(merged.get("anchor_cidr", "")),
-        ingress_pool=str(merged.get("ingress_pool", "")),
+        kubeapi_vip=str(block.get("kubeapi_vip", "")),
+        anchor_cidr=str(block.get("anchor_cidr", "")),
+        ingress_pool=str(block.get("ingress_pool", "")),
     )
 
 
-def _network_config(d: dict[str, Any], where: str) -> NetworkConfig:
-    """Parse `network:` into the cluster-wide settings and the two L2 blocks.
+def _reject_moved_keys(d: dict[str, Any], where: str) -> None:
+    """Refuse a key that moved into the `network` blocks, naming its new home."""
+    for path, moved in _MOVED_KEYS.items():
+        section: Any = d
+        for part in path:
+            section = section.get(part) if isinstance(section, dict) else None
+        if not isinstance(section, dict):
+            continue
+        for key in sorted(section):
+            if key in moved:
+                raise ConfigError(
+                    f"{where}: {'.'.join(path)}.{key} has moved to {moved[key]}"
+                )
 
-    The old locations of the same facts (`network.cidr` and, on Proxmox,
-    `proxmox.network.cluster.{vlan,kubeapi_vip}` and
-    `proxmox.network.external.*`) still load; a fact set in both places must
-    agree.
-    """
+
+def _network_config(d: dict[str, Any], where: str) -> NetworkConfig:
+    """Parse `network:` into the cluster-wide settings and the two L2 blocks."""
     net = _mapping(d.get("network"), f"{where}: network")
     _reject_unknown_keys(net, f"{where}: network", _NETWORK_KEYS)
 
@@ -801,74 +770,23 @@ def _network_config(d: dict[str, Any], where: str) -> NetworkConfig:
     cluster_raw = {k: v for k, v in cluster_raw.items() if v is not None}
     external_raw = {k: v for k, v in external_raw.items() if v is not None}
 
-    proxmox = d.get("proxmox") if isinstance(d.get("proxmox"), dict) else {}
-    provider_net = _mapping(proxmox.get("network"), f"{where}: proxmox.network")
-    old_cluster_raw = _mapping(
-        provider_net.get("cluster"), f"{where}: proxmox.network.cluster"
-    )
-    old_external_raw = _mapping(
-        provider_net.get("external"), f"{where}: proxmox.network.external"
-    )
-    # the same rejections `_validate` makes, up front: a misspelled old key must
-    # be reported as such, not as the fact it fails to supply
-    _reject_unknown_keys(
-        old_cluster_raw, f"{where}: proxmox.network.cluster", _PROXMOX_CLUSTER_KEYS
-    )
-    _reject_unknown_keys(
-        old_external_raw, f"{where}: proxmox.network.external", _PROXMOX_EXTERNAL_KEYS
-    )
-
-    old_cluster = {k: v for k, v in old_cluster_raw.items() if k in _L2_KEYS}
-    old_cluster_paths = {k: f"proxmox.network.cluster.{k}" for k in old_cluster}
-    if net.get("cidr") is not None:
-        old_cluster["cidr"] = net["cidr"]
-        old_cluster_paths["cidr"] = "network.cidr"
-    old_external = {
-        k: v
-        for k, v in old_external_raw.items()
-        if k in _L2_KEYS | _L2_EXTERNAL_ONLY_KEYS
-    }
-    old_external_paths = {k: f"proxmox.network.external.{k}" for k in old_external}
-
-    cluster = _l2_network(
-        cluster_raw, old_cluster, old_cluster_paths, "network.cluster", external=False
-    )
-    if not cluster.cidr:
-        raise ConfigError(f"{where}: missing 'network.cidr' (or 'network.cluster.cidr')")
-    # any external section at all -- including a bare Proxmox `bridge` -- asks
-    # for the externally routed network, which is only usable fully described
+    cluster = _l2_network(cluster_raw, "network.cluster", external=False)
     external = (
-        _l2_network(
-            external_raw, old_external, old_external_paths, "network.external",
-            external=True,
-        )
-        if external_raw or old_external_raw
+        _l2_network(external_raw, "network.external", external=True)
+        if external_raw
         else None
     )
     if external is not None:
-        for key, label in (
-            ("cidr", "an IPv4 CIDR"),
-            ("gateway", "an IPv4 address"),
-            ("anchor_cidr", "an IPv4 CIDR"),
-        ):
-            if not getattr(external, key):
-                raise ConfigError(
-                    f"{where}: network.external.{key} must be {label}"
-                )
-        external_net = _parse_ipv4_network(external.cidr)
-        cluster_net = _parse_ipv4_network(cluster.cidr)
-        if (
-            external_net is not None
-            and cluster_net is not None
-            and external_net.overlaps(cluster_net)
+        if ipaddress.ip_network(external.cidr, strict=False).overlaps(
+            ipaddress.ip_network(cluster.cidr, strict=True)
         ):
             raise ConfigError(
-                f"{where}: network.external.cidr must not overlap network.cidr"
+                f"{where}: network.external.cidr must not overlap network.cluster.cidr"
             )
-    if cluster.kubeapi_vip and external is not None and external.kubeapi_vip:
-        raise ConfigError(
-            "kubeapi_vip must be set in only one of network.cluster or network.external"
-        )
+        if cluster.kubeapi_vip and external.kubeapi_vip:
+            raise ConfigError(
+                "kubeapi_vip must be set in only one of network.cluster or network.external"
+            )
     return NetworkConfig(
         dns=_string_list(require(d, "network", "dns", where=where), f"{where}: network.dns"),
         ntp=_string_list(require(d, "network", "ntp", where=where), f"{where}: network.ntp"),
@@ -881,6 +799,7 @@ def load_config(root: Path) -> Config:
     d = read_yaml(root / CLUSTER_FILE)
     where = CLUSTER_FILE
     _reject_unknown_keys(d, where, _CLUSTER_KEYS | _plugin_config_sections())
+    _reject_moved_keys(d, where)
 
     talos = _mapping(d.get("talos"), f"{where}: talos")
     _reject_unknown_keys(talos, f"{where}: talos", _TALOS_KEYS)
@@ -998,127 +917,6 @@ def _int(value: Any, field: str, where: str) -> int:
     raise ConfigError(f"{where}: '{field}' must be an integer, got {value!r}")
 
 
-def _validate_proxmox_external(
-    ext: dict[str, Any], cluster_net: ipaddress.IPv4Network
-) -> None:
-    """Validate proxmox.network.external for directly routed API and ingress."""
-    bridge = ext.get("bridge")
-    if not isinstance(bridge, str) or not bridge.strip():
-        raise ConfigError(
-            "cluster.yaml: proxmox.network.external.bridge must be a non-empty string"
-        )
-
-    ext_cidr = ext.get("cidr")
-    if not isinstance(ext_cidr, str) or not ext_cidr.strip():
-        raise ConfigError("cluster.yaml: proxmox.network.external.cidr must be an IPv4 CIDR")
-    try:
-        ext_network = ipaddress.ip_network(ext_cidr, strict=False)
-    except (TypeError, ValueError):
-        raise ConfigError(
-            f"cluster.yaml: proxmox.network.external.cidr is invalid: {ext_cidr!r}"
-        ) from None
-    if ext_network.version != 4:
-        raise ConfigError("cluster.yaml: proxmox.network.external.cidr must be IPv4")
-    if ext_network.overlaps(cluster_net):
-        raise ConfigError(
-            "cluster.yaml: proxmox.network.external.cidr must not overlap network.cidr"
-        )
-
-    gateway = ext.get("gateway")
-    if not isinstance(gateway, str) or not gateway.strip():
-        raise ConfigError(
-            "cluster.yaml: proxmox.network.external.gateway must be an IPv4 address"
-        )
-    try:
-        gw = ipaddress.ip_address(gateway)
-    except (TypeError, ValueError):
-        raise ConfigError(
-            f"cluster.yaml: proxmox.network.external.gateway is invalid: {gateway!r}"
-        ) from None
-    if gw.version != 4 or gw not in ext_network:
-        raise ConfigError(
-            "cluster.yaml: proxmox.network.external.gateway must be inside external.cidr"
-        )
-
-    anchor_cidr = ext.get("anchor_cidr")
-    if not isinstance(anchor_cidr, str) or not anchor_cidr.strip():
-        raise ConfigError(
-            "cluster.yaml: proxmox.network.external.anchor_cidr must be an IPv4 CIDR"
-        )
-    try:
-        anchor_net = ipaddress.ip_network(anchor_cidr, strict=False)
-    except (TypeError, ValueError):
-        raise ConfigError(
-            f"cluster.yaml: proxmox.network.external.anchor_cidr is invalid: {anchor_cidr!r}"
-        ) from None
-    link_local = ipaddress.IPv4Network("169.254.0.0/16")
-    if not isinstance(anchor_net, ipaddress.IPv4Network):
-        raise ConfigError(
-            "cluster.yaml: proxmox.network.external.anchor_cidr must be IPv4"
-        )
-    if not anchor_net.subnet_of(link_local):
-        raise ConfigError(
-            "cluster.yaml: proxmox.network.external.anchor_cidr must be inside 169.254.0.0/16"
-        )
-
-    kubeapi_vip = ext.get("kubeapi_vip")
-    if kubeapi_vip is not None:
-        if not isinstance(kubeapi_vip, str) or not kubeapi_vip.strip():
-            raise ConfigError(
-                "cluster.yaml: proxmox.network.external.kubeapi_vip must be an IPv4 address"
-            )
-        try:
-            vip = ipaddress.ip_address(kubeapi_vip)
-        except (TypeError, ValueError):
-            raise ConfigError(
-                f"cluster.yaml: proxmox.network.external.kubeapi_vip is invalid: {kubeapi_vip!r}"
-            ) from None
-        if vip.version != 4 or vip not in ext_network:
-            raise ConfigError(
-                "cluster.yaml: proxmox.network.external.kubeapi_vip must be inside external.cidr"
-            )
-
-    vlan = ext.get("vlan")
-    if vlan is not None and not 1 <= _int(vlan, "vlan", "proxmox.network.external") <= 4094:
-        raise ConfigError("cluster.yaml: proxmox.network.external.vlan must be 1-4094")
-
-    ingress_pool = ext.get("ingress_pool")
-    if ingress_pool is not None:
-        if not isinstance(ingress_pool, str) or not ingress_pool.strip():
-            raise ConfigError(
-                "cluster.yaml: proxmox.network.external.ingress_pool must be a string"
-            )
-        parts = ingress_pool.split("-")
-        if len(parts) != 2:
-            raise ConfigError(
-                f"proxmox.network.external.ingress_pool must be 'start-end', got {ingress_pool!r}"
-            )
-        try:
-            pool_start = ipaddress.ip_address(parts[0].strip())
-            pool_end = ipaddress.ip_address(parts[1].strip())
-        except ValueError:
-            raise ConfigError(
-                f"proxmox.network.external.ingress_pool has invalid addresses: {ingress_pool!r}"
-            ) from None
-        if pool_start.version != 4 or pool_end.version != 4:
-            raise ConfigError(
-                "cluster.yaml: proxmox.network.external.ingress_pool must be IPv4"
-            )
-        if int(pool_start) > int(pool_end):
-            raise ConfigError(
-                "cluster.yaml: proxmox.network.external.ingress_pool start must be <= end"
-            )
-        if pool_start not in ext_network or pool_end not in ext_network:
-            raise ConfigError(
-                "cluster.yaml: proxmox.network.external.ingress_pool must be inside external.cidr"
-            )
-        if kubeapi_vip is not None and int(pool_start) <= int(vip) <= int(pool_end):
-            raise ConfigError(
-                "cluster.yaml: proxmox.network.external.kubeapi_vip must not be inside "
-                "ingress_pool (MetalLB could hand the API address to a service)"
-            )
-
-
 def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:
     """Validate proxmox.network.cluster.sdn (managed EVPN) and its derived layout."""
     where = "cluster.yaml: proxmox.network.cluster.sdn"
@@ -1210,20 +1008,20 @@ def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:
             return  # the main provider block reports invalid VIPs
         if vip == gateway:
             raise ConfigError(
-                "cluster.yaml: proxmox.network.cluster.kubeapi_vip collides with the "
+                "cluster.yaml: network.cluster.kubeapi_vip collides with the "
                 f"SDN anycast gateway {gateway}"
             )
         collision = next((name for name, addr in addresses.items() if addr == vip), None)
         if collision:
             raise ConfigError(
-                "cluster.yaml: proxmox.network.cluster.kubeapi_vip collides with the "
+                "cluster.yaml: network.cluster.kubeapi_vip collides with the "
                 f"static address of {collision}"
             )
         # the layout reserves slots for nodes a pool has not grown to yet;
         # a VIP parked there collides the moment that node is added
         if vip in naming.sdn_reserved(cidr, worker_pools):
             raise ConfigError(
-                "cluster.yaml: proxmox.network.cluster.kubeapi_vip sits inside the "
+                "cluster.yaml: network.cluster.kubeapi_vip sits inside the "
                 "SDN static address layout (controlplane range or a worker pool "
                 "block); scaling a pool would assign a node the VIP's address"
             )
@@ -1296,14 +1094,8 @@ def _validate(cfg: Config) -> None:
         if len(f"{cfg.name}-{pool_name}-{count:02d}") > 63:
             raise ConfigError("cluster and pool names make a hostname longer than 63 characters")
 
-    try:
-        network = ipaddress.ip_network(cfg.network.cluster.cidr, strict=True)
-    except (TypeError, ValueError):
-        raise ConfigError(
-            f"cluster.yaml: network.cidr is not a valid network: {cfg.network.cluster.cidr!r}"
-        ) from None
-    if network.version != 4:
-        raise ConfigError("cluster.yaml: network.cidr must be IPv4")
+    # already validated as an IPv4 network when the block was parsed
+    network = ipaddress.ip_network(cfg.network.cluster.cidr, strict=True)
 
     provider_fields = (
         (("openstack.url", cfg.provider.url),
@@ -1336,12 +1128,15 @@ def _validate(cfg: Config) -> None:
         cluster_network = _mapping(
             provider.network.get("cluster"), "cluster.yaml: proxmox.network.cluster"
         )
+        _reject_unknown_keys(
+            cluster_network, "cluster.yaml: proxmox.network.cluster", _PROXMOX_CLUSTER_KEYS
+        )
         links = [name for name in ("bridge", "vnet") if cluster_network.get(name)]
         if "sdn" in cluster_network:
             if links or cfg.network.cluster.vlan is not None:
                 raise ConfigError(
                     "cluster.yaml: proxmox.network.cluster.sdn is mutually exclusive "
-                    "with bridge, vnet, and vlan"
+                    "with bridge, vnet, and network.cluster.vlan"
                 )
             sdn_map = _mapping(
                 cluster_network.get("sdn"), "cluster.yaml: proxmox.network.cluster.sdn"
@@ -1357,38 +1152,38 @@ def _validate(cfg: Config) -> None:
                 "cluster.yaml: proxmox.network.cluster requires exactly one of "
                 "bridge, vnet, or sdn"
             )
-        vlan = cluster_network.get("vlan")
-        if vlan is not None and not 1 <= _int(vlan, "vlan", "proxmox.network.cluster") <= 4094:
-            raise ConfigError("cluster.yaml: proxmox.network.cluster.vlan must be 1-4094")
-
         external_network = _mapping(
             provider.network.get("external"), "cluster.yaml: proxmox.network.external"
         )
-        # the VIPs are taken from the resolved blocks, so either location -- the
-        # `network.*` blocks or the old `proxmox.network.*` keys -- satisfies the
-        # rule that exactly one of them carries the API address
+        _reject_unknown_keys(
+            external_network, "cluster.yaml: proxmox.network.external", _PROXMOX_EXTERNAL_KEYS
+        )
+        # `network.external` describes the subnet, `proxmox.network.external`
+        # the bridge that reaches it: neither is usable without the other
+        bridge = external_network.get("bridge")
+        if cfg.network.external is not None and (
+            not isinstance(bridge, str) or not bridge.strip()
+        ):
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.external.bridge must be a non-empty string"
+            )
+        if external_network and cfg.network.external is None:
+            raise ConfigError(
+                "cluster.yaml: proxmox.network.external needs a network.external block "
+                "describing the subnet on that bridge"
+            )
         cluster_vip = cfg.network.cluster.kubeapi_vip
         external_vip = cfg.network.external.kubeapi_vip if cfg.network.external else ""
-        if cfg.network.external is not None:
-            # validate the resolved facts, so a block split between the new
-            # `network.external` keys and the Proxmox section is checked whole
-            _validate_proxmox_external(
-                {**external_network, **l2_facts(cfg.network.external)}, network
-            )
-            if not cluster_vip and not external_vip:
-                raise ConfigError(
-                    "cluster.yaml: kubeapi_vip must be set in network.cluster or network.external"
-                )
-        elif not cluster_vip:
+        if not cluster_vip and not external_vip:
             raise ConfigError(
-                "cluster.yaml: network.cluster.kubeapi_vip must be an IPv4 address"
+                "cluster.yaml: kubeapi_vip must be set in network.cluster or network.external"
             )
-        if cluster_vip:
-            vip = _ipv4_address(cluster_vip, "network.cluster.kubeapi_vip")
-            if vip not in network:
-                raise ConfigError(
-                    "cluster.yaml: network.cluster.kubeapi_vip must be inside network.cidr"
-                )
+        if cluster_vip and _ipv4_address(
+            cluster_vip, "network.cluster.kubeapi_vip"
+        ) not in network:
+            raise ConfigError(
+                "cluster.yaml: network.cluster.kubeapi_vip must be inside network.cluster.cidr"
+            )
     if cfg.login_server is not None and not isinstance(cfg.login_server, str):
         raise ConfigError("cluster.yaml: tailscale.login_server must be a string")
 

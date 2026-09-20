@@ -148,7 +148,7 @@ def sdn_vni(cluster: str) -> int:
 
 # ---- Proxmox SDN static addresses ------------------------------------------
 # A managed EVPN network has no DHCP, so every node gets a deterministic
-# address from network.cidr: the anycast gateway is the first host, control
+# address from network.cluster.cidr: the anycast gateway is the first host, control
 # planes sit at 10+ordinal, and each worker pool gets a 50-address block in
 # cluster.yaml order. Reordering or removing a worker pool renumbers the pools
 # after it.
@@ -188,7 +188,8 @@ def node_address(
     address = net.network_address + host
     if address >= net.broadcast_address:
         raise ConfigError(
-            f"machine {name}: static SDN address {address} does not fit network.cidr {cidr}"
+            f"machine {name}: static SDN address {address} does not fit "
+            f"network.cluster.cidr {cidr}"
         )
     return ipaddress.IPv4Interface(f"{address}/{net.prefixlen}")
 

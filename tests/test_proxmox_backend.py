@@ -2840,7 +2840,7 @@ def test_restart_machine_refuses_an_unowned_vm(make_config):
 
 
 def _external_cfg_new_shape(make_config):
-    """The cluster of `_external_cfg` with its L2 facts in the `network` blocks."""
+    """An external cluster that also tags both NICs with a VLAN."""
     return make_config(
         {
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
@@ -2861,35 +2861,6 @@ def _external_cfg_new_shape(make_config):
                     "anchor_cidr": "169.254.40.0/24",
                     "kubeapi_vip": "203.0.113.10",
                     "ingress_pool": "203.0.113.20-203.0.113.40",
-                },
-            },
-        },
-        remove=("openstack",),
-    )
-
-
-def _external_cfg_old_shape_with_vlan(make_config):
-    """The same cluster as `_external_cfg_new_shape`, in the old key locations."""
-    return make_config(
-        {
-            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
-            "proxmox": {
-                "url": "https://pve.example:8006",
-                "storage": "vms",
-                "iso_storage": "isos",
-                "cidata_storage": "local",
-                "nodes": ["pve001", "pve002"],
-                "network": {
-                    "cluster": {"bridge": "vmbr0", "vlan": 7},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "vlan": 1691,
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        "anchor_cidr": "169.254.40.0/24",
-                        "kubeapi_vip": "203.0.113.10",
-                        "ingress_pool": "203.0.113.20-203.0.113.40",
-                    },
                 },
             },
         },
@@ -2920,15 +2891,12 @@ def _vm_create_payload(cfg, monkeypatch):
     return creates[0]
 
 
-def test_new_shape_network_blocks_create_the_same_vm(make_config, monkeypatch):
-    """A cluster described in `network.cluster`/`network.external` converges the
-    same way as the identical cluster described in the old key locations."""
-    old = _vm_create_payload(_external_cfg_old_shape_with_vlan(make_config), monkeypatch)
-    new = _vm_create_payload(_external_cfg_new_shape(make_config), monkeypatch)
+def test_network_block_vlans_tag_both_vm_nics(make_config, monkeypatch):
+    """`network.cluster.vlan` and `network.external.vlan` reach the VM NICs."""
+    payload = _vm_create_payload(_external_cfg_new_shape(make_config), monkeypatch)
 
-    assert new == old
-    assert "tag=7" in new["net0"]
-    assert "tag=1691" in new["net1"]
+    assert "bridge=vmbr0" in payload["net0"] and "tag=7" in payload["net0"]
+    assert "bridge=vmbr1" in payload["net1"] and "tag=1691" in payload["net1"]
 
 
 def test_new_shape_network_blocks_reach_the_provider_status(make_config):

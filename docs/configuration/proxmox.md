@@ -84,7 +84,7 @@ Verify the API certificate against the system trust store, skip verification, or
 
 Required · mapping
 
-The private network every VM's first NIC attaches to. Set exactly one of `bridge`, `vnet` or `sdn`. The addresses on that network — cidr, gateway, VLAN tag, MTU and the API VIP — are described in [`network.cluster`](network.md#networkcluster). Moving a running cluster to another bridge, VLAN or VNet, or switching between `bridge` and `sdn`, is refused; recreate the cluster instead. Only the keys documented below are accepted inside `proxmox.network`, `cluster`, `cluster.sdn` and `external`; a miscapped key (such as `vlna` or `gatway`) is refused at load instead of being silently ignored.
+The private network every VM's first NIC attaches to. Set exactly one of `bridge`, `vnet` or `sdn`. The addresses on that network — cidr, gateway, VLAN tag, MTU and the API VIP — are described in [`network.cluster`](network.md#networkcluster). Moving a running cluster to another bridge, VLAN or VNet, or switching between `bridge` and `sdn`, is refused; recreate the cluster instead. Only the keys documented below are accepted inside `proxmox.network`, `cluster`, `cluster.sdn` and `external`; a miscapped key (such as `vlna` or `bridg`) is refused at load instead of being silently ignored, and a key that has moved into `network.cluster` / `network.external` is refused with the name of its new location (see [Moving from the old keys](network.md#moving-from-the-old-keys)).
 
 ### `bridge`
 
