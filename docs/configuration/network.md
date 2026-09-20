@@ -52,7 +52,7 @@ VLAN tag for the node NIC. Proxmox only: it becomes the VM NIC tag, and it is re
 
 Optional · integer, at least 1280 · default `1500`
 
-The MTU of this layer-2 network. Above 1500 it is written into the generated machine configuration: the node's link carries the MTU, and the default route on that link is clamped to 1500, so off-subnet TCP is MSS-clamped and UDP fragmented even when the gateway silently drops jumbo frames, while on-subnet traffic stays jumbo. On Proxmox the VM NIC is created with `mtu=1`, Proxmox's inherit-the-bridge-MTU setting, so the bridge itself is the last link in that chain: `plan` warns when a compute node's bridge reads below this value (an interface without an explicit MTU reads as the 1500 default), and raising the bridge MTU on every node is the fix. The route clamp applies wherever the tool knows the gateway — a managed SDN and an OpenStack subnet take the first host of `cidr` — and on a DHCP-backed Proxmox bridge or VNet only when [`network.cluster.gateway`](#networkclustergateway) is set; without it the DHCP-learned route keeps the link MTU. Every node on one layer-2 network must agree on the MTU.
+The MTU of this layer-2 network. Above 1500 it is written into the generated machine configuration: the node's link carries the MTU, and the default route on that link is clamped to 1500, so off-subnet TCP is MSS-clamped and UDP fragmented even when the gateway silently drops jumbo frames, while on-subnet traffic stays jumbo. On Proxmox the VM NIC is created with `mtu=1`, Proxmox's inherit-the-bridge-MTU setting, so the bridge itself is the last link in that chain: `plan` warns when a compute node's bridge reads below this value (an interface without an explicit MTU reads as the 1500 default), and raising the bridge MTU on every node is the fix. The route clamp applies wherever the tool knows the gateway — a managed SDN and an OpenStack subnet take the first host of `cidr` — and on a DHCP-backed Proxmox bridge or VNet only when [`network.cluster.gateway`](#networkclustergateway) is set; without it the DHCP-learned route keeps the link MTU. Every host on one layer-2 network must agree on the MTU, and changing it on a live cluster is a whole-cluster event — see [MTU](#mtu).
 
 ### `network.cluster.kubeapi_vip`
 
@@ -124,6 +124,18 @@ The range reserved in your address plan for MetalLB ingress. Install and configu
 ## Addresses outside the DHCP range
 
 `kubeapi_vip` and `ingress_pool` name addresses taloscluster hands to the cluster itself, so they must lie outside any DHCP range serving that layer-2 network, and outside the addresses your own hosts use. taloscluster cannot see the DHCP server's pool and does not check this: a VIP inside the pool works until the day the server leases it to something else.
+
+## MTU
+
+There is no path MTU discovery inside a subnet: a packet larger than a peer's MTU is dropped at layer 2 and no ICMP comes back, so the sender never learns to send smaller. Every host on the network — the nodes, the hypervisors, the gateway, anything else on that wire — must therefore carry the same MTU as [`network.cluster.mtu`](#networkclustermtu) (or [`network.external.mtu`](#networkexternalmtu) on the external network), not just the nodes taloscluster writes it on. Changing an `mtu` on a live cluster is a whole-cluster event, not a rolling change: the machine configuration states it on every node, and on Proxmox the bridge MTU must be raised on every node with it.
+
+The tool checks what it can see — `plan` warns when a compute node's bridge reads below the cluster MTU — but the gateway's MTU is outside its view, so where the default route is not clamped to 1500 (a DHCP-backed Proxmox network without [`network.cluster.gateway`](#networkclustergateway)) off-subnet traffic rides the DHCP-learned route at the link MTU and the gateway's jumbo support is on you. Verify what the path really carries from any Linux host on the network:
+
+```bash
+ping -M do -s 8972 10.0.0.1
+```
+
+`-M do` forbids fragmentation, and 8972 bytes of payload plus the 28 bytes of IP and ICMP headers is exactly the 9000-byte packet a jumbo MTU promises, so a reply proves the path to that address — another host on the L2 or the gateway — really carries it; silence or `message too long` means a hop is still at 1500.
 
 ## `network.dns`
 

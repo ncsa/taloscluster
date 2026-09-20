@@ -10,7 +10,7 @@ The schematic id joined the image name in this release, so the first converge af
 
 ## Machine configuration
 
-For each node taloscluster generates a Talos machine configuration from `cluster.yaml` and the cluster's secrets: hostname, role, node labels, network settings, the Kubernetes API VIP, the ingress firewall, the tailscale key, and any freeform [`config_patches`](../configuration/pools.md#config_patches). `taloscluster plan` shows the diff of what would change on a reachable running node. The generated control-plane configuration also installs the kubelet serving certificate approver and metrics-server, and disables workload scheduling on control planes.
+For each node taloscluster generates a Talos machine configuration from `cluster.yaml` and the cluster's secrets: hostname, role, node labels, network settings, the Kubernetes API VIP, the ingress firewall, the tailscale key, and any freeform [`config_patches`](../configuration/pools.md#config_patches). On a jumbo layer-2 network the node's link states its MTU and the default route on that link is clamped to 1500, so off-subnet traffic survives a gateway that silently drops jumbo frames; the MTU itself must be agreed by every host on the network — see [MTU](../configuration/network.md#mtu). `taloscluster plan` shows the diff of what would change on a reachable running node. The generated control-plane configuration also installs the kubelet serving certificate approver and metrics-server, and disables workload scheduling on control planes.
 
 ## OpenStack
 

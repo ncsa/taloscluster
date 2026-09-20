@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Document the MTU rules for jumbo layer-2 networks, including the jumbo-frame ping recipe.
 - Add a top-level `include` list that merges extra YAML files into `cluster.yaml` before validation.
 - Bound every `kubectl` call with a request timeout so a hung kube-api fails converge.
 - Report a machine missing from both Talos discovery and Kubernetes as an incomplete `check`.
