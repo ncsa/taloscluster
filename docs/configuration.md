@@ -8,6 +8,7 @@ All example addresses and hostnames in these pages are placeholders (RFC 5737 do
 
 | Key | Required | What it is | Details |
 | --- | --- | --- | --- |
+| `include` | no | Extra YAML files merged into `cluster.yaml` | [General](configuration/general.md#include) |
 | `name` | yes | Cluster name, prefix of every hostname | [General](configuration/general.md#name) |
 | `tags` | no | Extra Kubernetes node labels for every node | [General](configuration/general.md#tags) |
 | `talos` | yes | Talos version, extra extensions, machine-config patches | [General](configuration/general.md#talos) |

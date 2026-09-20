@@ -29,7 +29,7 @@ SECRETS_FILE = "secrets.yaml"
 # CONFIG_SECTIONS, and `openstack`/`proxmox` is the one selected provider.
 _CLUSTER_KEYS = {
     "name", "tags", "talos", "kubernetes", "controlplane", "workers",
-    "network", "security", "tailscale", "openstack", "proxmox",
+    "network", "security", "tailscale", "openstack", "proxmox", "include",
 }
 # Top-level `secrets.yaml` keys taloscluster reads (plus plugin sections).
 _SECRETS_KEYS = {"tailscale", "openstack", "proxmox"}
@@ -485,6 +485,100 @@ def read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _record_origins(value: Any, path: str, origins: dict[str, str], name: str) -> None:
+    """Remember `name` as the source of `path` and of every path inside it."""
+    origins[path] = name
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _record_origins(child, f"{path}.{key}", origins, name)
+
+
+def _merge_yaml(
+    base: dict[str, Any],
+    extra: dict[str, Any],
+    extra_name: str,
+    origins: dict[str, str],
+    base_name: str,
+    prefix: str = "",
+) -> None:
+    """Deep-merge `extra` into `base`; a value set in two files is an error.
+
+    Mappings merge key by key. Anything else -- a scalar, a list, or a mapping
+    meeting a scalar -- is a single value, so two files setting it disagree
+    about the desired state with no way to tell which one wins. `origins`
+    remembers which file set each path so the error can name both.
+    """
+    for key, value in extra.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_yaml(base[key], value, extra_name, origins, base_name, f"{path}.")
+            continue
+        # an explicit null is no value at all, as everywhere else in the loader
+        if base.get(key) is not None:
+            raise ConfigError(
+                f"{path} is set in both {origins.get(path, base_name)} and "
+                f"{extra_name}; set it in one file"
+            )
+        base[key] = value
+        _record_origins(value, path, origins, extra_name)
+
+
+def _include_paths(d: dict[str, Any], root: Path, where: str) -> list[Path]:
+    """The files `include:` names, resolved inside the cluster directory."""
+    raw = d.get("include")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ConfigError(f"{where}: include must be a list of file names")
+    paths: list[Path] = []
+    seen: dict[Path, str] = {}
+    for entry in raw:
+        if not isinstance(entry, str) or not entry.strip():
+            raise ConfigError(f"{where}: include entries must be non-empty file names")
+        relative = Path(entry)
+        path = root / relative
+        # resolve before the check so a symlink cannot lead out of the directory
+        if relative.is_absolute() or not path.resolve().is_relative_to(root.resolve()):
+            raise ConfigError(
+                f"{where}: include {entry!r} must be a path inside the cluster directory"
+            )
+        if path.resolve() in seen:
+            raise ConfigError(
+                f"{where}: include lists {entry} twice"
+                if seen[path.resolve()] == entry
+                else f"{where}: include lists {seen[path.resolve()]} and {entry}, "
+                "which are the same file"
+            )
+        seen[path.resolve()] = entry
+        paths.append(path)
+    return paths
+
+
+def _apply_includes(d: dict[str, Any], root: Path, known: set[str]) -> dict[str, Any]:
+    """Merge every `include:` file into the `cluster.yaml` tree.
+
+    Included files carry the same keys as `cluster.yaml` and are merged before
+    validation, so where a value lives is the user's choice and the schema is
+    the same wherever it is written. Only the top-level keys of an included
+    file are attributed to it; once merged there is one tree and one schema, so
+    an unknown or moved key deeper in a section is reported against
+    `cluster.yaml` whichever file supplied it.
+    """
+    origins: dict[str, str] = {}
+    for path in _include_paths(d, root, CLUSTER_FILE):
+        if path.exists() and not path.is_file():
+            raise ConfigError(f"{CLUSTER_FILE}: include {path.name} is not a file")
+        extra = read_yaml(path)
+        if "include" in extra:
+            raise ConfigError(
+                f"{path.name}: include is only allowed in {CLUSTER_FILE}; "
+                "included files cannot include further files"
+            )
+        _reject_unknown_keys(extra, path.name, known - {"include"})
+        _merge_yaml(d, extra, path.name, origins, CLUSTER_FILE)
+    return d
+
+
 def _plugin_config_sections() -> set[str]:
     """Top-level keys owned by installed plugins (e.g. a plugin's `argocd:`).
 
@@ -798,7 +892,9 @@ def _network_config(d: dict[str, Any], where: str) -> NetworkConfig:
 def load_config(root: Path) -> Config:
     d = read_yaml(root / CLUSTER_FILE)
     where = CLUSTER_FILE
-    _reject_unknown_keys(d, where, _CLUSTER_KEYS | _plugin_config_sections())
+    known = _CLUSTER_KEYS | _plugin_config_sections()
+    _reject_unknown_keys(d, where, known)
+    d = _apply_includes(d, root, known)
     _reject_moved_keys(d, where)
 
     talos = _mapping(d.get("talos"), f"{where}: talos")

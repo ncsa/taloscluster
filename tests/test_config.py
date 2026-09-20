@@ -1554,3 +1554,103 @@ def test_proxmox_only_network_keys_are_rejected_on_openstack(make_config, block,
     """OpenStack builds its own external network, VIP and ingress at converge."""
     with pytest.raises(ConfigError, match=message):
         make_config({"network": block})
+
+
+# ---------------------------------------------------------------------------
+# include: extra YAML files merged into cluster.yaml
+# ---------------------------------------------------------------------------
+
+def test_include_merges_an_extra_file(make_config, tmp_path):
+    """A pool defined in an included file loads as if it were in cluster.yaml."""
+    (tmp_path / "pools.yaml").write_text(
+        yaml.safe_dump({"workers": {"gpu": {"count": 1, "flavor": "g", "disk": 50}}})
+    )
+    cfg = make_config({"include": ["pools.yaml"]})
+
+    assert "testcluster-gpu-01" in cfg.machines
+    assert cfg.machines["testcluster-gpu-01"].flavor == "g"
+
+
+def test_include_merges_into_an_existing_section(make_config, tmp_path):
+    """Mappings merge key by key; the files need not own whole sections."""
+    (tmp_path / "tags.yaml").write_text(yaml.safe_dump({"tags": {"team": "platform"}}))
+    cfg = make_config({"include": ["tags.yaml"], "tags": {"site": "ncsa"}})
+
+    assert cfg.tags == {"site": "ncsa", "team": "platform"}
+
+
+def test_include_rejects_a_value_set_in_two_files(make_config, tmp_path):
+    (tmp_path / "extra.yaml").write_text(yaml.safe_dump({"network": {"ntp": ["a"]}}))
+    with pytest.raises(
+        ConfigError, match="network.ntp is set in both cluster.yaml and extra.yaml"
+    ):
+        make_config({"include": ["extra.yaml"]})
+
+
+def test_include_rejects_a_nested_include(make_config, tmp_path):
+    (tmp_path / "extra.yaml").write_text(yaml.safe_dump({"include": ["more.yaml"]}))
+    with pytest.raises(ConfigError, match="extra.yaml: include is only allowed"):
+        make_config({"include": ["extra.yaml"]})
+
+
+def test_include_rejects_an_unknown_key_naming_the_file(make_config, tmp_path):
+    (tmp_path / "extra.yaml").write_text(yaml.safe_dump({"netwrok": {}}))
+    with pytest.raises(ConfigError, match=r"extra.yaml: unknown key\(s\): netwrok"):
+        make_config({"include": ["extra.yaml"]})
+
+
+def test_include_rejects_a_missing_file(make_config):
+    with pytest.raises(ConfigError, match="missing .*gone.yaml"):
+        make_config({"include": ["gone.yaml"]})
+
+
+@pytest.mark.parametrize(
+    ("include", "message"),
+    [
+        ("metal.yaml", "include must be a list"),
+        ([""], "include entries must be non-empty"),
+        ([7], "include entries must be non-empty"),
+        (["/etc/passwd"], "must be a path inside the cluster directory"),
+        (["../other/cluster.yaml"], "must be a path inside the cluster directory"),
+    ],
+)
+def test_include_rejects_invalid_entries(make_config, include, message):
+    with pytest.raises(ConfigError, match=message):
+        make_config({"include": include})
+
+
+def test_include_conflict_between_two_included_files_names_both(make_config, tmp_path):
+    """A collision deep inside a section blames the two files that set it."""
+    (tmp_path / "a.yaml").write_text(yaml.safe_dump({"tags": {"t": "one"}}))
+    (tmp_path / "b.yaml").write_text(yaml.safe_dump({"tags": {"t": "two"}}))
+    with pytest.raises(ConfigError, match="tags.t is set in both a.yaml and b.yaml"):
+        make_config({"include": ["a.yaml", "b.yaml"]})
+
+
+def test_include_rejects_the_same_file_twice(make_config, tmp_path):
+    (tmp_path / "a.yaml").write_text(yaml.safe_dump({"tags": {"t": "one"}}))
+    with pytest.raises(ConfigError, match="include lists a.yaml twice"):
+        make_config({"include": ["a.yaml", "a.yaml"]})
+
+
+def test_include_rejects_a_symlink_out_of_the_cluster_directory(make_config, tmp_path):
+    outside = tmp_path.parent / "outside.yaml"
+    outside.write_text(yaml.safe_dump({"tags": {"t": "one"}}))
+    (tmp_path / "link.yaml").symlink_to(outside)
+    with pytest.raises(ConfigError, match="must be a path inside the cluster directory"):
+        make_config({"include": ["link.yaml"]})
+
+
+def test_include_rejects_a_directory(make_config, tmp_path):
+    (tmp_path / "conf").mkdir()
+    with pytest.raises(ConfigError, match="include conf is not a file"):
+        make_config({"include": ["conf"]})
+
+
+def test_include_treats_an_explicit_null_section_as_absent(make_config, tmp_path):
+    (tmp_path / "ts.yaml").write_text(
+        yaml.safe_dump({"tailscale": {"login_server": "https://hs.example"}})
+    )
+    cfg = make_config({"include": ["ts.yaml"], "tailscale": None})
+
+    assert cfg.login_server == "https://hs.example"
