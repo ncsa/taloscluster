@@ -471,6 +471,125 @@ def test_metal_section_shape_is_checked(make_config, metal, message):
         make_config({"metal": metal})
 
 
+# ---------------------------------------------------------------------------
+# one VM provider plus metal: the four valid combinations
+# ---------------------------------------------------------------------------
+
+def _metal_groups() -> dict:
+    """One bare-metal group per role, in the shape the metal provider will own."""
+    return {
+        "cp": {
+            "role": "controlplane",
+            "redfish": True,
+            "disk": "/dev/sda",
+            "interfaces": {
+                "enp1s0f0": {"role": "pxe"},
+                "enp2s0f0": {"role": "cluster"},
+            },
+            "bmc": {"username": "root", "password": "secret"},
+            "servers": {"rp001-cp": {"bmc": {"ip": "192.0.2.10"}}},
+        },
+        "worker": {
+            "role": "worker",
+            "redfish": True,
+            "disk": "/dev/sda",
+            "interfaces": {
+                "enp1s0f0": {"role": "pxe"},
+                "enp2s0f0": {"role": "cluster"},
+            },
+            "bmc": {"username": "root", "password": "secret"},
+            "servers": {"rp001-worker": {"bmc": {"ip": "192.0.2.11"}}},
+        },
+    }
+
+
+def test_openstack_with_metal_loads(make_config):
+    """A mixed cluster: OpenStack VMs plus bare-metal groups beside them."""
+    cfg = make_config({
+        "workers": {"worker": {"count": 2, "flavor": "gp.xlarge", "disk": 100}},
+        "metal": _metal_groups(),
+    })
+
+    assert isinstance(cfg.provider, OpenStackConfig)
+    assert cfg.provider_name == "openstack"
+    assert cfg.metal is not None
+    assert cfg.metal.groups == _metal_groups()
+    assert cfg.network.external is None
+    # the pools expand regardless of which side each machine lands on
+    assert len(cfg.machines) == 5
+
+
+def test_proxmox_with_metal_loads(make_config):
+    """A mixed cluster: Proxmox VMs on a flat bridge plus bare-metal groups."""
+    cfg = make_config(
+        {
+            "controlplane": {"count": 3, "cores": 4, "memory": 8, "disk": 40},
+            "workers": {"worker": {"count": 2, "cores": 8, "memory": 16, "disk": 100}},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "nodes": ["pve001", "pve002"],
+                "network": {"cluster": {"bridge": "vmbr0"}},
+            },
+            "metal": _metal_groups(),
+        },
+        remove=("openstack",),
+    )
+
+    assert isinstance(cfg.provider, ProxmoxConfig)
+    assert cfg.provider_name == "proxmox"
+    assert cfg.metal is not None
+    assert cfg.metal.groups == _metal_groups()
+    assert cfg.network.cluster.kubeapi_vip == "192.168.0.10"
+    assert len(cfg.machines) == 5
+
+
+def test_proxmox_sdn_with_metal_loads(make_config):
+    """A mixed cluster: SDN-managed VMs plus bare-metal groups on the same L2."""
+    overrides = _proxmox_sdn_overrides()
+    overrides["metal"] = _metal_groups()
+    cfg = make_config(overrides, remove=("openstack",))
+
+    assert isinstance(cfg.provider, ProxmoxConfig)
+    assert proxmox_sdn(cfg.name, cfg.provider) is not None
+    assert cfg.metal is not None
+    assert cfg.metal.groups == _metal_groups()
+    assert len(cfg.machines) == 1
+
+
+def test_metal_only_cluster_loads(make_config):
+    """No VM provider: every machine is bare metal, pools carry count and disk."""
+    cfg = make_config(
+        {
+            "controlplane": {"count": 3, "disk": 40},
+            "workers": {"worker": {"count": 2, "disk": 100}},
+            "metal": _metal_groups(),
+        },
+        remove=("openstack",),
+    )
+
+    assert cfg.provider is None
+    assert cfg.provider_name == ""
+    assert cfg.metal is not None
+    assert cfg.metal.groups == _metal_groups()
+    assert len(cfg.machines) == 5
+
+
+def test_openstack_with_metal_rejects_network_external(make_config):
+    """OpenStack allocates the external network itself, with or without metal."""
+    with pytest.raises(ConfigError, match="network.external is not valid with openstack"):
+        make_config({
+            "metal": _metal_groups(),
+            "network": {"external": {
+                "cidr": "203.0.113.0/24",
+                "gateway": "203.0.113.1",
+                "anchor_cidr": "169.254.40.0/24",
+            }},
+        })
+
+
 def test_proxmox_provider_section_is_typed(make_config):
     cfg = make_config(
         {
