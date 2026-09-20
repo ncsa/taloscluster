@@ -53,6 +53,7 @@ nav:
       - Node pools: configuration/pools.md
       - OpenStack: configuration/openstack.md
       - Proxmox: configuration/proxmox.md
+      - Metal: configuration/metal.md
       - Network: configuration/network.md
       - Security: configuration/security.md
       - Tailscale: configuration/tailscale.md

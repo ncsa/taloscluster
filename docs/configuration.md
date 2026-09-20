@@ -15,15 +15,16 @@ All example addresses and hostnames in these pages are placeholders: RFC 5737 do
 | `kubernetes` | yes | Kubernetes version | [General](configuration/general.md#kubernetes) |
 | `controlplane` | yes | Control plane pool: count and sizing | [Pools](configuration/pools.md) |
 | `workers` | no | Worker pools by name: count, sizing, extensions, tags | [Pools](configuration/pools.md) |
-| `openstack` | one of | OpenStack endpoint, availability zone, external network, optional region | [OpenStack](configuration/openstack.md) |
-| `proxmox` | one of | Proxmox endpoint, storages, placement, and the bridge, VNet or SDN each network is reached through | [Proxmox](configuration/proxmox.md) |
+| `openstack` | at most one | OpenStack endpoint, availability zone, external network, optional region | [OpenStack](configuration/openstack.md) |
+| `proxmox` | at most one | Proxmox endpoint, storages, placement, and the bridge, VNet or SDN each network is reached through | [Proxmox](configuration/proxmox.md) |
+| `metal` | no | Bare-metal machine groups joined alongside, or instead of, the VM provider | [Metal](configuration/metal.md) |
 | `network` | yes | The node L2 (`network.cluster`), the optional routed L2 (`network.external`), DNS and NTP servers | [Network](configuration/network.md) |
 | `security` | no | Named ingress allowlists per port | [Security](configuration/security.md) |
 | `tailscale` | no | Opt into the tailscale extension, login server | [Tailscale](configuration/tailscale.md) |
 | `rancher` | no | Rancher plugin: members to grant access | [Rancher](configuration/rancher.md) |
 | `argocd` | no | ArgoCD plugin: project roles, repositories, per-app settings | [ArgoCD](configuration/argocd.md) |
 
-Exactly one of `openstack` or `proxmox` must be present. It selects the backend and decides which pool sizing keys are required.
+At most one of `openstack` or `proxmox` may be present, and a [`metal`](configuration/metal.md) section may accompany it or stand alone for a cluster whose machines are all bare metal. The VM provider selects the backend and decides which pool sizing keys are required; with `metal` alone, `count` and `disk` are the only required pool keys.
 
 Minimal Proxmox example:
 

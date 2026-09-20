@@ -414,12 +414,61 @@ def test_openstack_region_is_loaded_from_cluster_yaml(make_config):
     assert cfg.region == "region-b"
 
 
-def test_exactly_one_provider_is_required(make_config):
-    with pytest.raises(ConfigError, match="exactly one.*openstack.*proxmox"):
+def test_a_provider_section_is_still_required(make_config):
+    with pytest.raises(ConfigError, match="one provider section is required"):
         make_config(remove=("openstack",))
 
-    with pytest.raises(ConfigError, match="exactly one.*openstack.*proxmox"):
+
+def test_at_most_one_vm_provider_is_allowed(make_config):
+    with pytest.raises(ConfigError, match="at most one VM provider"):
         make_config({"proxmox": {"url": "https://pve.example"}})
+
+
+def test_metal_section_loads_alongside_a_vm_provider(make_config):
+    cfg = make_config({"metal": {
+        "cp": {"role": "controlplane"},
+        "worker": {"role": "worker"},
+    }})
+
+    assert isinstance(cfg.provider, OpenStackConfig)
+    assert cfg.metal is not None
+    assert cfg.metal.groups == {
+        "cp": {"role": "controlplane"},
+        "worker": {"role": "worker"},
+    }
+    assert cfg.provider_name == "openstack"
+
+
+def test_metal_alone_loads_without_a_vm_provider(make_config):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 3, "disk": 40},
+            "workers": {"worker": {"count": 2, "disk": 100}},
+            "metal": {"worker": {"servers": {"rp001-worker": {}}}},
+        },
+        remove=("openstack",),
+    )
+
+    assert cfg.provider is None
+    assert cfg.metal is not None
+    assert cfg.metal.groups["worker"]["servers"] == {"rp001-worker": {}}
+    assert cfg.provider_name == ""
+    # metal-only pools carry no VM sizing keys, and the machines still expand
+    assert cfg.machines["testcluster-controlplane-01"].disk == 40
+    assert cfg.machines["testcluster-worker-02"].disk == 100
+
+
+@pytest.mark.parametrize(
+    ("metal", "message"),
+    [
+        ([], "metal must be a YAML mapping"),
+        ({"cp": "rp001"}, "metal.cp must be a YAML mapping"),
+        ({1: {}}, "metal group names must be non-empty strings"),
+    ],
+)
+def test_metal_section_shape_is_checked(make_config, metal, message):
+    with pytest.raises(ConfigError, match=message):
+        make_config({"metal": metal})
 
 
 def test_proxmox_provider_section_is_typed(make_config):
@@ -909,7 +958,7 @@ def test_the_other_providers_credentials_are_still_refused(make_config, tmp_path
     """A secrets.yaml for the wrong provider now trips the one-provider rule."""
     _write_secrets(tmp_path, {"proxmox": dict(PROXMOX_CREDENTIALS)})
 
-    with pytest.raises(ConfigError, match="exactly one provider section"):
+    with pytest.raises(ConfigError, match="at most one VM provider"):
         make_config()
 
 

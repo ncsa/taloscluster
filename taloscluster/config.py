@@ -26,10 +26,12 @@ SECRETS_FILE = "secrets.yaml"
 
 # Top-level `cluster.yaml` keys taloscluster understands itself. Plugin-owned
 # sections (e.g. `argocd:`, `rancher:`) are added from each installed plugin's
-# CONFIG_SECTIONS, and `openstack`/`proxmox` is the one selected provider.
+# CONFIG_SECTIONS; `openstack`/`proxmox` is the optional VM provider and
+# `metal` the optional bare-metal section beside (or instead of) it.
 _CLUSTER_KEYS = {
     "name", "tags", "talos", "kubernetes", "controlplane", "workers",
-    "network", "security", "tailscale", "openstack", "proxmox", "include",
+    "network", "security", "tailscale", "openstack", "proxmox", "metal",
+    "include",
 }
 # Direct keys each fixed-schema section of `cluster.yaml` accepts. These catch
 # a miscapped or unsupported key inside a section -- `talos.extensons`,
@@ -233,6 +235,18 @@ ProviderConfig = OpenStackConfig | ProxmoxConfig
 
 
 @dataclass(frozen=True)
+class MetalConfig:
+    """The `metal:` section: groups of bare-metal machines beside the cluster.
+
+    Groups are carried as written until the metal provider ports their schema
+    (role, redfish, disk, network, interfaces, bmc, servers); the loader checks
+    only the section and group shape, so a mixed or metal-only cluster parses.
+    """
+
+    groups: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class L2Network:
     """One layer-2 network the nodes sit on, described the same way everywhere.
 
@@ -291,7 +305,9 @@ class Config:
     controlplane: dict[str, Any]       # count / provider sizing / disk
     workers: dict[str, dict[str, Any]] # pool -> count / provider sizing / disk / overrides
 
-    provider: ProviderConfig
+    provider: ProviderConfig | None
+    # bare-metal groups joined alongside (or instead of) the VM provider
+    metal: MetalConfig | None
 
     network: NetworkConfig
 
@@ -328,7 +344,12 @@ class Config:
 
     @property
     def provider_name(self) -> str:
-        return "openstack" if isinstance(self.provider, OpenStackConfig) else "proxmox"
+        """The VM provider's name, or an empty string on a metal-only cluster."""
+        if isinstance(self.provider, OpenStackConfig):
+            return "openstack"
+        if isinstance(self.provider, ProxmoxConfig):
+            return "proxmox"
+        return ""
 
     @property
     def openstack_url(self) -> str:
@@ -710,39 +731,73 @@ def _security_rules(security: dict[str, Any], where: str) -> dict[str, SecurityR
     return rules
 
 
-def _provider_config(d: dict[str, Any], where: str) -> ProviderConfig:
-    selected = [name for name in ("openstack", "proxmox") if name in d]
-    if len(selected) != 1:
+def _metal_config(d: dict[str, Any], where: str) -> MetalConfig:
+    """The `metal:` section, carried verbatim until the metal provider lands."""
+    raw = _mapping(d.get("metal"), f"{where}: metal")
+    groups: dict[str, dict[str, Any]] = {}
+    for name, group in raw.items():
+        if not isinstance(name, str) or not name:
+            raise ConfigError(f"{where}: metal group names must be non-empty strings")
+        groups[name] = _mapping(group, f"{where}: metal.{name}")
+    return MetalConfig(groups=groups)
+
+
+def _provider_config(
+    d: dict[str, Any], where: str
+) -> tuple[ProviderConfig | None, MetalConfig | None]:
+    """The selected VM provider plus the optional `metal` section.
+
+    One VM provider (openstack or proxmox) may carry a `metal` section beside
+    it, or `metal` may stand alone; which machines land on which side is a
+    per-pool decision the rest of the config is not asked to make yet.
+    """
+    vm = [name for name in ("openstack", "proxmox") if name in d]
+    if len(vm) > 1:
         raise ConfigError(
-            f"{where}: exactly one provider section is required: openstack or proxmox"
+            f"{where}: at most one VM provider section is allowed: openstack or proxmox"
+        )
+    if not vm and "metal" not in d:
+        raise ConfigError(
+            f"{where}: one provider section is required: openstack, proxmox or metal"
         )
 
-    name = selected[0]
-    provider = _mapping(d[name], f"{where}: {name}")
-    _reject_unknown_keys(provider, f"{where}: {name}", _PROVIDER_KEYS[name])
-    if name == "openstack":
-        return OpenStackConfig(
-            url=require(provider, "url", where=f"{where}: openstack"),
-            availability_zone=require(
-                provider, "availability_zone", where=f"{where}: openstack"
-            ),
-            external_net=require(provider, "external_net", where=f"{where}: openstack"),
-            region=str(provider.get("region") or "RegionOne"),
-            credential_id=provider.get("credential_id") or "",
-            credential_secret=provider.get("credential_secret") or "",
-        )
-    return ProxmoxConfig(
-        url=require(provider, "url", where=f"{where}: proxmox"),
-        storage=str(provider.get("storage") or ""),
-        iso_storage=str(provider.get("iso_storage") or ""),
-        cidata_storage=str(provider.get("cidata_storage") or "local"),
-        placement_strategy=str(provider.get("placement_strategy") or "spread"),
-        nodes=tuple(_string_list(provider.get("nodes"), f"{where}: proxmox.nodes")),
-        tls_verify=provider.get("tls_verify", True),
-        network=_mapping(provider.get("network"), f"{where}: proxmox.network"),
-        token_id=provider.get("token_id") or "",
-        token_secret=provider.get("token_secret") or "",
-    )
+    provider: ProviderConfig | None = None
+    if vm:
+        name = vm[0]
+        provider_map = _mapping(d[name], f"{where}: {name}")
+        _reject_unknown_keys(provider_map, f"{where}: {name}", _PROVIDER_KEYS[name])
+        if name == "openstack":
+            provider = OpenStackConfig(
+                url=require(provider_map, "url", where=f"{where}: openstack"),
+                availability_zone=require(
+                    provider_map, "availability_zone", where=f"{where}: openstack"
+                ),
+                external_net=require(
+                    provider_map, "external_net", where=f"{where}: openstack"
+                ),
+                region=str(provider_map.get("region") or "RegionOne"),
+                credential_id=provider_map.get("credential_id") or "",
+                credential_secret=provider_map.get("credential_secret") or "",
+            )
+        else:
+            provider = ProxmoxConfig(
+                url=require(provider_map, "url", where=f"{where}: proxmox"),
+                storage=str(provider_map.get("storage") or ""),
+                iso_storage=str(provider_map.get("iso_storage") or ""),
+                cidata_storage=str(provider_map.get("cidata_storage") or "local"),
+                placement_strategy=str(
+                    provider_map.get("placement_strategy") or "spread"
+                ),
+                nodes=tuple(
+                    _string_list(provider_map.get("nodes"), f"{where}: proxmox.nodes")
+                ),
+                tls_verify=provider_map.get("tls_verify", True),
+                network=_mapping(provider_map.get("network"), f"{where}: proxmox.network"),
+                token_id=provider_map.get("token_id") or "",
+                token_secret=provider_map.get("token_secret") or "",
+            )
+    metal = _metal_config(d, where) if "metal" in d else None
+    return provider, metal
 
 
 def _ipv4_network(value: Any, where: str, *, strict: bool = True) -> ipaddress.IPv4Network:
@@ -931,6 +986,7 @@ def load_config(root: Path) -> Config:
     network = _network_config(d, where)
     _reject_unknown_keys(_mapping(d.get("kubernetes"), f"{where}: kubernetes"),
                          f"{where}: kubernetes", _KUBERNETES_KEYS)
+    provider, metal = _provider_config(d, where)
     cfg = Config(
         name=require(d, "name", where=where),
         talos_version=require(d, "talos", "version", where=where),
@@ -942,7 +998,8 @@ def load_config(root: Path) -> Config:
         tags=tags,
         controlplane=controlplane,
         workers=workers,
-        provider=_provider_config(d, where),
+        provider=provider,
+        metal=metal,
         network=network,
         security=_security_rules(security, where),
         login_server=tailscale.get("login_server"),
@@ -1120,11 +1177,13 @@ def _validate(cfg: Config) -> None:
             raise ConfigError(f"worker pool name {pool_name!r} is not a valid hostname component")
         if not isinstance(p, dict):
             raise ConfigError(f"pool '{pool_name}' must be a YAML mapping")
-        required = (
-            ("count", "flavor", "disk")
-            if isinstance(cfg.provider, OpenStackConfig)
-            else ("count", "cores", "memory", "disk")
-        )
+        if isinstance(cfg.provider, OpenStackConfig):
+            required: tuple[str, ...] = ("count", "flavor", "disk")
+        elif isinstance(cfg.provider, ProxmoxConfig):
+            required = ("count", "cores", "memory", "disk")
+        else:
+            # metal alone: neither VM provider's sizing keys apply
+            required = ("count", "disk")
         for key in required:
             if key not in p:
                 raise ConfigError(f"pool '{pool_name}' missing '{key}'")
@@ -1136,7 +1195,7 @@ def _validate(cfg: Config) -> None:
         if isinstance(cfg.provider, OpenStackConfig):
             if not isinstance(p["flavor"], str) or not p["flavor"].strip():
                 raise ConfigError(f"pool '{pool_name}': 'flavor' must be a non-empty string")
-        else:
+        elif isinstance(cfg.provider, ProxmoxConfig):
             if _int(p["cores"], "cores", f"pool '{pool_name}'") <= 0:
                 raise ConfigError(f"pool '{pool_name}': 'cores' must be greater than zero")
             if _int(p["memory"], "memory", f"pool '{pool_name}'") <= 0:
@@ -1161,13 +1220,15 @@ def _validate(cfg: Config) -> None:
     # already validated as an IPv4 network when the block was parsed
     network = ipaddress.ip_network(cfg.network.cluster.cidr, strict=True)
 
-    provider_fields = (
-        (("openstack.url", cfg.provider.url),
-         ("openstack.availability_zone", cfg.provider.availability_zone),
-         ("openstack.external_net", cfg.provider.external_net))
-        if isinstance(cfg.provider, OpenStackConfig)
-        else (("proxmox.url", cfg.provider.url),)
-    )
+    provider_fields: tuple[tuple[str, str], ...] = ()
+    if isinstance(cfg.provider, OpenStackConfig):
+        provider_fields = (
+            ("openstack.url", cfg.provider.url),
+            ("openstack.availability_zone", cfg.provider.availability_zone),
+            ("openstack.external_net", cfg.provider.external_net),
+        )
+    elif isinstance(cfg.provider, ProxmoxConfig):
+        provider_fields = (("proxmox.url", cfg.provider.url),)
     for field_name, value in provider_fields:
         if not isinstance(value, str) or not value.strip():
             raise ConfigError(f"cluster.yaml: {field_name} must be a non-empty string")
