@@ -2,7 +2,7 @@
 
 Back to the [configuration index](../configuration.md).
 
-A `metal:` section brings bare-metal machines into the cluster. It may sit beside the one [OpenStack](openstack.md) or [Proxmox](proxmox.md) section — VMs and bare metal sharing one cluster — or stand alone when every machine is bare metal; at most one VM provider may be set, with or without `metal`.
+A `metal:` section brings bare-metal machines into the cluster. It may sit beside the one [OpenStack](openstack.md) or [Proxmox](proxmox.md) section — VMs and bare metal sharing one cluster — or stand alone when every machine is bare metal; at most one VM provider may be set, with or without `metal`. `taloscluster init --metal` scaffolds the example group below, beside a provider or instead of one, with the group's BMC credentials as `CHANGE-ME` placeholders in `secrets.yaml`.
 
 ## `metal`
 
@@ -101,7 +101,7 @@ The VLAN id tagged on an `external` link's VLAN child, instead of the external n
 
 Optional · mapping
 
-The Redfish settings every machine in the group starts from: `ip` (the BMC's IPv4 address), `username` and `password`. The credentials are ordinary cluster settings: like every other key they may live in `secrets.yaml` or any included file instead of `cluster.yaml`. A [`redfish`](#metalgroupredfish) group must end up with a real `username` and `password` for every machine once each server's overrides merge in — an empty or still-scaffolded `CHANGE-ME` value refuses to load.
+The Redfish settings every machine in the group starts from: `ip` (the BMC's IPv4 address), `username` and `password`. The credentials are ordinary cluster settings: like every other key they may live in `secrets.yaml` or any included file instead of `cluster.yaml` — where `init --metal` scaffolds them. A [`redfish`](#metalgroupredfish) group must end up with a real `username` and `password` for every machine once each server's overrides merge in — an empty or still-scaffolded `CHANGE-ME` value refuses to load.
 
 ### `metal.<group>.servers`
 

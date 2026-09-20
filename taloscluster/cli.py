@@ -1,6 +1,6 @@
 """taloscluster command-line entrypoint.
 
-    taloscluster init [--openstack|--proxmox] [NAME] # scaffold provider configuration
+    taloscluster init [--openstack|--proxmox] [--metal] [NAME] # scaffold provider configuration
     taloscluster converge [--dry-run] [--yes]   # make the cluster match cluster.yaml
     taloscluster sync / apply                   # aliases for converge
     taloscluster plan                           # dry-run converge: print what would change
@@ -47,7 +47,7 @@ def _add_common(p: argparse.ArgumentParser) -> None:
 
 
 def _cmd_init(args, root):
-    _scaffold.init(root, name=args.name, provider=args.provider)
+    _scaffold.init(root, name=args.name, provider=args.provider, metal=args.metal)
 
 
 def _cmd_converge(args, root):
@@ -212,10 +212,12 @@ def main(argv: list[str] | None = None) -> int:
         help="scaffold cluster.yaml, secrets.yaml and .gitignore in a new directory",
         description="Write provider-specific cluster.yaml and secrets.yaml templates plus a "
                     ".gitignore covering the secret/derived files (secrets.yaml, "
-                    "talossecrets.yaml, talosconfig, kubeconfig). Never overwrites "
-                    "an existing cluster.yaml or secrets.yaml; an existing "
-                    ".gitignore only gets the entries it is missing. Edit both "
-                    "files, then run `taloscluster plan`.",
+                    "talossecrets.yaml, talosconfig, kubeconfig). --metal appends a "
+                    "bare-metal `metal:` example and its BMC credential placeholders; "
+                    "without a provider flag it scaffolds an all-bare-metal cluster. "
+                    "Never overwrites an existing cluster.yaml or secrets.yaml; an "
+                    "existing .gitignore only gets the entries it is missing. Edit "
+                    "both files, then run `taloscluster plan`.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common(p_init)
@@ -232,7 +234,12 @@ def main(argv: list[str] | None = None) -> int:
         "--proxmox", dest="provider", action="store_const", const="proxmox",
         help="write Proxmox compute, network, storage and API-token sections",
     )
-    p_init.set_defaults(func=_cmd_init, provider="openstack")
+    p_init.add_argument(
+        "--metal", action="store_true",
+        help="also append a bare-metal `metal:` section and its BMC credential "
+             "block; alone, metal replaces the VM provider",
+    )
+    p_init.set_defaults(func=_cmd_init, provider=None)
 
     p_con = sub.add_parser(
         "converge",

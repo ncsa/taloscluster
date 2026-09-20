@@ -131,6 +131,60 @@ def test_openstack_templates_remain_the_default(tmp_path):
         assert cfg.openstack_credentials
 
 
+def test_plain_init_has_no_metal_section(tmp_path):
+    init(tmp_path, name="demo")
+    cluster = yaml.safe_load((tmp_path / "cluster.yaml").read_text())
+    secrets = yaml.safe_load((tmp_path / "secrets.yaml").read_text())
+    assert "metal" not in cluster
+    assert "metal" not in secrets
+    assert load_config(tmp_path).metal is None
+
+
+@pytest.mark.parametrize("provider", [None, "openstack", "proxmox"])
+def test_metal_scaffold_produces_a_loadable_pair(tmp_path, provider):
+    init(tmp_path, name="demo", provider=provider, metal=True)
+
+    cluster = yaml.safe_load((tmp_path / "cluster.yaml").read_text())
+    secrets = yaml.safe_load((tmp_path / "secrets.yaml").read_text())
+
+    # one example group carrying the settings every group needs
+    group = cluster["metal"]["phoenix"]
+    assert group["role"] == "worker"
+    # redfish starts false so the placeholder BMC credentials still load
+    assert group["redfish"] is False
+    assert group["disk"]
+    assert group["network"]["cidr"]
+    assert group["interfaces"]
+    assert group["servers"]
+    # the BMC credentials are scaffolded into secrets.yaml, not cluster.yaml
+    assert secrets["metal"]["phoenix"]["bmc"] == {
+        "username": "CHANGE-ME",
+        "password": "CHANGE-ME",
+    }
+    assert "bmc" not in group
+
+    cfg = load_config(tmp_path)
+    assert cfg.provider_name == (provider or "")
+    assert cfg.metal.groups["phoenix"].servers["rp001"].bmc.username == "CHANGE-ME"
+    if provider is None:
+        # metal alone: no VM provider section, the pools carry count+disk only
+        assert "openstack" not in cluster and "proxmox" not in cluster
+        assert "openstack" not in secrets and "proxmox" not in secrets
+        assert cluster["network"]["cluster"]["kubeapi_vip"]
+
+
+def test_metal_init_mentions_include_in_the_next_steps(tmp_path, capsys):
+    init(tmp_path, name="demo", metal=True)
+    assert "include:" in capsys.readouterr().out
+
+
+def test_metal_init_never_duplicates_the_section(tmp_path):
+    init(tmp_path, name="demo", metal=True)
+    init(tmp_path, name="demo", metal=True)
+    text = (tmp_path / "cluster.yaml").read_text()
+    assert text.count("metal:") == 1
+
+
 def test_init_never_overwrites_existing_files(tmp_path):
     (tmp_path / "cluster.yaml").write_text("name: keepme\n")
     (tmp_path / "secrets.yaml").write_text("openstack: {}\n")

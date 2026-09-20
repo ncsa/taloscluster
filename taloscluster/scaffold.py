@@ -4,8 +4,8 @@ Writes the two files a cluster needs before the first converge — cluster.yaml
 (desired state, committable) and secrets.yaml (credentials, gitignored, 0600) —
 plus a .gitignore that keeps the secret/derived files out of git. Existing
 cluster.yaml / secrets.yaml keep their content and receive only missing sections
-from installed plugins; an existing .gitignore is appended to only with entries
-it is missing.
+from installed plugins (and, with --metal, the bare-metal section); an existing
+.gitignore is appended to only with entries it is missing.
 """
 
 from __future__ import annotations
@@ -145,6 +145,56 @@ proxmox:
     },
 }
 
+# `init --metal` with no provider flag: an all-bare-metal cluster has no VM
+# provider section and no VM sizing keys, and carries the kube-api VIP itself
+# (there is no provider to allocate the API address).
+METAL_ONLY_TEMPLATE = {
+    "controlplane_sizing": "  # bare metal: the hardware is the sizing",
+    "worker_sizing": "    # bare metal: the hardware is the sizing",
+    "network_cluster": """
+    # the kube-api VIP: a free address on this L2, outside any DHCP range
+    kubeapi_vip: 192.168.0.2""",
+    "cluster": """\
+# no VM provider: every machine of this cluster is bare metal, listed in the
+# `metal:` section at the end of this file. Add an `openstack:` or `proxmox:`
+# section to run VMs beside them.""",
+    "secrets": "",
+}
+
+# the bare-metal section `init --metal` appends: one example group with one
+# server. `redfish` starts false so the scaffolded pair loads with the
+# placeholder BMC credentials still in secrets.yaml.
+METAL_CLUSTER_SECTION = """\
+# bare-metal machines, joined with `taloscluster metal join`; each group is the
+# defaults its servers start from, and each server overrides its own
+metal:
+  phoenix:
+    role: worker
+    redfish: false # set true once the BMC credentials in secrets.yaml are real
+    disk: /dev/sda
+    network: # optional; omit to sit on network.cluster
+      cidr: 192.168.8.0/24
+      gateway: 192.168.8.1
+    interfaces:
+      enp1s0f0: { role: pxe }
+      enp2s0f0: { role: cluster }
+    servers:
+      rp001:
+        bmc: { ip: 192.168.8.51 }
+        interfaces:
+          enp2s0f0: { ip: 192.168.8.11/24 }
+"""
+
+METAL_SECRETS_SECTION = """\
+# bare-metal BMC credentials, per group; real values are required before a
+# group's `redfish: true` will load
+metal:
+  phoenix:
+    bmc:
+      username: "CHANGE-ME"
+      password: "CHANGE-ME"
+"""
+
 # everything a cluster directory produces that must never reach git
 GITIGNORE_ENTRIES = (
     SECRETS_FILE,             # secrets.yaml
@@ -154,12 +204,23 @@ GITIGNORE_ENTRIES = (
 )
 
 
-def init(root: Path, name: str, provider: str = "openstack") -> None:
-    """Create provider-specific cluster.yaml and secrets.yaml plus .gitignore."""
-    try:
-        template = PROVIDER_TEMPLATES[provider]
-    except KeyError as e:
-        raise ValueError(f"unsupported provider: {provider}") from e
+def init(
+    root: Path, name: str, provider: str | None = "openstack", metal: bool = False
+) -> None:
+    """Create provider-specific cluster.yaml and secrets.yaml plus .gitignore.
+
+    `metal` appends the bare-metal section templates; with no provider it
+    scaffolds an all-bare-metal cluster instead.
+    """
+    if provider is None and not metal:
+        provider = "openstack"
+    if provider is None:
+        template = METAL_ONLY_TEMPLATE
+    else:
+        try:
+            template = PROVIDER_TEMPLATES[provider]
+        except KeyError as e:
+            raise ValueError(f"unsupported provider: {provider}") from e
 
     root.mkdir(parents=True, exist_ok=True)
 
@@ -188,17 +249,29 @@ def init(root: Path, name: str, provider: str = "openstack") -> None:
         os.chmod(secrets, 0o600)
         info(f"wrote {SECRETS_FILE} (mode 0600)")
 
+    if metal:
+        add_yaml_section(cluster, "metal", METAL_CLUSTER_SECTION)
+        add_yaml_section(secrets, "metal", METAL_SECRETS_SECTION)
+
     _plugins.initialize(root)
     _ensure_gitignore(root)
 
     log("next steps")
-    credential = (
-        "openstack application credential"
-        if provider == "openstack"
-        else "proxmox api token"
-    )
-    info(f"1. edit {SECRETS_FILE}: {credential} + tailscale key")
-    info(f"2. edit {CLUSTER_FILE}: name, versions, pools, {provider} settings, allowlists")
+    credentials = []
+    if provider == "openstack":
+        credentials.append("openstack application credential")
+    elif provider == "proxmox":
+        credentials.append("proxmox api token")
+    if metal:
+        credentials.append("metal BMC credentials")
+    credentials.append("tailscale key")
+    info(f"1. edit {SECRETS_FILE}: {' + '.join(credentials)}")
+    if provider:
+        info(f"2. edit {CLUSTER_FILE}: name, versions, pools, {provider} settings, allowlists")
+    else:
+        info(f"2. edit {CLUSTER_FILE}: name, versions, pools, machines, allowlists")
+    if metal:
+        info("   (a long machine list can move into a file `include:` names)")
     info("3. taloscluster plan      # dry-run, changes nothing")
     info("4. taloscluster converge  # create the cluster")
 

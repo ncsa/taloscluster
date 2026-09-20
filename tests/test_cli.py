@@ -24,19 +24,44 @@ def _stub_plugin(name, **hooks):
 
 @pytest.mark.parametrize(
     ("provider_option", "expected"),
-    [([], "openstack"), (["--openstack"], "openstack"), (["--proxmox"], "proxmox")],
+    [([], None), (["--openstack"], "openstack"), (["--proxmox"], "proxmox")],
 )
 def test_init_selects_provider(monkeypatch, tmp_path, provider_option, expected):
+    """The provider flag is forwarded verbatim; with none given the scaffold
+    applies the OpenStack default (None means metal-only under `--metal`)."""
     seen = {}
 
-    def init(root, name, provider):
-        seen.update(root=root, name=name, provider=provider)
+    def init(root, name, provider, metal):
+        seen.update(root=root, name=name, provider=provider, metal=metal)
 
     monkeypatch.setattr(cli._scaffold, "init", init)
 
     argv = ["init", "demo", "-C", str(tmp_path), *provider_option]
     assert cli.main(argv) == 0
-    assert seen == {"root": tmp_path, "name": "demo", "provider": expected}
+    assert seen == {
+        "root": tmp_path, "name": "demo", "provider": expected, "metal": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("provider_option", "expected"),
+    [([], None), (["--openstack"], "openstack"), (["--proxmox"], "proxmox")],
+)
+def test_init_forwards_metal(monkeypatch, tmp_path, provider_option, expected):
+    """`--metal` is additive to either provider and stands alone: with no
+    provider flag the scaffold is metal-only (provider None)."""
+    seen = {}
+
+    def init(root, name, provider, metal):
+        seen.update(root=root, name=name, provider=provider, metal=metal)
+
+    monkeypatch.setattr(cli._scaffold, "init", init)
+
+    argv = ["init", "demo", "-C", str(tmp_path), "--metal", *provider_option]
+    assert cli.main(argv) == 0
+    assert seen == {
+        "root": tmp_path, "name": "demo", "provider": expected, "metal": True,
+    }
 
 
 def test_init_provider_flags_are_mutually_exclusive(tmp_path):
