@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Add `metal` commands that inspect, boot, wait, apply, eject and join bare-metal machines.
+- Add `metal` commands that inspect, boot, wait, apply, eject and join bare-metal machines, skipping the BMC when redfish is disabled.
 - Accept a `metal` section defining bare-metal machine groups, requiring real BMC credentials for every machine in a `redfish` group, alongside one VM provider, or alone for all-bare-metal clusters.
 - Add `link_name` and `vlan` overrides to metal interfaces for the generated external VLAN child link.
 - Enable KubeSpan by default, sized to the L2 MTU, excluding the external network from endpoints, and required for metal groups on another L2.

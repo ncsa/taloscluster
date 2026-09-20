@@ -45,7 +45,7 @@ The Kubernetes role of every machine in the group; a server may override it.
 
 Optional · boolean · default `false`
 
-Whether taloscluster may talk to the machines' BMCs. Redfish is how the machines are powered and booted from their install media; `false` never touches the BMC, so the operator boots the machines into maintenance mode themselves. Enabling it requires real BMC credentials for every machine in the group; see [`metal.<group>.bmc`](#metalgroupbmc).
+Whether taloscluster may talk to the machines' BMCs. Redfish is how the machines are powered and booted from their install media; `false` never touches the BMC, so the operator boots the machines into maintenance mode themselves (PXE, USB) and [`join`](../commands.md#metal) becomes wait, apply and verify, while `inspect`, `boot` and `eject` skip the BMC with a notice. Enabling it requires real BMC credentials for every machine in the group; see [`metal.<group>.bmc`](#metalgroupbmc).
 
 ### `metal.<group>.disk`
 

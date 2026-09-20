@@ -134,11 +134,12 @@ def test_cluster_ip_requires_a_static_address(make_config):
         commands._cluster_ip(server, cfg)
 
 
-def test_bmc_refuses_a_redfish_disabled_server(make_config):
+def test_bmc_skips_a_redfish_disabled_server(make_config, capsys):
+    """`redfish: false` never constructs a client: None plus the notice."""
     metal = {**GROUP, "redfish": False}
     server = commands._find_server(_cfg(make_config, metal), "rp001")
-    with pytest.raises(ReconcileError, match="redfish disabled"):
-        commands._bmc(server)
+    assert commands._bmc(server) is None
+    assert "redfish disabled" in capsys.readouterr().out
 
 
 def test_bmc_refuses_a_server_without_a_bmc_address(make_config):
@@ -171,6 +172,16 @@ def test_inspect_prints_the_redfish_summary(make_config, tmp_path, fake_redfish,
     assert "power: On" in out
     assert "02:00:00:00:00:01" in out
     assert "ST600MM0009" in out
+
+
+def test_inspect_skips_a_redfish_disabled_group(
+    make_config, tmp_path, fake_redfish, capsys
+):
+    metal = {**GROUP, "redfish": False}
+    _cfg(make_config, metal)
+    commands.inspect(tmp_path, "rp001")
+    assert fake_redfish == []
+    assert "redfish disabled" in capsys.readouterr().out
 
 
 def test_boot_mounts_one_time_boots_and_powers_on(
@@ -245,6 +256,20 @@ def test_boot_serve_keeps_serving_until_interrupted(
         commands.boot(tmp_path, "rp001", serve=True)
 
 
+def test_boot_skips_a_server_that_turns_redfish_off(
+    make_config, tmp_path, fake_redfish, capsys
+):
+    """A server may opt out of its group's redfish; the merged flag decides."""
+    metal = {
+        **GROUP,
+        "servers": {"rp001": {"redfish": False, "bmc": {"ip": "198.51.100.10"}}},
+    }
+    _cfg(make_config, metal)
+    commands.boot(tmp_path, "rp001")
+    assert fake_redfish == []
+    assert "redfish disabled" in capsys.readouterr().out
+
+
 def test_wait_polls_the_maintenance_apid(make_config, tmp_path, monkeypatch):
     _cfg(make_config)
     answers = iter([False, False, True])
@@ -295,6 +320,16 @@ def test_eject_reports_when_nothing_is_mounted(
     _cfg(make_config)
     commands.eject(tmp_path, "rp001")
     assert "no virtual media mounted" in capsys.readouterr().out
+
+
+def test_eject_skips_a_redfish_disabled_group(
+    make_config, tmp_path, fake_redfish, capsys
+):
+    metal = {**GROUP, "redfish": False}
+    _cfg(make_config, metal)
+    commands.eject(tmp_path, "rp001")
+    assert fake_redfish == []
+    assert "redfish disabled" in capsys.readouterr().out
 
 
 def test_verify_waits_for_the_configured_node(
@@ -367,6 +402,23 @@ def test_join_runs_the_flow_in_order(make_config, tmp_path, monkeypatch):
     commands.join(tmp_path, "rp001", serve=True)
     assert order == [("boot", True), ("wait", None), ("apply", None),
                      ("eject", None), ("verify", None)]
+
+
+def test_join_without_redfish_is_wait_apply_verify(
+    make_config, tmp_path, monkeypatch, fake_redfish, capsys
+):
+    """A redfish-off machine's BMC is never touched: no boot, no eject."""
+    metal = {**GROUP, "redfish": False}
+    _cfg(make_config, metal)
+    order = []
+    for step in ("wait", "apply", "verify"):
+        monkeypatch.setattr(
+            commands, step, lambda root, name, step=step: order.append(step)
+        )
+    commands.join(tmp_path, "rp001")
+    assert order == ["wait", "apply", "verify"]
+    assert fake_redfish == []
+    assert "redfish disabled" in capsys.readouterr().out
 
 
 def test_join_refuses_a_machine_that_is_already_configured(

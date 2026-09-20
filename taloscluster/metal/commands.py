@@ -8,6 +8,8 @@ the machine's cluster address; `apply` generates the machine config and pushes
 it to the maintenance-mode node; `eject` unmounts the media; `verify` waits
 for the node to come back with its configuration. `join` runs the five in
 order, and `inspect` prints a Redfish summary of power, boot, NICs and disks.
+A machine whose redfish is off never touches its BMC: `join` becomes wait,
+apply and verify, and the BMC-only commands skip with a notice.
 
 The BMC is only ever asked to mount media, one-time boot it and manage power:
 no BIOS boot-mode changes and no boot-order manipulation. After the one-time
@@ -65,14 +67,23 @@ def _find_server(cfg: Config, name: str) -> MetalServer:
     )
 
 
-def _bmc(server: MetalServer) -> redfish.Redfish:
-    """The Redfish client for one machine's controller."""
+def _no_bmc(server: MetalServer) -> None:
+    """The notice that a machine's BMC is left alone: its redfish is off."""
+    info(
+        f"metal server {server.name} has redfish disabled, so its BMC is "
+        "never touched; boot the machine into maintenance mode yourself"
+    )
+
+
+def _bmc(server: MetalServer) -> redfish.Redfish | None:
+    """The Redfish client for one machine's controller.
+
+    A machine whose redfish is off never touches its BMC: the caller gets
+    None after the notice, and skips whatever it needed the BMC for.
+    """
     if not server.redfish:
-        raise ReconcileError(
-            f"metal server {server.name} has redfish disabled, so its BMC is "
-            "never touched; boot the machine into maintenance mode yourself "
-            "and use the commands that do not need the BMC"
-        )
+        _no_bmc(server)
+        return None
     if not server.bmc.ip:
         raise ReconcileError(
             f"metal server {server.name} has no bmc.ip to talk to"
@@ -118,6 +129,8 @@ def inspect(root: Path, name: str) -> None:
     cfg = load_config(root)
     server = _find_server(cfg, name)
     rf = _bmc(server)
+    if rf is None:
+        return
     report({name: rf.summary()})
 
 
@@ -133,6 +146,8 @@ def boot(root: Path, name: str, *, serve: bool = False, foreground: bool = True)
     cfg = load_config(root)
     server = _find_server(cfg, name)
     rf = _bmc(server)
+    if rf is None:
+        return
     iso_url = _iso_url(cfg)
     if rf.eject_media():
         info(f"ejected the media already mounted on {server.bmc.ip}")
@@ -203,6 +218,8 @@ def eject(root: Path, name: str) -> None:
     cfg = load_config(root)
     server = _find_server(cfg, name)
     rf = _bmc(server)
+    if rf is None:
+        return
     action(f"eject the virtual media of {server.bmc.ip}")
     if rf.eject_media():
         info(f"virtual media ejected from {server.bmc.ip}")
@@ -256,14 +273,23 @@ def _wait_configured(server: MetalServer, ip: str, talosconfig: Path,
 
 
 def join(root: Path, name: str, *, serve: bool = False) -> None:
-    """The whole flow: boot, wait, apply, eject, verify."""
+    """The whole flow: boot, wait, apply, eject, verify.
+
+    A machine whose redfish is off is never touched through its BMC: the
+    flow becomes wait, apply, verify, for a machine the operator booted
+    into maintenance mode by other means.
+    """
     cfg = load_config(root)
     server = _find_server(cfg, name)
     _refuse_joined(root, cfg, server)
-    boot(root, name, serve=serve, foreground=False)
+    if server.redfish:
+        boot(root, name, serve=serve, foreground=False)
+    else:
+        _no_bmc(server)
     wait(root, name)
     apply(root, name)
-    eject(root, name)
+    if server.redfish:
+        eject(root, name)
     verify(root, name)
 
 
