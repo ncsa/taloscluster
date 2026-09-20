@@ -166,17 +166,19 @@ def _tailscale_patch(m: Machine, cfg: Config, auth_key: str) -> dict:
 KUBESPAN_MTU_OVERHEAD = 80
 
 
-def _kubespan_patch(cfg: Config) -> dict:
+def _kubespan_patch(cfg: Config, mtu: int | None = None) -> dict:
     """machine.network.kubespan when `talos.kubespan` is on (the default).
 
-    The WireGuard MTU is the node L2's MTU minus the WireGuard overhead, and a
+    The WireGuard MTU is the node L2's MTU minus the WireGuard overhead (`mtu`
+    overrides the cluster L2's, for a node sitting on a different one), and a
     configured `network.external` is excluded from endpoint discovery so
     KubeSpan never advertises or picks an address on the external network as a
     peer endpoint.
     """
     kubespan: dict = {
         "enabled": True,
-        "mtu": cfg.network.cluster.mtu - KUBESPAN_MTU_OVERHEAD,
+        "mtu": (mtu if mtu is not None else cfg.network.cluster.mtu)
+        - KUBESPAN_MTU_OVERHEAD,
     }
     if cfg.network.external is not None:
         kubespan["filters"] = {

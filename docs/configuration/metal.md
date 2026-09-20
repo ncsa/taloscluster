@@ -71,17 +71,31 @@ Required · `cluster`, `external`, `pxe`, or a list of those
 
 What the link is for: `pxe` is the boot/maintenance link, `cluster` carries the [`network.cluster`](network.md#networkcluster) node network and `external` the [`network.external`](network.md#networkexternal) one. One interface may carry several roles as a list — a NIC that sits on both the cluster and the external network is `[cluster, external]`.
 
+The roles decide what the generated machine configuration puts on the link. Every link states `dhcp: false`, so nothing picks up an unexpected lease. A `cluster` link carries its static address and the default route via the group network's gateway; a jumbo group network states the MTU on the link and clamps the route to 1500. An `external` link's configuration rides a VLAN child of the port, created on top of the parent: it carries the machine's anchor address from [`network.external.anchor_cidr`](network.md#networkexternalanchor_cidr) and the routes to the external network. A `pxe` link carries nothing else — it exists so the machine can boot and be reached in maintenance mode.
+
 ### `metal.<group>.interfaces.<name>.ip`
 
 Optional · IPv4 address with an optional `/prefix` · default none
 
-The static address of the link.
+The static address of the link. Without a `/prefix` the link network's prefix length is used. On a link carrying both roles the address belongs to the `cluster` side; a dedicated `external` link's address rides its VLAN child.
 
 ### `metal.<group>.interfaces.<name>.dns`
 
 Optional · list of IP addresses · default none
 
-The resolvers written for this link.
+The resolvers written into the machine's generated configuration; the first interface that sets them wins, since Talos keeps one resolver list per machine. With none set on any interface, [`network.dns`](network.md#networkdns) is used.
+
+### `metal.<group>.interfaces.<name>.link_name`
+
+Optional · non-empty string · default `<interface>.<vlan>`
+
+The name of the VLAN child link an `external` role creates, instead of the default `<interface>.<vlan>`.
+
+### `metal.<group>.interfaces.<name>.vlan`
+
+Optional · integer 1-4094 · default [`network.external.vlan`](network.md#networkexternalvlan)
+
+The VLAN id tagged on an `external` link's VLAN child, instead of the external network's own.
 
 ### `metal.<group>.bmc`
 

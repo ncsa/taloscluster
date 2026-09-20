@@ -708,6 +708,27 @@ def test_metal_server_can_add_an_interface(make_config):
     }
 
 
+def test_metal_interface_can_override_the_vlan_child(make_config):
+    """`link_name` and `vlan` name and tag the external link's VLAN child."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "interfaces": {
+            "enp2s0f0": {"role": ["cluster", "external"], "link_name": "ext0", "vlan": 1600},
+        },
+        "servers": {"rp001": {"interfaces": {"enp2s0f0": {"vlan": 1691}}}},
+    }}})
+
+    group = cfg.metal.groups["phoenix"]
+    assert group.interfaces["enp2s0f0"] == MetalInterface(
+        role=("cluster", "external"), link_name="ext0", vlan=1600,
+    )
+    # the server's own override replaces the group's vlan, keeps its link name
+    assert group.servers["rp001"].interfaces["enp2s0f0"] == MetalInterface(
+        role=("cluster", "external"), link_name="ext0", vlan=1691,
+    )
+
+
 @pytest.mark.parametrize(
     ("metal", "message"),
     [
@@ -807,6 +828,36 @@ def test_metal_server_can_add_an_interface(make_config):
                 }
             },
             r"metal\.worker\.interfaces\.enp1s0f0\.dns contains an invalid address",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "link_name": " "}},
+                }
+            },
+            r"metal\.worker\.interfaces\.enp1s0f0\.link_name must be a non-empty string",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "vlan": 4095}},
+                }
+            },
+            r"metal\.worker\.interfaces\.enp1s0f0\.vlan must be 1-4094",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "vlan": True}},
+                }
+            },
+            r"metal\.worker\.interfaces\.enp1s0f0\.vlan must be 1-4094",
         ),
         (
             {"worker": {"role": "worker", "disk": "/dev/sda", "bmc": {"user": "root"}}},

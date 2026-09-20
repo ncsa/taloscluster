@@ -75,7 +75,7 @@ _METAL_GROUP_KEYS = {"role", "redfish", "disk", "network", "interfaces", "bmc",
 #: may override, minus the servers list itself.
 _METAL_SERVER_KEYS = _METAL_GROUP_KEYS - {"servers"}
 #: Direct keys one `metal.<group>.interfaces` entry accepts.
-_METAL_INTERFACE_KEYS = {"role", "ip", "dns"}
+_METAL_INTERFACE_KEYS = {"role", "ip", "dns", "link_name", "vlan"}
 #: Direct keys a `metal.<group>.bmc` block accepts.
 _METAL_BMC_KEYS = {"ip", "username", "password"}
 #: What an interface's `role` may say, as a bare value or a list of them.
@@ -259,12 +259,17 @@ class MetalInterface:
     """One NIC of a bare-metal machine, keyed by its OS interface name.
 
     `pxe` marks the boot/maintenance link, `cluster` the node L2 and `external`
-    the externally routed one; one interface may carry several roles.
+    the externally routed one; one interface may carry several roles. On an
+    `external` link the generated configuration rides a VLAN child of the
+    parent port, named `link_name` (default `<parent>.<vlan>`) and tagged
+    `vlan` (default `network.external.vlan`).
     """
 
     role: tuple[str, ...] = ()
     ip: str = ""                       # static address, with its prefix length
     dns: tuple[str, ...] = ()
+    link_name: str = ""                # external VLAN child link name override
+    vlan: int | None = None            # external VLAN id override
 
 
 @dataclass(frozen=True)
@@ -943,8 +948,26 @@ def _metal_interfaces(raw: Any, where: str) -> dict[str, MetalInterface]:
             ),
             ip=_metal_address(iface.get("ip"), f"{iwhere}.ip"),
             dns=_metal_resolvers(iface.get("dns"), f"{iwhere}.dns"),
+            link_name=_metal_link_name(iface.get("link_name"), f"{iwhere}.link_name"),
+            vlan=_metal_vlan(iface.get("vlan"), f"{iwhere}.vlan"),
         )
     return interfaces
+
+
+def _metal_link_name(value: Any, where: str) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{where} must be a non-empty string")
+    return value
+
+
+def _metal_vlan(value: Any, where: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 4094:
+        raise ConfigError(f"{where} must be 1-4094")
+    return value
 
 
 def _metal_interface_role(value: Any, where: str) -> tuple[str, ...]:
