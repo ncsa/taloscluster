@@ -37,7 +37,7 @@ _CLUSTER_KEYS = {
 # let load and be silently ignored. Freeform maps are deliberately not
 # enumerated here: `tags`/pool `tags` and security host labels are label maps,
 # and `config_patches` hold freeform YAML documents.
-_TALOS_KEYS = {"version", "extensions", "config_patches"}
+_TALOS_KEYS = {"version", "extensions", "config_patches", "kubespan"}
 _NETWORK_KEYS = {"dns", "ntp", "cluster", "external"}
 #: Direct keys an L2 block (`network.cluster`, `network.external`) accepts.
 _L2_KEYS = {"cidr", "gateway", "vlan", "mtu", "kubeapi_vip"}
@@ -305,6 +305,9 @@ class Config:
     # a `tailscale:` section in cluster.yaml opts the installed system into the
     # tailscale extension; the shared boot ISO always carries it either way
     tailscale_enabled: bool = True
+    # talos.kubespan: true (the default) emits machine.network.kubespan on
+    # every node; false emits no kubespan settings at all
+    kubespan: bool = True
 
     # the merged cluster.yaml + secrets.yaml + include tree: it carries the
     # credentials verbatim, so never print or serialize it
@@ -913,6 +916,7 @@ def load_config(root: Path) -> Config:
 
     talos = _mapping(d.get("talos"), f"{where}: talos")
     _reject_unknown_keys(talos, f"{where}: talos", _TALOS_KEYS)
+    kubespan = talos.get("kubespan")
     controlplane = _mapping(require(d, "controlplane", where=where),
                             f"{where}: controlplane")
     workers = _mapping(d.get("workers"), f"{where}: workers")
@@ -946,6 +950,8 @@ def load_config(root: Path) -> Config:
         # a `tailscale:` section that only secrets.yaml carries is a leftover
         # credential, not a decision to run tailscale on the nodes
         tailscale_enabled="tailscale" in opted_in,
+        # an explicit null is the same as an absent key, as everywhere else
+        kubespan=True if kubespan is None else kubespan,
         raw=d,
     )
     _validate(cfg)
@@ -1102,6 +1108,8 @@ def _validate(cfg: Config) -> None:
             f"cluster.yaml: talos.version must be {MIN_TALOS_VERSION} or newer, "
             f"got {cfg.talos_version}"
         )
+    if not isinstance(cfg.kubespan, bool):
+        raise ConfigError("cluster.yaml: talos.kubespan must be true or false")
 
     if "controlplane" in cfg.workers:
         raise ConfigError("worker pool name 'controlplane' is reserved")

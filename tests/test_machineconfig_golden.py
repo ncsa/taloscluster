@@ -8,7 +8,10 @@ arrives as its own patch document instead of living inside the machine patch;
 the keys are disjoint, so the strategic merge result is identical. The stack is
 pinned for the default MTU and for a jumbo ``network.cluster.mtu``, which states
 the MTU on the eth0 LinkConfig and restates the eth0 default route with an MTU
-of 1500.
+of 1500. A second golden pins the shared stack around the KubeSpan patch: with
+the default ``talos.kubespan`` every node carries it -- the WireGuard MTU (the
+L2 MTU minus overhead) and, when ``network.external`` exists, its networks
+excluded from endpoint discovery -- and ``talos.kubespan: false`` emits none.
 
 Update the golden only when a machine-config change is intended.
 """
@@ -20,7 +23,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from taloscluster.infrastructure import Endpoint
+from taloscluster.infrastructure import Endpoint, TalosContribution
 from taloscluster.openstack import talos
 from taloscluster.talos import machineconfig
 
@@ -86,17 +89,30 @@ def _eth0_docs(cluster_mtu: int | None) -> list[dict]:
     return [link, {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": "eth0"}]
 
 
+def _kubespan_doc(cluster_mtu: int | None) -> dict:
+    """The KubeSpan patch: the WireGuard MTU (L2 MTU minus overhead). OpenStack
+    has no `network.external`, so no endpoint filters."""
+    return {
+        "machine": {"network": {"kubespan": {
+            "enabled": True,
+            "mtu": (cluster_mtu or 1500) - 80,
+        }}}
+    }
+
+
 def _golden(cluster_mtu: int | None) -> dict[str, list]:
     eth0 = _eth0_docs(cluster_mtu)
     cp_eth0 = eth0 + [
         {"apiVersion": "v1alpha1", "kind": "Layer2VIPConfig", "name": VIP, "link": "eth0"}
     ]
+    kubespan = [_kubespan_doc(cluster_mtu)]
     return {
         "testcluster-controlplane-01": [
             [_machine_patch("controlplane", "controlplane")],
             [_named(HOSTNAME_PATCH, "testcluster-controlplane-01")],
             [CLUSTER_PATCH],
             "FIREWALL",
+            kubespan,
             [_named(TAILSCALE_PATCH, "testcluster-controlplane-01")],
             cp_eth0,
         ],
@@ -104,6 +120,7 @@ def _golden(cluster_mtu: int | None) -> dict[str, list]:
             [_machine_patch("worker", "worker")],
             [_named(HOSTNAME_PATCH, "testcluster-worker-01")],
             "FIREWALL",
+            kubespan,
             [_named(TAILSCALE_PATCH, "testcluster-worker-01")],
             eth0,
         ],
@@ -159,5 +176,109 @@ def test_openstack_patch_stack_matches_golden(make_config, monkeypatch, tmp_path
     expected = {
         host: [firewall if patch == "FIREWALL" else patch for patch in stack]
         for host, stack in _golden(cluster_mtu).items()
+    }
+    assert rendered == expected
+
+
+def _kubespan_cfg(make_config, kubespan: bool):
+    """A Proxmox cluster on a jumbo L2 with a routed external network -- the
+    shape where the KubeSpan endpoint filters apply. OpenStack cannot carry
+    `network.external`, so this golden runs on the Proxmox loader shape with
+    the provider contribution left empty (its documents are pinned by
+    tests/test_proxmox_talos.py)."""
+    overrides: dict = {
+        "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+        "workers": {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 50}},
+        "tailscale": {
+            "login_server": "https://headscale.example.com",
+            "auth_key": "tskey-secret",
+        },
+        "network": {
+            "cluster": {"mtu": 9000},
+            "external": {
+                "cidr": "203.0.113.0/24",
+                "gateway": "203.0.113.1",
+                "anchor_cidr": "169.254.40.0/24",
+                "kubeapi_vip": "203.0.113.10",
+            },
+        },
+        "proxmox": {
+            "url": "https://pve.example:8006",
+            "storage": "vms",
+            "iso_storage": "isos",
+            "network": {
+                "cluster": {"bridge": "vmbr0"},
+                "external": {"bridge": "vmbr1"},
+            },
+        },
+    }
+    if not kubespan:
+        overrides["talos"] = {"kubespan": False}
+    return make_config(overrides, remove=("openstack",))
+
+
+def _kubespan_golden(kubespan_enabled: bool) -> dict[str, list]:
+    kubespan: list = []
+    if kubespan_enabled:
+        kubespan = [[{
+            "machine": {"network": {"kubespan": {
+                "enabled": True,
+                "mtu": 8920,
+                "filters": {"endpoints": ["169.254.40.0/24", "203.0.113.0/24"]},
+            }}}
+        }]]
+    return {
+        "testcluster-controlplane-01": [
+            [_machine_patch("controlplane", "controlplane")],
+            [_named(HOSTNAME_PATCH, "testcluster-controlplane-01")],
+            [CLUSTER_PATCH],
+            "FIREWALL",
+            *kubespan,
+            [_named(TAILSCALE_PATCH, "testcluster-controlplane-01")],
+        ],
+        "testcluster-worker-01": [
+            [_machine_patch("worker", "worker")],
+            [_named(HOSTNAME_PATCH, "testcluster-worker-01")],
+            "FIREWALL",
+            *kubespan,
+            [_named(TAILSCALE_PATCH, "testcluster-worker-01")],
+        ],
+    }
+
+
+@pytest.mark.parametrize("kubespan", [True, False], ids=["kubespan-on", "kubespan-off"])
+def test_patch_stack_kubespan_matches_golden(make_config, monkeypatch, tmp_path, kubespan):
+    cfg = _kubespan_cfg(make_config, kubespan)
+    endpoint = Endpoint(vip=VIP, advertised_address=FIP)
+    rendered: dict[str, list[list[dict]]] = {}
+
+    def fake_gen_config(**kwargs):
+        host = Path(kwargs["patches"][0]).name.removesuffix("-machine.yaml")
+        rendered[host] = [
+            list(yaml.safe_load_all(Path(p).read_text())) for p in kwargs["patches"]
+        ]
+        return "CONFIG"
+
+    monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+
+    machineconfig.build_configs(
+        cfg,
+        cfg.machines,
+        endpoint=endpoint,
+        secrets_path=secrets_path,
+        installer_images={ext: INSTALLER for ext in cfg.extension_sets()},
+        contributions={
+            host: TalosContribution(install_disk="/dev/vda") for host in cfg.machines
+        },
+    )
+
+    # the firewall stack is derived from the same security rules on every node;
+    # its content is covered by tests/test_talos_firewall.py
+    firewall = machineconfig._firewall_docs(cfg)
+    expected = {
+        host: [firewall if patch == "FIREWALL" else patch for patch in stack]
+        for host, stack in _kubespan_golden(kubespan).items()
     }
     assert rendered == expected

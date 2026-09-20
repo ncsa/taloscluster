@@ -1,8 +1,9 @@
 """Build each node's Talos machine config.
 
-The four machine-config patches become Python dicts dumped to YAML files and
+The shared machine-config patches become Python dicts dumped to YAML files and
 stacked as `--config-patch` on `talosctl gen config`, in this order:
-  machine -> hostname -> (cluster, controlplane only) -> tailscale -> freeform.
+  machine -> hostname -> (cluster, controlplane only) -> firewall ->
+  (kubespan) -> tailscale -> freeform.
 
 Kept as separate patch files on purpose: hostname (HostnameConfig) and tailscale
 (ExtensionServiceConfig) are their own machine-config documents, and the
@@ -161,6 +162,29 @@ def _tailscale_patch(m: Machine, cfg: Config, auth_key: str) -> dict:
     }
 
 
+# WireGuard overhead KubeSpan subtracts from the layer-2 MTU.
+KUBESPAN_MTU_OVERHEAD = 80
+
+
+def _kubespan_patch(cfg: Config) -> dict:
+    """machine.network.kubespan when `talos.kubespan` is on (the default).
+
+    The WireGuard MTU is the node L2's MTU minus the WireGuard overhead, and a
+    configured `network.external` is excluded from endpoint discovery so
+    KubeSpan never advertises or picks an address on the external network as a
+    peer endpoint.
+    """
+    kubespan: dict = {
+        "enabled": True,
+        "mtu": cfg.network.cluster.mtu - KUBESPAN_MTU_OVERHEAD,
+    }
+    if cfg.network.external is not None:
+        kubespan["filters"] = {
+            "endpoints": [cfg.network.external.anchor_cidr, cfg.network.external.cidr]
+        }
+    return {"machine": {"network": {"kubespan": kubespan}}}
+
+
 # A patch name becomes a filename, so it may only be a plain identifier: a
 # provider is third-party code and must not be able to steer writes out of the
 # temporary workdir.
@@ -261,6 +285,10 @@ def build_configs(
                     _write(workdir, f"{host}-cluster", _cluster_patch(cfg, endpoint))
                 )
             patches.append(_write(workdir, f"{host}-firewall", _firewall_docs(cfg)))
+            if cfg.kubespan:
+                patches.append(
+                    _write(workdir, f"{host}-kubespan", _kubespan_patch(cfg))
+                )
             auth_key = cfg.tailscale_auth_key
             if auth_key and "siderolabs/tailscale" in m.extensions:
                 patches.append(

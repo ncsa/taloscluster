@@ -251,6 +251,20 @@ def test_non_string_kubernetes_version_raises_config_error_not_attribute_error(m
         make_config({"kubernetes": {"version": 1.31}})
 
 
+def test_kubespan_defaults_to_true(make_config):
+    assert make_config().kubespan is True
+
+
+def test_kubespan_can_be_disabled(make_config):
+    cfg = make_config({"talos": {"kubespan": False}})
+    assert cfg.kubespan is False
+
+
+def test_non_bool_kubespan_raises_config_error(make_config):
+    with pytest.raises(ConfigError, match="talos.kubespan must be true or false"):
+        make_config({"talos": {"kubespan": "off"}})
+
+
 # ---------------------------------------------------------------------------
 # validate_warnings
 # ---------------------------------------------------------------------------

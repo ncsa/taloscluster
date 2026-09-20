@@ -190,6 +190,54 @@ def test_tailscale_patch_no_login_server(make_config):
 
 
 # ---------------------------------------------------------------------------
+# _kubespan_patch
+# ---------------------------------------------------------------------------
+
+def test_kubespan_patch_defaults_to_the_l2_mtu_minus_overhead(cfg):
+    patch = machineconfig._kubespan_patch(cfg)
+    assert patch == {
+        "machine": {"network": {"kubespan": {"enabled": True, "mtu": 1420}}}
+    }
+
+
+def test_kubespan_patch_jumbo_mtu_and_external_filters(make_config):
+    """On a jumbo L2 the KubeSpan MTU follows the L2 minus the WireGuard
+    overhead, and the external network is excluded from endpoint discovery."""
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "network": {
+                "cluster": {"mtu": 9000},
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "kubeapi_vip": "203.0.113.10",
+                },
+            },
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"bridge": "vmbr0"},
+                    "external": {"bridge": "vmbr1"},
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+    patch = machineconfig._kubespan_patch(cfg)
+    assert patch == {
+        "machine": {"network": {"kubespan": {
+            "enabled": True,
+            "mtu": 8920,
+            "filters": {"endpoints": ["169.254.40.0/24", "203.0.113.0/24"]},
+        }}}
+    }
+
+
+# ---------------------------------------------------------------------------
 # build_configs
 # ---------------------------------------------------------------------------
 
@@ -331,6 +379,55 @@ def test_build_configs_no_tailscale_patch_when_key_absent(cfg, monkeypatch, tmp_
         assert f"{host}-tailscale.yaml" not in patch_names
 
 
+def test_build_configs_stacks_the_kubespan_patch_on_every_node(cfg, monkeypatch, tmp_path):
+    calls = []
+
+    def fake_gen_config(**kwargs):
+        calls.append(kwargs)
+        return "CONFIG"
+
+    monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
+
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+
+    machineconfig.build_configs(
+        cfg, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
+        secrets_path=secrets_path, installer_images=_installer_images(cfg),
+        contributions=_contributions(cfg),
+    )
+
+    for call, host in zip(calls, cfg.machines.keys(), strict=True):
+        patch_names = [Path(p).name for p in call["patches"]]
+        assert f"{host}-kubespan.yaml" in patch_names
+
+
+def test_build_configs_no_kubespan_patch_when_disabled(
+    make_config, monkeypatch, tmp_path
+):
+    cfg = make_config({"talos": {"kubespan": False}})
+    calls = []
+
+    def fake_gen_config(**kwargs):
+        calls.append(kwargs)
+        return "CONFIG"
+
+    monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
+
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+
+    machineconfig.build_configs(
+        cfg, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
+        secrets_path=secrets_path, installer_images=_installer_images(cfg),
+        contributions=_contributions(cfg),
+    )
+
+    for call in calls:
+        patch_names = [Path(p).name for p in call["patches"]]
+        assert not any(name.endswith("-kubespan.yaml") for name in patch_names)
+
+
 def test_build_configs_cluster_patch_only_for_controlplane(cfg, monkeypatch, tmp_path):
     calls = []
 
@@ -438,7 +535,8 @@ def test_patch_order_is_deterministic(cfg, monkeypatch, tmp_path):
     assert first == second
     cp = first[0]
     assert [n.split("-controlplane-01-")[-1] for n in cp] == [
-        "machine.yaml", "hostname.yaml", "cluster.yaml", "firewall.yaml", "a.yaml", "b.yaml",
+        "machine.yaml", "hostname.yaml", "cluster.yaml", "firewall.yaml",
+        "kubespan.yaml", "a.yaml", "b.yaml",
     ]
 
 

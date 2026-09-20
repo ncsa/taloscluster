@@ -17,6 +17,7 @@ talos:
       machine:
         sysctls:
           vm.max_map_count: "262144"
+  kubespan: true
 
 kubernetes:
   version: v1.36.1
@@ -63,6 +64,12 @@ Extra Talos system extensions merged with the QEMU guest agent, Tailscale when e
 Optional · list of YAML documents as strings · default empty
 
 Freeform machine-config patches applied to every node. Pool-level `config_patches` are applied after these, so a pool patch wins on conflict.
+
+### `talos.kubespan`
+
+Optional · boolean · default `true`
+
+Enables Talos KubeSpan on every node: the machine configuration turns the WireGuard overlay on and sizes its MTU to the node's layer-2 network MTU minus the 80 bytes of WireGuard overhead, so overlay traffic fragments at the same point the underlying network does. When [`network.external`](network.md#networkexternal) is configured, its `anchor_cidr` and `cidr` are excluded from KubeSpan endpoint discovery, so nodes never advertise or pick an external address as a peer endpoint. Set it to `false` to emit no KubeSpan settings and leave the generated configuration without a kubespan section.
 
 ## `kubernetes`
 
