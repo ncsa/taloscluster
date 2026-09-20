@@ -16,6 +16,12 @@ An [OS upgrade](https://docs.siderolabs.com/talos/latest/configure-your-talos-cl
 
 With taloscluster both are a one-line edit. Bump [`talos.version`](../configuration/general.md#talosversion) or [`kubernetes.version`](../configuration/general.md#kubernetesversion) in `cluster.yaml`, run `taloscluster converge`, and existing nodes are upgraded one at a time before any new ones are added. Kubernetes moves one minor at a time and Talos goes first when both change. Talos publishes a [support matrix](https://docs.siderolabs.com/talos/latest/getting-started/support-matrix) of which Kubernetes versions each release supports.
 
+## One pod network across networks
+
+Talos ships [KubeSpan](https://docs.siderolabs.com/talos/latest/networking/kubespan), a WireGuard overlay that taloscluster turns on on every node (see [`talos.kubespan`](../configuration/general.md#taloskubespan)). Each node gets an address on the encrypted overlay, peers find each other through Talos's discovery service, and pod traffic between nodes rides the overlay — which is what lets one cluster span layer-2 networks, VMs on a provider's network and bare metal on its own, wherever an IP route connects the two sides.
+
+KubeSpan carries only that overlay traffic. The Kubernetes API VIP is never on it — the kubelet on every node still reaches `kubeapi_vip` directly — and management traffic follows the [management access path](machines.md#reaching-the-nodes), so a cluster whose nodes sit on more than one network still needs plain routing between them: where the VM provider's network is an overlay the metal side cannot see (Proxmox SDN, OpenStack), the API VIP must be made reachable from the metal L2 with a floating IP or exit-node routing, and nodes with no direct internet access must hand the discovery service a proxy through `machine.env`. The reachability requirements are spelled out under [`talos.kubespan`](../configuration/general.md#taloskubespan).
+
 ## Read more
 
 - [Talos documentation](https://docs.siderolabs.com/talos/latest)

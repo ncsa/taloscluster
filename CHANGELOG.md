@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Enable KubeSpan by default, sized to the L2 MTU and excluding the external network from endpoints.
+- Document the KubeSpan reachability contract for clusters spanning layer-2 networks, including the API VIP and proxy requirements.
 - Document the MTU rules for jumbo layer-2 networks, including the jumbo-frame ping recipe.
 - Add a top-level `include` list that merges extra YAML files into `cluster.yaml` before validation.
 - Bound every `kubectl` call with a request timeout so a hung kube-api fails converge.

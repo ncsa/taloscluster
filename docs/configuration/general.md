@@ -69,7 +69,20 @@ Freeform machine-config patches applied to every node. Pool-level `config_patche
 
 Optional · boolean · default `true`
 
-Enables Talos KubeSpan on every node: the machine configuration turns the WireGuard overlay on and sizes its MTU to the node's layer-2 network MTU minus the 80 bytes of WireGuard overhead, so overlay traffic fragments at the same point the underlying network does. When [`network.external`](network.md#networkexternal) is configured, its `anchor_cidr` and `cidr` are excluded from KubeSpan endpoint discovery, so nodes never advertise or pick an external address as a peer endpoint. Set it to `false` to emit no KubeSpan settings and leave the generated configuration without a kubespan section.
+Enables Talos KubeSpan on every node: the machine configuration turns the WireGuard overlay on and sizes its MTU to the node's layer-2 network MTU minus the 80 bytes of WireGuard overhead, so overlay traffic fragments at the same point the underlying network does. When [`network.external`](network.md#networkexternal) is configured, its `anchor_cidr` and `cidr` are excluded from KubeSpan endpoint discovery, so nodes never advertise or pick an external address as a peer endpoint.
+
+The overlay is what lets one cluster span layer-2 networks — VMs on the provider's network and bare metal on its own — because pod traffic between nodes is encrypted and routed over it, wherever an IP route connects the two sides, and peers find each other through Talos's discovery service. KubeSpan does not carry the Kubernetes API VIP: the kubelet on every node still reaches [`network.cluster.kubeapi_vip`](network.md#networkclusterkubeapi_vip) directly, so where the VM provider's network is an overlay the metal side cannot see (Proxmox SDN, OpenStack), the VIP must be made reachable from the metal L2 with a floating IP routed there or exit-node routing. The discovery service is reached on the internet (TCP 443); on a network with no direct egress, every node must get its proxy settings through `machine.env`, for example via [`talos.config_patches`](#talosconfig_patches), so the discovery connection traverses the proxy:
+
+```yaml
+talos:
+  config_patches:
+    - |
+      machine:
+        env:
+          HTTPS_PROXY: http://proxy.example.edu:3128
+```
+
+Set it to `false` to emit no KubeSpan settings and leave the generated configuration without a kubespan section.
 
 ## `kubernetes`
 
