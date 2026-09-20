@@ -33,7 +33,7 @@ metal:
           enp2s0f0: { ip: 172.29.21.5/24 }
 ```
 
-A group states the defaults every machine in `servers` starts from, and each server overrides them for its own machine: plain settings (`role`, `redfish`, `disk`, `network`) are replaced when the server sets one, while `bmc` merges key by key and `interfaces` merge per interface, so the group can carry the credentials and the cabling plan and each server adds only its own addresses. The commands that join the machines come with the metal provider.
+A group states the defaults every machine in `servers` starts from, and each server overrides them for its own machine: plain settings (`role`, `redfish`, `disk`, `network`) are replaced when the server sets one, while `bmc` merges key by key and `interfaces` merge per interface, so the group can carry the credentials and the cabling plan and each server adds only its own addresses. The [`metal` commands](../commands.md#metal) then join the machines: they boot them from the Talos install ISO (through the BMC's virtual media, or served over the LAN with `--serve`), push the generated machine configuration to each machine in maintenance mode, and verify it came back with it.
 
 ### `metal.<group>.role`
 

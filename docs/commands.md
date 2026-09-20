@@ -12,6 +12,7 @@ Every subcommand accepts `-C DIR` / `--dir DIR` to select the cluster directory,
 | `--yes` | `converge`, `image`, `destroy`, `plugin` | Skip deletion prompts where implemented, including a direct `plugin NAME destroy` |
 | `--reboot` | `converge`, `plan` | Apply or preview reboots needed for changed Proxmox VM sizing |
 | `-o text` / `-o yaml` | `status`, `check`, `plugin` | Select output format; plugin output selection applies to `status` and `check` actions |
+| `--serve` | `metal boot`, `metal join` | Serve the install ISO from the machine running the command over the LAN |
 
 `sync` and `apply` accept the same options as `converge`. Text output is the default. Dry runs still need access to relevant services: planning reads provider inventory and can POST idempotent schematics to the Talos Image Factory.
 
@@ -92,6 +93,22 @@ taloscluster image remove [--dry-run] [--yes]
 ```
 
 `download` builds or downloads the shared boot image for the configured Talos version and base schematic, then uploads it to the provider if missing. Converge normally handles this automatically. `remove` deletes the shared image and requires confirmation unless `--yes` is set. The image can be used by multiple clusters; neither converge nor destroy removes it automatically. `remove` also deletes the legacy `talos-<version>-tailscale` image a cluster still carries from before the schematic id joined the name; on Proxmox it refuses to delete an image that any cluster-managed VM still boots from, since a VM whose cdrom volume is gone fails to start.
+
+## `metal`
+
+```bash
+taloscluster metal inspect SERVER
+taloscluster metal boot SERVER [--serve]
+taloscluster metal wait SERVER
+taloscluster metal apply SERVER
+taloscluster metal eject SERVER
+taloscluster metal join SERVER [--serve]
+taloscluster metal join rp001 --serve
+```
+
+Join the bare-metal machines of a [`metal`](configuration/metal.md) section. Every command names one machine — a `metal.<group>.servers` key. `inspect` prints a Redfish summary of the machine's power state, one-time boot setting, NICs and disks. `boot` mounts the Talos install ISO in the machine's virtual media, sets a one-time boot from it and powers the machine on; `--serve` downloads that ISO and serves it from the machine running the command over the LAN instead of handing the BMC a factory URL, for a controller with no internet egress — a standalone `boot --serve` keeps serving until Ctrl-C, and `join` keeps serving while it waits and applies. `wait` polls for the maintenance-mode apid on the machine's cluster address, `apply` generates the machine config (written to `.metal/` in the cluster directory, mode 0600, since it carries cluster credentials) and pushes it to the maintenance-mode node, and `eject` unmounts the virtual media. `join` runs boot, wait, apply, eject and verify in order, where verify waits for the node to come back with its configuration and reports the Talos version it runs.
+
+The BMC is only ever used to mount media, one-time boot from it and control power: BIOS boot-mode settings and the persistent boot order are left alone, so after the one-time boot the machine boots whatever its own order says — for an installed machine, its disk. A machine that already answers the cluster's apid is refused by `join`, since joining reinstalls it and wipes the disk; use `talosctl apply-config` for a config change on an installed node, or reset the machine first if a re-join is really intended.
 
 ## `destroy`
 

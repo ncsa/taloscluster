@@ -143,7 +143,7 @@ def test_gitignore_covers_secret_and_derived_files(tmp_path):
     init(tmp_path, name="demo")
     lines = (tmp_path / ".gitignore").read_text().splitlines()
     for entry in ("secrets.yaml", "talossecrets.yaml", "talosconfig",
-                  "kubeconfig"):
+                  "kubeconfig", ".metal/"):
         assert entry in lines
 
 

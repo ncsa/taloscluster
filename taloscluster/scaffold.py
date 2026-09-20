@@ -150,6 +150,7 @@ GITIGNORE_ENTRIES = (
     SECRETS_FILE,             # secrets.yaml
     TALOS_SECRETS_FILE,       # talossecrets.yaml
     *DERIVED_FILES,           # talosconfig, kubeconfig
+    ".metal/",                # generated metal machine configs (cluster credentials)
 )
 
 

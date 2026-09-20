@@ -219,6 +219,12 @@ def test_nocloud_installer_and_iso_urls_use_the_same_schematic():
     )
 
 
+def test_metal_installer_url_uses_the_metal_platform():
+    assert factory.installer_image("abc123", "v1.13.9", platform="metal") == (
+        "factory.talos.dev/metal-installer/abc123:v1.13.9"
+    )
+
+
 # ---------------------------------------------------------------------------
 # remove_image: the legacy pre-schematic name is still matched
 # ---------------------------------------------------------------------------

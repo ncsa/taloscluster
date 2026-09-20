@@ -47,7 +47,7 @@ def installer_image(
 ) -> str:
     """The installer image ref for `machine.install.image` (keeps extensions on
     upgrade)."""
-    if platform not in ("openstack", "nocloud"):
+    if platform not in ("openstack", "nocloud", "metal"):
         raise ValueError(f"unsupported Talos installer platform: {platform}")
     return f"factory.talos.dev/{platform}-installer/{schematic}:{talos_version}"
 

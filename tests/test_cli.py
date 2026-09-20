@@ -297,6 +297,44 @@ def test_plugin_status_exits_zero(make_config, monkeypatch, tmp_path):
     assert cli.main(["plugin", "demo", "status", "-C", str(tmp_path)]) == 0
 
 
+# -- metal -----------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("action", "expected_kwargs"),
+    [
+        ("inspect", {}),
+        ("boot", {"serve": False}),
+        ("wait", {}),
+        ("apply", {}),
+        ("eject", {}),
+        ("join", {"serve": False}),
+    ],
+)
+def test_metal_dispatches(monkeypatch, tmp_path, action, expected_kwargs):
+    seen = {}
+    monkeypatch.setattr(
+        cli._metal, action,
+        lambda root, name, **kw: seen.update(root=root, name=name, **kw),
+    )
+    assert cli.main(["metal", action, "rp001", "-C", str(tmp_path)]) == 0
+    assert seen == {"root": tmp_path, "name": "rp001", **expected_kwargs}
+
+
+def test_metal_boot_forwards_serve(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(
+        cli._metal, "boot",
+        lambda root, name, **kw: seen.update(root=root, name=name, **kw),
+    )
+    assert cli.main(["metal", "boot", "rp001", "--serve", "-C", str(tmp_path)]) == 0
+    assert seen == {"root": tmp_path, "name": "rp001", "serve": True}
+
+
+def test_metal_serve_is_rejected_for_the_bmc_free_actions(tmp_path, capsys):
+    assert cli.main(["metal", "wait", "rp001", "--serve", "-C", str(tmp_path)]) == 1
+    assert "--serve" in capsys.readouterr().err
+
+
 # -- exception-to-exit-code mapping in main ---------------------------------
 
 def _bomb(exc):

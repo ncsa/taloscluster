@@ -6,6 +6,8 @@
     taloscluster plan                           # dry-run converge: print what would change
     taloscluster status [-o yaml]               # show managed resources, endpoints + nodes
     taloscluster check [-o yaml]                # are talos/kubernetes up to date?
+    taloscluster image download|remove              # manage the shared boot image
+    taloscluster metal ACTION SERVER            # inspect / join bare-metal machines
     taloscluster destroy [--yes]                # tear down all managed resources
     taloscluster plugin list                    # which optional plugins are installed
     taloscluster plugin NAME [ACTION]           # run one plugin on its own
@@ -31,6 +33,7 @@ from . import scaffold as _scaffold
 from .config import CLUSTER_FILE
 from .context import Context
 from .errors import ConfigError, PreflightError, ReconcileError, StateError
+from .metal import commands as _metal
 from .output import Die, dry_run, info, log, set_dry_run, warn
 from .output import report as _report
 
@@ -84,6 +87,23 @@ def _cmd_image(args, root):
 def _cmd_destroy(args, root):
     set_dry_run(bool(args.dry_run))
     return _converge.destroy(root, assume_yes=args.yes)
+
+
+def _cmd_metal(args, root):
+    if args.serve and args.action not in ("boot", "join"):
+        raise Die(f"--serve only applies to 'boot' and 'join', not {args.action!r}")
+    if args.action == "inspect":
+        _metal.inspect(root, args.server)
+    elif args.action == "boot":
+        _metal.boot(root, args.server, serve=args.serve)
+    elif args.action == "wait":
+        _metal.wait(root, args.server)
+    elif args.action == "apply":
+        _metal.apply(root, args.server)
+    elif args.action == "eject":
+        _metal.eject(root, args.server)
+    else:
+        _metal.join(root, args.server, serve=args.serve)
 
 
 def _cmd_plugin(args, root):
@@ -348,6 +368,43 @@ def main(argv: list[str] | None = None) -> int:
     p_image.add_argument("--yes", action="store_true",
                          help="skip the confirm prompt on remove")
     p_image.set_defaults(func=_cmd_image)
+
+    p_metal = sub.add_parser(
+        "metal",
+        help="inspect bare-metal machines or join them to the cluster",
+        description=(
+            "The bare-metal join flow for the machines of a `metal:` section. "
+            "`inspect` prints a Redfish summary of a machine's power state, "
+            "one-time boot setting, NICs and disks. `boot` mounts the Talos "
+            "install ISO in the machine's virtual media, sets a one-time boot "
+            "from it and powers it on; --serve downloads that ISO and serves "
+            "it from this machine over the LAN, for a BMC with no internet "
+            "egress. `wait` polls for the maintenance-mode apid on the "
+            "machine's cluster address, `apply` generates the machine config "
+            "and pushes it to the maintenance-mode node, `eject` unmounts the "
+            "media, and `join` runs boot -> wait -> apply -> eject -> verify. "
+            "The BMC is only ever used to mount media, one-time boot from it "
+            "and control power: no BIOS boot-mode changes and no boot-order "
+            "manipulation."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_common(p_metal)
+    p_metal.add_argument(
+        "action",
+        choices=["inspect", "boot", "wait", "apply", "eject", "join"],
+        help="what to do; join runs boot, wait, apply, eject and verify in order",
+    )
+    p_metal.add_argument(
+        "server", metavar="SERVER",
+        help="metal server name from cluster.yaml",
+    )
+    p_metal.add_argument(
+        "--serve", action="store_true",
+        help="boot/join: download the install ISO and serve it from this "
+             "machine over the LAN, for a BMC with no internet egress",
+    )
+    p_metal.set_defaults(func=_cmd_metal)
 
     p_destroy = sub.add_parser(
         "destroy",

@@ -149,6 +149,18 @@ def reachable(talosconfig: Path, endpoint: str, node: str) -> bool:
     return rc == 0
 
 
+def maintenance_reachable(node: str) -> bool:
+    """True if the node's maintenance-mode apid answers.
+
+    A machine booted from install media runs with no machine config yet; its
+    apid accepts unauthenticated clients (--insecure). A node that runs a
+    configuration refuses the insecure API, so this probe tells a
+    waiting-to-be-joined machine from one that is already configured.
+    """
+    rc, _, _ = _run_nocheck(["--insecure", "-n", node, "version"])
+    return rc == 0
+
+
 @dataclass(frozen=True)
 class Member:
     """One entry of talos cluster discovery (`get members`)."""
@@ -378,6 +390,24 @@ def apply_config(talosconfig: Path, endpoint: str, node: str, config: str,
     # settle path needs to tell a node taken down for a restart apart from a
     # silent live apply.
     return _apply_requires_reboot(out + "\n" + err)
+
+
+def apply_config_insecure(node: str, config: str) -> None:
+    """Push a machine config to a node in maintenance mode.
+
+    The maintenance apid accepts unauthenticated clients, so unlike
+    `apply_config` this needs no talosconfig and no endpoint: the node's own
+    address is both. A node that already runs a configuration rejects the
+    insecure API, so this can only ever land on a machine waiting to be joined.
+    """
+    action(f"talosctl apply-config --insecure {node}")
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+        fh.write(config)
+        path = fh.name
+    try:
+        _run(["--insecure", "-n", node, "apply-config", "--file", path])
+    finally:
+        os.unlink(path)
 
 
 def _apply_requires_reboot(out: str) -> bool:
