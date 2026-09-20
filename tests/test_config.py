@@ -21,6 +21,7 @@ from taloscluster.config import (
     OpenStackConfig,
     ProxmoxConfig,
     SecurityRule,
+    load_config,
     proxmox_sdn,
     validate_warnings,
 )
@@ -2198,6 +2199,214 @@ def test_proxmox_only_network_keys_are_rejected_on_openstack(make_config, block,
     """OpenStack builds its own external network, VIP and ingress at converge."""
     with pytest.raises(ConfigError, match=message):
         make_config({"network": block})
+
+
+# The cluster.yaml of a real pre-redesign Proxmox cluster (the csfarm build),
+# with placeholder addresses: the L2 facts live under `proxmox.network.*` and
+# `network.cidr`. `charts:` is omitted -- it is plugin-owned and the plugin is
+# not installed in the test environment.
+_PRE_REDESIGN_CLUSTER_YAML = """\
+name: farmcluster
+
+talos:
+  version: v1.13.10
+  config_patches:
+    - |
+      machine:
+        env:
+          http_proxy: "http://proxy.example.edu:3128"
+          https_proxy: "http://proxy.example.edu:3128"
+          no_proxy: "localhost,127.0.0.1,10.0.0.0/8,192.168.100.0/24,169.254.0.0/16,.svc"
+          HTTP_PROXY: "http://proxy.example.edu:3128"
+          HTTPS_PROXY: "http://proxy.example.edu:3128"
+          NO_PROXY: "localhost,127.0.0.1,10.0.0.0/8,192.168.100.0/24,169.254.0.0/16,.svc"
+    - |
+      apiVersion: v1alpha1
+      kind: RoutingRuleConfig
+      name: 0500
+      dst: 203.0.113.0/24
+      table: 100
+kubernetes:
+  version: v1.36.4
+
+controlplane:
+  count: 3
+  cores: 4
+  memory: 8
+  disk: 40
+
+workers:
+  worker:
+    count: 2
+    cores: 16
+    memory: 64
+    disk: 100
+
+proxmox:
+  url: https://pve.example.edu:8006
+  storage: vms
+  iso_storage: isos
+  cidata_storage: local
+  placement_strategy: spread
+  network:
+    cluster:
+      bridge: vmbr0
+      kubeapi_vip: 192.168.100.200
+    external:
+      bridge: vmbr0
+      vlan: 1691
+      cidr: 203.0.113.0/24
+      gateway: 203.0.113.1
+      anchor_cidr: 169.254.32.0/20
+      ingress_pool: 203.0.113.190-203.0.113.199
+
+network:
+  cidr: 192.168.100.0/24
+  dns:
+    - 192.0.2.2
+    - 192.0.2.3
+  ntp:
+    - 192.0.2.2
+
+security:
+  kubernetes:
+    operator: 203.0.113.17/32
+  talos:
+    operator: 203.0.113.17/32
+"""
+
+# The same cluster rewritten to the new shape: the L2 facts moved into the
+# `network.cluster` / `network.external` blocks and `proxmox.network.*` keeps
+# only the plumbing.
+_REDESIGNED_CLUSTER_YAML = """\
+name: farmcluster
+
+talos:
+  version: v1.13.10
+  config_patches:
+    - |
+      machine:
+        env:
+          http_proxy: "http://proxy.example.edu:3128"
+          https_proxy: "http://proxy.example.edu:3128"
+          no_proxy: "localhost,127.0.0.1,10.0.0.0/8,192.168.100.0/24,169.254.0.0/16,.svc"
+          HTTP_PROXY: "http://proxy.example.edu:3128"
+          HTTPS_PROXY: "http://proxy.example.edu:3128"
+          NO_PROXY: "localhost,127.0.0.1,10.0.0.0/8,192.168.100.0/24,169.254.0.0/16,.svc"
+    - |
+      apiVersion: v1alpha1
+      kind: RoutingRuleConfig
+      name: 0500
+      dst: 203.0.113.0/24
+      table: 100
+kubernetes:
+  version: v1.36.4
+
+controlplane:
+  count: 3
+  cores: 4
+  memory: 8
+  disk: 40
+
+workers:
+  worker:
+    count: 2
+    cores: 16
+    memory: 64
+    disk: 100
+
+proxmox:
+  url: https://pve.example.edu:8006
+  storage: vms
+  iso_storage: isos
+  cidata_storage: local
+  placement_strategy: spread
+  network:
+    cluster:
+      bridge: vmbr0
+    external:
+      bridge: vmbr0
+
+network:
+  cluster:
+    cidr: 192.168.100.0/24
+    kubeapi_vip: 192.168.100.200
+  external:
+    vlan: 1691
+    cidr: 203.0.113.0/24
+    gateway: 203.0.113.1
+    anchor_cidr: 169.254.32.0/20
+    ingress_pool: 203.0.113.190-203.0.113.199
+  dns:
+    - 192.0.2.2
+    - 192.0.2.3
+  ntp:
+    - 192.0.2.2
+
+security:
+  kubernetes:
+    operator: 203.0.113.17/32
+  talos:
+    operator: 203.0.113.17/32
+"""
+
+_PROXMOX_SECRETS_YAML = """\
+proxmox:
+  token_id: "root@pam!taloscluster"
+  token_secret: "01234567-89ab-cdef-0123-456789abcdef"
+"""
+
+
+def _write_cluster_files(tmp_path: Path, cluster_yaml: str) -> None:
+    (tmp_path / "cluster.yaml").write_text(cluster_yaml)
+    (tmp_path / SECRETS_FILE).write_text(_PROXMOX_SECRETS_YAML)
+
+
+def test_a_pre_redesign_cluster_yaml_fails_with_the_new_location_error(tmp_path):
+    """The whole pre-redesign file -- every L2 fact still under
+    `proxmox.network.*` plus `network.cidr` -- is refused naming the new home,
+    so `plan` against it stops before touching anything."""
+    _write_cluster_files(tmp_path, _PRE_REDESIGN_CLUSTER_YAML)
+
+    with pytest.raises(
+        ConfigError, match="cluster.yaml: network.cidr has moved to network.cluster.cidr"
+    ):
+        load_config(tmp_path)
+
+
+def test_the_rewritten_cluster_yaml_loads_with_the_same_facts(tmp_path):
+    """The rewritten file loads and every L2 fact sits in its new block, with
+    the pools, patches and plumbing carried over unchanged -- the shape `plan`
+    accepts."""
+    _write_cluster_files(tmp_path, _REDESIGNED_CLUSTER_YAML)
+    cfg = load_config(tmp_path)
+
+    assert cfg.name == "farmcluster"
+    assert cfg.network.cluster.cidr == "192.168.100.0/24"
+    assert cfg.network.cluster.kubeapi_vip == "192.168.100.200"
+    assert cfg.network.cluster.gateway == ""
+    assert cfg.network.cluster.mtu == 1500
+    assert cfg.network.external is not None
+    assert cfg.network.external.vlan == 1691
+    assert cfg.network.external.cidr == "203.0.113.0/24"
+    assert cfg.network.external.gateway == "203.0.113.1"
+    assert cfg.network.external.anchor_cidr == "169.254.32.0/20"
+    assert cfg.network.external.ingress_pool == "203.0.113.190-203.0.113.199"
+    assert cfg.network.external.kubeapi_vip == ""
+    assert cfg.network.dns == ["192.0.2.2", "192.0.2.3"]
+    assert cfg.network.ntp == ["192.0.2.2"]
+    assert cfg.provider.network == {
+        "cluster": {"bridge": "vmbr0"},
+        "external": {"bridge": "vmbr0"},
+    }
+    assert sorted(cfg.machines) == [
+        "farmcluster-controlplane-01",
+        "farmcluster-controlplane-02",
+        "farmcluster-controlplane-03",
+        "farmcluster-worker-01",
+        "farmcluster-worker-02",
+    ]
+    assert len(cfg.machines["farmcluster-worker-01"].config_patches) == 2
 
 
 # ---------------------------------------------------------------------------
