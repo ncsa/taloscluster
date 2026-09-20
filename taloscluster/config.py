@@ -1430,6 +1430,20 @@ def _validate(cfg: Config) -> None:
         )
     if not isinstance(cfg.kubespan, bool):
         raise ConfigError("cluster.yaml: talos.kubespan must be true or false")
+    if not cfg.kubespan and cfg.metal is not None:
+        # a group on another L2 has no path to the cluster network without the
+        # KubeSpan overlay, so turning it off there cannot converge
+        off_l2 = sorted(
+            name
+            for name, group in cfg.metal.groups.items()
+            if group.network != cfg.network.cluster
+        )
+        if off_l2:
+            raise ConfigError(
+                "cluster.yaml: talos.kubespan must be true when a metal group's "
+                f"network differs from network.cluster ({', '.join(off_l2)}): "
+                "the KubeSpan overlay is what carries their traffic to the cluster"
+            )
 
     if "controlplane" in cfg.workers:
         raise ConfigError("worker pool name 'controlplane' is reserved")

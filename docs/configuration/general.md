@@ -82,7 +82,7 @@ talos:
           HTTPS_PROXY: http://proxy.example.edu:3128
 ```
 
-Set it to `false` to emit no KubeSpan settings and leave the generated configuration without a kubespan section.
+Set it to `false` to emit no KubeSpan settings and leave the generated configuration without a kubespan section. The load refuses `false` while a [`metal`](metal.md) group's [`network`](metal.md#metalgroupnetwork) differs from [`network.cluster`](network.md#networkcluster), because the overlay is what carries that group's pod traffic to the rest of the cluster.
 
 ## `kubernetes`
 

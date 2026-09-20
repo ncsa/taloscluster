@@ -502,6 +502,37 @@ def test_metal_group_defaults(make_config):
     assert group.servers == {}
 
 
+def test_metal_group_on_another_l2_requires_kubespan(make_config):
+    """KubeSpan is the only path between the group's L2 and the cluster network."""
+    with pytest.raises(ConfigError, match="talos.kubespan must be true"):
+        make_config({
+            "talos": {"kubespan": False},
+            "metal": {"phoenix": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+            }},
+        })
+
+
+def test_metal_group_on_the_cluster_l2_allows_kubespan_off(make_config):
+    """A group on the cluster L2 -- by omission or by the same values -- needs no overlay."""
+    cfg = make_config({
+        "talos": {"kubespan": False},
+        "metal": {
+            "worker": {"role": "worker", "disk": "/dev/sda"},
+            "same": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "network": {"cidr": "192.168.0.0/21"},
+            },
+        },
+    })
+
+    assert cfg.metal.groups["worker"].network == cfg.network.cluster
+    assert cfg.metal.groups["same"].network == cfg.network.cluster
+
+
 def test_metal_group_defaults_resolve_into_each_server(make_config):
     """Servers start from the group defaults; `bmc` and `interfaces` merge per key."""
     cfg = make_config({"metal": {"phoenix": {

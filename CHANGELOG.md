@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Accept a `metal` section defining bare-metal machine groups, requiring real BMC credentials for every machine in a `redfish` group, alongside one VM provider, or alone for all-bare-metal clusters.
-- Enable KubeSpan by default, sized to the L2 MTU and excluding the external network from endpoints.
+- Enable KubeSpan by default, sized to the L2 MTU, excluding the external network from endpoints, and required for metal groups on another L2.
 - Document the KubeSpan reachability contract for clusters spanning layer-2 networks, including the API VIP and proxy requirements.
 - Document the MTU rules for jumbo layer-2 networks, including the jumbo-frame ping recipe.
 - Add a top-level `include` list that merges extra YAML files into `cluster.yaml` before validation.
