@@ -15,6 +15,7 @@ from typing import Any
 
 from .. import naming
 from ..config import (
+    DEFAULT_MTU,
     Config,
     ConfigError,
     Machine,
@@ -23,7 +24,13 @@ from ..config import (
     l2_facts,
     proxmox_sdn,
 )
-from ..infrastructure import Endpoint, TalosContribution, TalosPatch, dhcp_link_documents
+from ..infrastructure import (
+    Endpoint,
+    TalosContribution,
+    TalosPatch,
+    dhcp_link_documents,
+    stated_mtu,
+)
 
 # Proxmox VMs boot from a virtio-scsi disk.
 INSTALL_DISK = "/dev/sda"
@@ -86,15 +93,28 @@ def _private_link_docs(m: Machine, cfg: Config) -> list[dict]:
         "kind": "LinkConfig",
         "name": "private",
     }
+    # On a jumbo L2 the link states its MTU and the default route is clamped to
+    # 1500: a gateway that drops jumbo frames at L2 sends no ICMP, so PMTUD
+    # never fires and the route MTU is what keeps off-subnet traffic working.
+    stated = stated_mtu(cfg.network.cluster.mtu)
+    if stated is not None:
+        link["mtu"] = stated
     managed = sdn(cfg)
     if managed:
         address = naming.node_address(
             cfg.network.cluster.cidr, m.name, m.role, m.pool, tuple(cfg.workers)
         )
         link["addresses"] = [{"address": str(address)}]
-        link["routes"] = [{"gateway": str(naming.sdn_gateway(cfg.network.cluster.cidr))}]
+        route: dict = {"gateway": str(naming.sdn_gateway(cfg.network.cluster.cidr))}
+        if stated is not None:
+            route["mtu"] = DEFAULT_MTU
+        link["routes"] = [route]
         docs.append(link)
     else:
+        if stated is not None and cfg.network.cluster.gateway:
+            link["routes"] = [
+                {"gateway": cfg.network.cluster.gateway, "mtu": DEFAULT_MTU}
+            ]
         docs.append(link)
         docs.append(
             {
@@ -275,6 +295,13 @@ def external_network_docs(m: Machine, cfg: Config) -> list[dict]:
         "name": "external",
         "addresses": [{"address": anchor}],
     }
+    # the external link always states its own L2's MTU when it is jumbo; it
+    # must never ride in on another link's value
+    external_l2 = cfg.network.external
+    assert external_l2 is not None  # external docs are only built with an external block
+    stated = stated_mtu(external_l2.mtu)
+    if stated is not None:
+        ext_link["mtu"] = stated
     if (m.role == "controlplane" and vip_on_external) or return_path:
         ext_link["routes"] = [
             {"destination": ext["cidr"], "table": EXT_ROUTE_TABLE},
@@ -336,11 +363,22 @@ def contribution(m: Machine, cfg: Config, endpoint: Endpoint) -> TalosContributi
             patches = [TalosPatch("network", docs), _nameservers_patch(cfg)]
             return TalosContribution(install_disk=INSTALL_DISK, patches=tuple(patches))
         # No external NIC: DHCP on eth0 with the API VIP on it, exactly like
-        # OpenStack.
+        # OpenStack. The DHCP-provided gateway is only known when it is stated,
+        # so only then is the lease's default route restated with a 1500 MTU.
         vip = endpoint.vip if m.role == "controlplane" else None
         return TalosContribution(
             install_disk=INSTALL_DISK,
-            patches=(TalosPatch("network", dhcp_link_documents("eth0", vip)),),
+            patches=(
+                TalosPatch(
+                    "network",
+                    dhcp_link_documents(
+                        "eth0",
+                        vip,
+                        mtu=cfg.network.cluster.mtu,
+                        gateway=cfg.network.cluster.gateway,
+                    ),
+                ),
+            ),
         )
 
     patches = [TalosPatch("network", external_network_docs(m, cfg))]

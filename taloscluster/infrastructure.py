@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .config import Config, Machine, OpenStackConfig, ProxmoxConfig
+from .config import DEFAULT_MTU, Config, Machine, OpenStackConfig, ProxmoxConfig
 
 
 @dataclass(frozen=True)
@@ -81,15 +81,37 @@ class TalosPatch:
     document: dict[str, Any] | list[dict[str, Any]] | str
 
 
-def dhcp_link_documents(link: str, vip: str | None = None) -> list[dict[str, Any]]:
+def stated_mtu(mtu: int) -> int | None:
+    """The MTU a LinkConfig states for its layer-2 network, or None at the default.
+
+    MTU is written into the machine configuration only when an L2 is jumbo: at
+    1500 the field would just repeat Talos's own default, so a default cluster
+    keeps the documents it always had.
+    """
+    return mtu if mtu > DEFAULT_MTU else None
+
+
+def dhcp_link_documents(
+    link: str, vip: str | None = None, mtu: int = DEFAULT_MTU, gateway: str = ""
+) -> list[dict[str, Any]]:
     """LinkConfig + DHCPv4Config for one physical link, plus its Layer 2 VIP.
 
     Any new-style link document turns off Talos's default DHCP on physical
     links, so the lease the node used to get implicitly is requested
     explicitly. `vip` adds a Layer2VIPConfig on the same link (control planes).
+    `mtu` is the layer-2 network's MTU, stated on the link only when it is
+    above the default. On a jumbo L2 a known `gateway` restates the default
+    route with an MTU of 1500: the configuration's route replaces the route
+    the lease provides, so off-subnet traffic stays clamped.
     """
+    link_doc: dict[str, Any] = {"apiVersion": "v1alpha1", "kind": "LinkConfig", "name": link}
+    stated = stated_mtu(mtu)
+    if stated is not None:
+        link_doc["mtu"] = stated
+        if gateway:
+            link_doc["routes"] = [{"gateway": gateway, "mtu": DEFAULT_MTU}]
     docs: list[dict[str, Any]] = [
-        {"apiVersion": "v1alpha1", "kind": "LinkConfig", "name": link},
+        link_doc,
         {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": link},
     ]
     if vip:

@@ -20,9 +20,9 @@ The layer-2 network the nodes sit on, described in one place for every provider.
 network:
   cluster:
     cidr: 10.0.0.0/24
-    gateway: 10.0.0.1       # accepted; not applied to nodes yet
+    gateway: 10.0.0.1       # route-MTU clamp on DHCP-backed Proxmox L2s
     vlan: 100               # Proxmox only
-    mtu: 9000               # validated; not applied to nodes yet
+    mtu: 9000               # applied to the node links
     kubeapi_vip: 10.0.0.200 # Proxmox only
 ```
 
@@ -40,7 +40,7 @@ The network the nodes' private addresses come from, written as a network address
 
 Optional · IPv4 address inside `cidr` · default none
 
-The default gateway on this network. Nothing reads it today: DHCP supplies the gateway on a Proxmox bridge or VNet, a managed SDN uses the first host of `cidr` as its anycast gateway, and OpenStack sets the subnet's gateway itself. It is accepted and validated for the statically addressed machines the bare-metal support will add.
+The default gateway on this network. A managed SDN uses the first host of `cidr` as its anycast gateway and OpenStack sets the subnet's gateway itself, so the value is read only on a DHCP-backed Proxmox bridge or VNet: with a jumbo [`network.cluster.mtu`](#networkclustermtu) it is the gateway of the default route the machine configuration restates with an MTU of 1500, and it must be the gateway the DHCP server actually hands out. It is accepted and validated for the statically addressed machines the bare-metal support will add.
 
 ### `network.cluster.vlan`
 
@@ -52,7 +52,7 @@ VLAN tag for the node NIC. Proxmox only: it becomes the VM NIC tag, and it is re
 
 Optional · integer, at least 1280 · default `1500`
 
-The MTU of this layer-2 network. The value is validated today but not yet written into the generated machine configuration: it is reserved for the jumbo-frame support, which will set the link MTU and clamp the route MTU. Every node on one layer-2 network must agree on the MTU.
+The MTU of this layer-2 network. Above 1500 it is written into the generated machine configuration: the node's link carries the MTU, and the default route on that link is clamped to 1500, so off-subnet TCP is MSS-clamped and UDP fragmented even when the gateway silently drops jumbo frames, while on-subnet traffic stays jumbo. The route clamp applies wherever the tool knows the gateway — a managed SDN and an OpenStack subnet take the first host of `cidr` — and on a DHCP-backed Proxmox bridge or VNet only when [`network.cluster.gateway`](#networkclustergateway) is set; without it the DHCP-learned route keeps the link MTU. Every node on one layer-2 network must agree on the MTU.
 
 ### `network.cluster.kubeapi_vip`
 
@@ -101,7 +101,7 @@ VLAN tag for the external NIC.
 
 Optional · integer, at least 1280 · default `1500`
 
-The MTU of the external network, validated but not yet written into the machine configuration (see [`network.cluster.mtu`](#networkclustermtu)).
+The MTU of the external network. Above 1500 it is stated explicitly on the external link's machine configuration, never inherited from another link (see [`network.cluster.mtu`](#networkclustermtu)).
 
 ### `network.external.kubeapi_vip`
 

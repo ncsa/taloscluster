@@ -5,7 +5,10 @@ shared generator and into the OpenStack backend's contribution. The rendered
 machine configuration must not change, so this pins every document handed to
 ``talosctl gen config`` for a control plane and a worker. The eth0 block now
 arrives as its own patch document instead of living inside the machine patch;
-the keys are disjoint, so the strategic merge result is identical.
+the keys are disjoint, so the strategic merge result is identical. The stack is
+pinned for the default MTU and for a jumbo ``network.cluster.mtu``, which states
+the MTU on the eth0 LinkConfig and restates the eth0 default route with an MTU
+of 1500.
 
 Update the golden only when a machine-config change is intended.
 """
@@ -73,45 +76,57 @@ def _named(patch: dict, host: str) -> dict:
     return yaml.safe_load(yaml.safe_dump(patch).replace("@HOST@", host))
 
 
-GOLDEN = {
-    "testcluster-controlplane-01": [
-        [_machine_patch("controlplane", "controlplane")],
-        [_named(HOSTNAME_PATCH, "testcluster-controlplane-01")],
-        [CLUSTER_PATCH],
-        "FIREWALL",
-        [_named(TAILSCALE_PATCH, "testcluster-controlplane-01")],
-        [
-            {"apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "eth0"},
-            {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": "eth0"},
-            {"apiVersion": "v1alpha1", "kind": "Layer2VIPConfig", "name": VIP, "link": "eth0"},
-        ],
-    ],
-    "testcluster-worker-01": [
-        [_machine_patch("worker", "worker")],
-        [_named(HOSTNAME_PATCH, "testcluster-worker-01")],
-        "FIREWALL",
-        [_named(TAILSCALE_PATCH, "testcluster-worker-01")],
-        [
-            {"apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "eth0"},
-            {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": "eth0"},
-        ],
-    ],
-}
+def _eth0_docs(cluster_mtu: int | None) -> list[dict]:
+    """The eth0 documents; a jumbo L2 states the link MTU and restates the
+    default route with a 1500 MTU (the route the DHCP lease provides)."""
+    link: dict = {"apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "eth0"}
+    if cluster_mtu is not None:
+        link["mtu"] = cluster_mtu
+        link["routes"] = [{"gateway": "192.168.0.1", "mtu": 1500}]
+    return [link, {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": "eth0"}]
 
 
-@pytest.fixture
-def cfg(make_config):
-    return make_config({
+def _golden(cluster_mtu: int | None) -> dict[str, list]:
+    eth0 = _eth0_docs(cluster_mtu)
+    cp_eth0 = eth0 + [
+        {"apiVersion": "v1alpha1", "kind": "Layer2VIPConfig", "name": VIP, "link": "eth0"}
+    ]
+    return {
+        "testcluster-controlplane-01": [
+            [_machine_patch("controlplane", "controlplane")],
+            [_named(HOSTNAME_PATCH, "testcluster-controlplane-01")],
+            [CLUSTER_PATCH],
+            "FIREWALL",
+            [_named(TAILSCALE_PATCH, "testcluster-controlplane-01")],
+            cp_eth0,
+        ],
+        "testcluster-worker-01": [
+            [_machine_patch("worker", "worker")],
+            [_named(HOSTNAME_PATCH, "testcluster-worker-01")],
+            "FIREWALL",
+            [_named(TAILSCALE_PATCH, "testcluster-worker-01")],
+            eth0,
+        ],
+    }
+
+
+def _config(make_config, cluster_mtu: int | None):
+    overrides: dict = {
         "controlplane": {"count": 1, "flavor": "gp.medium", "disk": 40},
         "workers": {"worker": {"count": 1, "flavor": "gp.xlarge", "disk": 50}},
         "tailscale": {
             "login_server": "https://headscale.example.com",
             "auth_key": "tskey-secret",
         },
-    })
+    }
+    if cluster_mtu is not None:
+        overrides["network"] = {"cluster": {"mtu": cluster_mtu}}
+    return make_config(overrides)
 
 
-def test_openstack_patch_stack_matches_golden(cfg, monkeypatch, tmp_path):
+@pytest.mark.parametrize("cluster_mtu", [None, 9000], ids=["default-mtu", "mtu-9000"])
+def test_openstack_patch_stack_matches_golden(make_config, monkeypatch, tmp_path, cluster_mtu):
+    cfg = _config(make_config, cluster_mtu)
     endpoint = Endpoint(vip=VIP, advertised_address=FIP)
     rendered: dict[str, list[list[dict]]] = {}
 
@@ -143,6 +158,6 @@ def test_openstack_patch_stack_matches_golden(cfg, monkeypatch, tmp_path):
     firewall = machineconfig._firewall_docs(cfg)
     expected = {
         host: [firewall if patch == "FIREWALL" else patch for patch in stack]
-        for host, stack in GOLDEN.items()
+        for host, stack in _golden(cluster_mtu).items()
     }
     assert rendered == expected
