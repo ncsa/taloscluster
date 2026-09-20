@@ -8,6 +8,11 @@ carry the static addresses, the default route, the MTUs and the external
 network's policy routing. The full config is generated through the same
 ``talosctl gen config`` pipeline as every other node's.
 
+A machine with an ``external`` link also runs the return-path static pod: it
+marks the connections entering the VLAN child so their replies leave through
+the external gateway instead of the default route -- MetalLB ingress on the
+machine would otherwise answer from the wrong interface.
+
 Carried over from the prototype for Talos < 1.14 clusters: the hostname rides
 the classic ``machine.network.hostname`` field instead of the ``HostnameConfig``
 document, and the 1.14-era ``machine.install.grubUseUKICmdline`` key and the
@@ -37,6 +42,7 @@ from ..infrastructure import Endpoint, stated_mtu
 from ..proxmox.talos import (
     EXT_RETURN_MARK,
     EXT_RETURN_RULE_PRIORITY,
+    EXT_RETURN_TABLE,
     EXT_ROUTE_TABLE,
     anchor_address,
 )
@@ -295,6 +301,97 @@ def _strip_pre_1_14(docs: list[dict]) -> list[dict]:
     return [doc for doc in docs if doc.get("kind") != "HostnameConfig"]
 
 
+def _external_child_link(server: MetalServer, cfg: Config) -> str:
+    """The VLAN child link name of the machine's external link, or none."""
+    external = [n for n, i in server.interfaces.items() if "external" in i.role]
+    if not external:
+        return ""
+    return _external_child(server, cfg, external[0], server.interfaces[external[0]])[1]
+
+
+def return_path_pod(server: MetalServer, cfg: Config, child: str) -> dict:
+    """The static pod marking the connections entering the machine's VLAN child.
+
+    The same marking the Proxmox return-path pod installs, matched on the
+    child link's stable name instead of a generated MAC: replies to
+    externally initiated connections are marked so the fwmark routing rule
+    sends them back through the external gateway, not the default route.
+    """
+    ext = cfg.network.external
+    assert ext is not None  # an external link implies a network.external block
+    mark = f"0x{EXT_RETURN_MARK:08x}"
+    ingress_rule = (
+        f'iifname "{child}" ip daddr {ext.cidr} '
+        f"ct direction original ct mark set ct mark | {mark}"
+    )
+    script = f"""\
+set -eu
+NFT=nft
+
+cleanup() {{
+  "$NFT" delete table ip {EXT_RETURN_TABLE} 2>/dev/null || true
+}}
+trap cleanup EXIT
+cleanup
+
+"$NFT" -f - <<EOF
+table ip {EXT_RETURN_TABLE} {{
+  chain prerouting {{
+    type filter hook prerouting priority -160; policy accept;
+    {ingress_rule}
+    ct direction reply ct mark & {mark} != 0 meta mark set meta mark | {mark}
+  }}
+}}
+EOF
+
+while "$NFT" list table ip {EXT_RETURN_TABLE} >/dev/null 2>&1; do
+  sleep 30
+done
+exit 1
+"""
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": "taloscluster-metal-return-path",
+            "namespace": "kube-system",
+        },
+        "spec": {
+            "hostNetwork": True,
+            "priorityClassName": "system-node-critical",
+            "restartPolicy": "Always",
+            "tolerations": [{"operator": "Exists"}],
+            "containers": [
+                {
+                    "name": "return-path",
+                    # kube-proxy ships nft (it runs in nftables mode) and is
+                    # already present on every node; Talos has no host nft
+                    # visible to the kubelet, so hostPath mounts can't work.
+                    # A machine joining here is brand new, so the target
+                    # version is right -- there is no running version to keep.
+                    "image": f"registry.k8s.io/kube-proxy:{cfg.kubernetes_version}",
+                    "imagePullPolicy": "IfNotPresent",
+                    "command": ["/bin/sh", "-ec", script],
+                    "securityContext": {
+                        "runAsUser": 0,
+                        "runAsGroup": 0,
+                        "readOnlyRootFilesystem": True,
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {
+                            "drop": ["ALL"],
+                            "add": ["NET_ADMIN"],
+                        },
+                    },
+                    "resources": {
+                        "requests": {"cpu": "5m", "memory": "8Mi"},
+                        "limits": {"memory": "32Mi"},
+                    },
+                }
+            ],
+        },
+    }
+
+
 def build_config(
     server: MetalServer,
     cfg: Config,
@@ -346,6 +443,14 @@ def build_config(
                 machineconfig._write(
                     workdir, f"{host}-interfaces",
                     {"machine": {"network": {"interfaces": entries}}},
+                )
+            )
+        child = _external_child_link(server, cfg)
+        if child:
+            patches.append(
+                machineconfig._write(
+                    workdir, f"{host}-return-path",
+                    {"machine": {"pods": [return_path_pod(server, cfg, child)]}},
                 )
             )
         for i, raw in enumerate(m.config_patches):

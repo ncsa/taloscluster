@@ -970,3 +970,41 @@ def test_reset_control_plane_timeout_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(talosctl, "_run_nocheck", boom)
     with pytest.raises(ReconcileError, match="control plane cp-03 timed out"):
         talosctl.reset(tmp_path / "talosconfig", "endpoint", "cp-03", control_plane=True)
+
+
+# ---------------------------------------------------------------------------
+# maintenance-mode invocations: --insecure rides the subcommand
+# ---------------------------------------------------------------------------
+
+def test_maintenance_reachable_runs_insecure_behind_the_subcommand(monkeypatch):
+    """`--insecure` is refused as a global flag by the client, so the probe
+    runs `talosctl version --insecure -n NODE`, not `--insecure -n NODE version`."""
+    seen = {}
+
+    def fake_run_nocheck(args, timeout=None):
+        seen["args"] = args
+        return 0, "", ""
+
+    monkeypatch.setattr(talosctl, "_run_nocheck", fake_run_nocheck)
+
+    assert talosctl.maintenance_reachable("172.29.21.5") is True
+    assert seen["args"] == ["version", "--insecure", "-n", "172.29.21.5"]
+
+
+def test_apply_config_insecure_runs_insecure_behind_the_subcommand(monkeypatch):
+    """Same for the config push to a waiting-to-join machine: the subcommand
+    comes first, then the flags."""
+    seen = {}
+
+    def fake_run(args, capture=False, quiet_stderr=False):
+        seen["args"] = args
+        return ""
+
+    monkeypatch.setattr(talosctl, "_run", fake_run)
+
+    talosctl.apply_config_insecure("172.29.21.5", "version: v1alpha1")
+
+    assert seen["args"] == [
+        "apply-config", "--insecure", "-n", "172.29.21.5",
+        "--file", seen["args"][5],
+    ]

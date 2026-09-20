@@ -6,7 +6,9 @@ bare-metal worker whose cabling plan is a PXE boot link plus one NIC carrying
 both the cluster and the external role -- the csfarm shape. On a jumbo group
 L2 the cluster link states its MTU and clamps the default route to 1500, and
 the external VLAN child states its own (default) MTU so it never inherits the
-parent's. The KubeSpan patch rides along with its endpoint filters.
+parent's. The KubeSpan patch rides along with its endpoint filters, and the
+external child brings the return-path static pod that marks ingress
+connections for the policy-routing rule.
 
 The Talos < 1.14 handling is pinned end to end: the hostname patch is the
 classic ``machine.network.hostname`` and the generated config loses the
@@ -195,13 +197,20 @@ def test_metal_patch_stack_matches_golden(make_config, monkeypatch, tmp_path):
     """The csfarm shape: pxe boot link, one [cluster, external] NIC, jumbo L2."""
     stack, _ = _build(make_config, monkeypatch, tmp_path)
 
-    assert stack == [
+    assert stack[:5] == [
         [MACHINE_PATCH],
         [HOSTNAME_FIELD_PATCH],
         [KUBESPAN_PATCH],
         NETWORK_DOCS,
         [DEVICES_PATCH],
     ]
+    # the external child's return-path pod closes the stack
+    (pod_patch,) = stack[5]
+    (pod,) = pod_patch["machine"]["pods"]
+    assert pod_patch == {"machine": {"pods": [pod]}}
+    assert pod["metadata"]["name"] == "taloscluster-metal-return-path"
+    script = pod["spec"]["containers"][0]["command"][2]
+    assert 'iifname "enp2s0f0.1691" ip daddr 203.0.113.0/24' in script
 
 
 def test_metal_config_strips_pre_1_14_output(make_config, monkeypatch, tmp_path):
@@ -223,6 +232,31 @@ def test_metal_config_on_talos_1_14_uses_the_hostname_document(
 
     assert stack[1] == [HOSTNAME_DOCUMENT_PATCH]
     assert yaml.safe_load(out) == HOSTNAME_FIELD_PATCH
+
+
+def test_metal_return_path_pod_matches_the_vlan_child(make_config):
+    """The marking rule matches the external VLAN child by its stable name."""
+    cfg = _cfg(make_config)
+    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    child = metal_talos._external_child_link(server, cfg)
+
+    pod = metal_talos.return_path_pod(server, cfg, child)
+
+    container = pod["spec"]["containers"][0]
+    script = container["command"][2]
+    assert child == "enp2s0f0.1691"
+    assert pod["metadata"]["name"] == "taloscluster-metal-return-path"
+    assert pod["metadata"]["namespace"] == "kube-system"
+    assert pod["spec"]["hostNetwork"] is True
+    assert container["image"] == f"registry.k8s.io/kube-proxy:{cfg.kubernetes_version}"
+    assert container["securityContext"]["capabilities"] == {
+        "drop": ["ALL"],
+        "add": ["NET_ADMIN"],
+    }
+    assert 'iifname "enp2s0f0.1691" ip daddr 203.0.113.0/24' in script
+    assert "ct direction original ct mark set" in script
+    assert "ct direction reply" in script
+    assert "0x00002000" in script
 
 
 def test_metal_interface_overrides_name_and_tag_the_vlan_child(
@@ -307,6 +341,12 @@ def test_metal_control_plane_states_the_vip_on_its_link(
 
     # a control plane also gets the cluster patch (extraManifests, etcd subnets)
     assert "cluster" in stack[2][0]
+    # no external link, so no VLAN child and no return-path pod
+    assert all(
+        "pods" not in patch.get("machine", {})
+        for group in stack
+        for patch in ([group] if isinstance(group, dict) else group)
+    )
     vip = next(doc for doc in stack[4] if doc["kind"] == "Layer2VIPConfig")
     assert vip == {
         "apiVersion": "v1alpha1", "kind": "Layer2VIPConfig",

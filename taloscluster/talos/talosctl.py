@@ -157,7 +157,7 @@ def maintenance_reachable(node: str) -> bool:
     configuration refuses the insecure API, so this probe tells a
     waiting-to-be-joined machine from one that is already configured.
     """
-    rc, _, _ = _run_nocheck(["--insecure", "-n", node, "version"])
+    rc, _, _ = _run_nocheck(["version", "--insecure", "-n", node])
     return rc == 0
 
 
@@ -405,7 +405,9 @@ def apply_config_insecure(node: str, config: str) -> None:
         fh.write(config)
         path = fh.name
     try:
-        _run(["--insecure", "-n", node, "apply-config", "--file", path])
+        # --insecure rides the subcommand: the client refuses it as a global
+        # flag, and a subcommand-first line is what every other call uses
+        _run(["apply-config", "--insecure", "-n", node, "--file", path])
     finally:
         os.unlink(path)
 
