@@ -7,12 +7,13 @@ from __future__ import annotations
 import ipaddress
 import os
 import stat
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 from taloscluster import naming, plugins
-from taloscluster.config import ConfigError, load_config, load_secrets
+from taloscluster.config import ConfigError, load_config
 from taloscluster.scaffold import CLUSTER_TEMPLATE, GITIGNORE_ENTRIES, init
 
 
@@ -93,11 +94,12 @@ def test_proxmox_templates_are_valid_and_provider_specific(tmp_path):
     secrets = yaml.safe_load((tmp_path / "secrets.yaml").read_text())
     assert "openstack" not in secrets
     assert secrets["proxmox"].keys() >= {"token_id", "token_secret"}
-    assert load_config(tmp_path).provider_name == "proxmox"
-    # the scaffolded placeholder must be replaced before the secrets load
+    cfg = load_config(tmp_path)
+    assert cfg.provider_name == "proxmox"
+    # the scaffolded placeholder must be replaced before the credentials are used
     assert secrets["proxmox"]["token_secret"] == "CHANGE-ME"
     with pytest.raises(ConfigError, match="CHANGE-ME"):
-        load_secrets(tmp_path)
+        cfg.provider.credentials()
 
 
 def test_proxmox_scaffold_kubeapi_vip_sits_outside_the_sdn_layout(tmp_path):
@@ -121,11 +123,12 @@ def test_openstack_templates_remain_the_default(tmp_path):
     secrets = yaml.safe_load((tmp_path / "secrets.yaml").read_text())
     assert "openstack" in cluster and "proxmox" not in cluster
     assert "openstack" in secrets and "proxmox" not in secrets
-    assert load_config(tmp_path).provider_name == "openstack"
-    # the scaffolded placeholder must be replaced before the secrets load
+    cfg = load_config(tmp_path)
+    assert cfg.provider_name == "openstack"
+    # the scaffolded placeholder must be replaced before the credentials are used
     assert secrets["openstack"]["credential_id"] == "CHANGE-ME"
     with pytest.raises(ConfigError, match="CHANGE-ME"):
-        load_secrets(tmp_path)
+        assert cfg.openstack_credentials
 
 
 def test_init_never_overwrites_existing_files(tmp_path):
@@ -168,3 +171,22 @@ def test_scaffold_comment_no_longer_claims_every_node_gets_ncsa_project():
     assert "ncsa/role" in text and "ncsa/pool" in text
     assert "OpenStack adds ncsa/project" in text
     assert "always added as ncsa/project" not in text
+
+
+@pytest.mark.parametrize("provider", ["openstack", "proxmox"])
+def test_scaffold_loads_with_comment_only_plugin_sections(tmp_path, provider, monkeypatch):
+    """A plugin's scaffolded secrets section is comments only, so it parses as
+    null; merging it must not collide with the plugin's cluster.yaml section."""
+    init(tmp_path, name="demo", provider=provider)
+    monkeypatch.setattr(
+        plugins, "discover",
+        lambda: [SimpleNamespace(module=SimpleNamespace(CONFIG_SECTIONS=("rancher",)))],
+    )
+    for path, section in (
+        ("cluster.yaml", "\nrancher:\n  admins: []\n  users: []\n"),
+        ("secrets.yaml", "\nrancher:\n  # url: https://rancher.example.edu\n  # token: x\n"),
+    ):
+        with (tmp_path / path).open("a") as f:
+            f.write(section)
+
+    assert load_config(tmp_path).provider_name == provider

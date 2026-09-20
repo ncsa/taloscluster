@@ -26,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-from ..config import Config, ConfigError, Machine, Secrets
+from ..config import Config, ConfigError, Machine
 from ..infrastructure import Endpoint, TalosContribution
 from . import talosctl
 
@@ -217,7 +217,6 @@ def _write(workdir: Path, stem: str, doc) -> Path:
 
 def build_configs(
     cfg: Config,
-    secrets: Secrets,
     machines: dict[str, Machine],
     endpoint: Endpoint,
     secrets_path: Path,
@@ -262,10 +261,11 @@ def build_configs(
                     _write(workdir, f"{host}-cluster", _cluster_patch(cfg, endpoint))
                 )
             patches.append(_write(workdir, f"{host}-firewall", _firewall_docs(cfg)))
-            if secrets.tailscale_auth_key and "siderolabs/tailscale" in m.extensions:
+            auth_key = cfg.tailscale_auth_key
+            if auth_key and "siderolabs/tailscale" in m.extensions:
                 patches.append(
                     _write(workdir, f"{host}-tailscale",
-                           _tailscale_patch(m, cfg, secrets.tailscale_auth_key))
+                           _tailscale_patch(m, cfg, auth_key))
                 )
             # provider contributions before the user's, so an explicit user
             # patch still has the last word

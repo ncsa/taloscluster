@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from taloscluster import converge, naming
-from taloscluster.config import ProxmoxSecrets, Secrets
 from taloscluster.errors import ReconcileError
 from taloscluster.infrastructure import Endpoint
 from taloscluster.output import set_dry_run
@@ -134,8 +133,7 @@ def _data(permissions=None):
 
 
 def _backend(cfg, client):
-    secrets = Secrets(provider=ProxmoxSecrets("user@pve!provider", "secret"))
-    return ProxmoxBackend(cfg, secrets, client=client)
+    return ProxmoxBackend(cfg, client=client)
 
 
 def test_inventory_uses_bulk_reads_and_only_exposes_owned_vms(proxmox_cfg):
@@ -2631,17 +2629,15 @@ def test_converge_rejects_unsupported_change_before_any_mutation(
         match = "refusing to move .* net0 from bridge=vmbr9"
 
     backend = _backend(cfg, client)
-    secrets = Secrets(provider=ProxmoxSecrets("user@pve!provider", "secret"))
     state = SimpleNamespace(
         secrets_exist=lambda: True, secrets_path=tmp_path / "talossecrets.yaml"
     )
     moved: list[str] = []
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
-    monkeypatch.setattr(converge, "load_secrets", lambda _root: secrets)
     monkeypatch.setattr(converge, "preflight_tools", lambda: None)
     monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
     monkeypatch.setattr(converge, "State", lambda _root: state)
-    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
     monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
     monkeypatch.setattr(
         converge.factory, "installer_image", lambda _sid, _v, **kw: "talos:v1.13.0"

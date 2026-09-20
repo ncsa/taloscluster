@@ -215,12 +215,13 @@ def test_guide_documents_tailscale_handling():
     # Regression: the scaffold adds a `tailscale:` block to both files (login_server
     # in cluster.yaml, an auth_key "CHANGE-ME" placeholder in secrets.yaml). Neither
     # the placeholder refusal nor the tailscale_enabled hang is discoverable, so the
-    # guide must tell the reader to remove both sections (or supply real values) and
-    # to keep the 100.64.0.0/10 allowlist when reaching nodes over the tailnet.
+    # guide must tell the reader to remove the cluster.yaml section (or supply real
+    # values) and to keep the 100.64.0.0/10 allowlist when reaching nodes over the
+    # tailnet.
     text = GUIDE.read_text()
     assert "Tailscale" in text
     assert "CHANGE-ME" in text and "CHANGE-ME" in SCAFFOLD.read_text()
-    assert "remove the `tailscale:` section from *both*" in text
+    assert "remove the `tailscale:` section from `cluster.yaml`" in text
     assert "100.64.0.0/10" in text
 
 

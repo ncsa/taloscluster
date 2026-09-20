@@ -85,6 +85,9 @@ tailscale:
 
 SECRETS_TEMPLATE = """\
 # Secrets for this cluster — never commit (gitignored by `taloscluster init`).
+# This file is merged into cluster.yaml before validation, so these are ordinary
+# cluster.yaml keys that happen to live here; you may move them to any file
+# `include:` names, or into cluster.yaml itself.
 {provider_section}
 tailscale:
   # reusable (ideally ephemeral) pre-auth key so all nodes can register;

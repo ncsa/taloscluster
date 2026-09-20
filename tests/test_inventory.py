@@ -88,12 +88,6 @@ def test_project_name_uses_auth_access_when_available():
     assert project_name(conn) == "project-a"
 
 
-def _secret():
-    from taloscluster.config import OpenStackSecrets, Secrets
-
-    return Secrets(provider=OpenStackSecrets(credential_id="cid", credential_secret="csec"))
-
-
 def test_connect_uses_the_configured_region(monkeypatch):
     """The session region comes from cluster.yaml's openstack.region, not RegionOne."""
     import openstack
@@ -101,10 +95,16 @@ def test_connect_uses_the_configured_region(monkeypatch):
 
     seen = {}
     monkeypatch.setattr(openstack, "connect", lambda **kw: seen.update(kw) or object())
-    cfg = SimpleNamespace(openstack_url="https://cloud:5000/v3/", region="region-b")
-    session.connect(cfg, _secret())
+    cfg = SimpleNamespace(
+        openstack_url="https://cloud:5000/v3/", region="region-b",
+        openstack_credentials=("cid", "csec"),
+    )
+    session.connect(cfg)
     assert seen["region_name"] == "region-b"
-    cfg = SimpleNamespace(openstack_url="https://cloud:5000/v3/", region="RegionOne")
+    cfg = SimpleNamespace(
+        openstack_url="https://cloud:5000/v3/", region="RegionOne",
+        openstack_credentials=("cid", "csec"),
+    )
     seen.clear()
-    session.connect(cfg, _secret())
+    session.connect(cfg)
     assert seen["region_name"] == "RegionOne"

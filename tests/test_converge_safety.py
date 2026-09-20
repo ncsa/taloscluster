@@ -778,7 +778,6 @@ def test_destroy_decline_happens_before_plugin_teardown(monkeypatch, tmp_path):
     cfg = SimpleNamespace(name="testcluster")
     plugin_calls: list[str] = []
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
-    monkeypatch.setattr(converge, "load_secrets", lambda _root: object())
     backend = FakeBackend()
     monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
     monkeypatch.setattr(
@@ -796,7 +795,6 @@ def test_destroy_yes_skips_prompt_and_runs_plugin_teardown(monkeypatch, tmp_path
     cfg = SimpleNamespace(name="testcluster")
     plugin_calls: list[str] = []
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
-    monkeypatch.setattr(converge, "load_secrets", lambda _root: object())
     backend = FakeBackend()
     monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
     monkeypatch.setattr(
@@ -817,7 +815,6 @@ def test_destroy_continues_teardown_after_plugin_destroy_failure(monkeypatch, tm
     stale external registration is noticed."""
     cfg = SimpleNamespace(name="testcluster")
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
-    monkeypatch.setattr(converge, "load_secrets", lambda _root: object())
     backend = FakeBackend()
     monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
     monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_kw: 1)
@@ -1805,13 +1802,12 @@ def _stub_converge_full(monkeypatch, tmp_path, state, backend, machine_cfg,
         extension_sets=lambda: [()],
         machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
         tailscale_enabled=True,
+        tailscale_auth_key=None,
     )
-    secrets = SimpleNamespace(tailscale_auth_key=None)
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
-    monkeypatch.setattr(converge, "load_secrets", lambda _root: secrets)
     monkeypatch.setattr(converge, "preflight_tools", lambda: None)
     monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
-    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
     monkeypatch.setattr(converge, "State", lambda _root: state)
     monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
     monkeypatch.setattr(converge, "dry_run", lambda: False)
@@ -1953,13 +1949,12 @@ def _stub_converge(monkeypatch, tmp_path, state, backend):
         name="phoenix", talos_version="v1.13.0",
         extension_sets=lambda: [()], machines={},
         kubernetes_version="v1.31.0", tailscale_enabled=True,
+        tailscale_auth_key=None,
     )
-    secrets = SimpleNamespace(tailscale_auth_key=None)
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
-    monkeypatch.setattr(converge, "load_secrets", lambda _root: secrets)
     monkeypatch.setattr(converge, "preflight_tools", lambda: None)
     monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
-    monkeypatch.setattr(converge, "backend_for", lambda _cfg, _secrets: backend)
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
     monkeypatch.setattr(converge, "State", lambda _root: state)
     # image-factory and talosctl side effects are out of scope for these tests
     # and talosctl is not installed in CI

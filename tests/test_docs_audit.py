@@ -9,7 +9,7 @@ tests so the drift they caught cannot come back silently:
 
 - The complete ``cluster.yaml`` + ``secrets.yaml`` examples in
   ``docs/configuration.md`` must load through the real ``load_config`` /
-  ``load_secrets`` once the ``CHANGE-ME`` scaffold placeholders are replaced with
+  ``load_config`` once the ``CHANGE-ME`` scaffold placeholders are replaced with
   real credential strings.
 - Every ``[text](path.md#anchor)`` / ``[text](path.md)`` / ``[text](#anchor)``
   link across ``docs/`` must point at an existing markdown file and, when an
@@ -30,7 +30,7 @@ from pathlib import Path
 import yaml
 from markdown.extensions.toc import slugify_unicode
 
-from taloscluster.config import CLUSTER_FILE, SECRETS_FILE, load_config, load_secrets
+from taloscluster.config import CLUSTER_FILE, SECRETS_FILE, load_config
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
@@ -104,9 +104,9 @@ def test_complete_documented_example_loads(tmp_path):
     # The full worked example on the configuration overview page must stay a
     # complete, loadable cluster: one `cluster.yaml` block that carries every
     # required key and one `secrets.yaml` block for the same provider. The
-    # examples use `CHANGE-ME` scaffold placeholders (which `load_secrets`
+    # examples use `CHANGE-ME` scaffold placeholders (which the loader
     # deliberately refuses), so substitute real credential strings first, then
-    # run the real loaders -- a doc example that drifts out of the schema would
+    # run the real loader -- a doc example that drifts out of the schema would
     # fail here.
     blocks = _yaml_blocks(CONFIGURATION.read_text())
     cluster_blocks = [b for b in blocks if "controlplane:" in b]
@@ -121,12 +121,11 @@ def test_complete_documented_example_loads(tmp_path):
     (tmp_path / CLUSTER_FILE).write_text(yaml.safe_dump(cluster))
     (tmp_path / SECRETS_FILE).write_text(yaml.safe_dump(_replace_scaffold(secrets)))
 
+    # secrets.yaml is merged in, so one load covers both documented blocks
     cfg = load_config(tmp_path)
     assert cfg.name
     assert cfg.provider_name in ("openstack", "proxmox")
-    # the secrets must match the chosen provider (exactly one block present)
-    secrets = load_secrets(tmp_path)
-    assert secrets.provider is not None
+    assert all(cfg.provider.credentials())
 
 
 # --------------------------------------------------------------------------- #

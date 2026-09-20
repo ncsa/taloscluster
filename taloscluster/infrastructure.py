@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .config import Config, Machine, OpenStackConfig, ProxmoxConfig, Secrets
+from .config import Config, Machine, OpenStackConfig, ProxmoxConfig
 
 
 @dataclass(frozen=True)
@@ -178,15 +178,15 @@ class InfrastructureBackend(Protocol):
     def destroy_resources(self, inventory: InfrastructureInventory) -> None: ...
 
 
-def backend_for(cfg: Config, secrets: Secrets) -> InfrastructureBackend:
+def backend_for(cfg: Config) -> InfrastructureBackend:
     if isinstance(cfg.provider, OpenStackConfig):
         from .openstack.backend import OpenStackBackend
 
-        return OpenStackBackend(cfg, secrets)
+        return OpenStackBackend(cfg)
     if isinstance(cfg.provider, ProxmoxConfig):
         from .proxmox.backend import ProxmoxBackend
 
-        return ProxmoxBackend(cfg, secrets)
+        return ProxmoxBackend(cfg)
     raise TypeError(f"unsupported infrastructure provider: {type(cfg.provider).__name__}")
 
 

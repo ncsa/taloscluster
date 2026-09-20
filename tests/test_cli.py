@@ -97,7 +97,7 @@ def test_openstack_sdk_error_exits_cleanly_through_cli_main(
     # schematic id (pure unit test: no cloud access).
     monkeypatch.setattr("taloscluster.converge.preflight_tools", lambda: None)
     monkeypatch.setattr(cli._converge.factory, "schematic_id", lambda _s: "scheme-a-01")
-    monkeypatch.setattr(os_backend, "connect", lambda cfg, secrets: object())
+    monkeypatch.setattr(os_backend, "connect", lambda cfg: object())
 
     def _failing_load(self):
         raise os_exceptions.ConflictException(message="Neutron 409 (resource already exists)")
@@ -136,7 +136,7 @@ def test_openstack_transport_error_exits_cleanly_through_cli_main(
     )
     monkeypatch.setattr("taloscluster.converge.preflight_tools", lambda: None)
     monkeypatch.setattr(cli._converge.factory, "schematic_id", lambda _s: "scheme-a-01")
-    monkeypatch.setattr(os_backend, "connect", lambda cfg, secrets: object())
+    monkeypatch.setattr(os_backend, "connect", lambda cfg: object())
 
     def _failing_load(self):
         raise ConnectTimeout("Timed out connecting to the cloud endpoint")

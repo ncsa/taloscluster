@@ -10,13 +10,11 @@ import yaml
 
 from taloscluster import naming
 from taloscluster.config import (
+    SECRETS_FILE,
     ConfigError,
     OpenStackConfig,
-    OpenStackSecrets,
     ProxmoxConfig,
-    ProxmoxSecrets,
     SecurityRule,
-    load_secrets,
     proxmox_sdn,
     validate_warnings,
 )
@@ -776,163 +774,159 @@ def test_proxmox_external_section_rejects_invalid_fields(make_config, overrides,
         )
 
 
-def _write_provider_files(root: Path, cluster: dict, secrets: dict) -> None:
-    (root / "cluster.yaml").write_text(yaml.safe_dump(cluster))
-    (root / "secrets.yaml").write_text(yaml.safe_dump(secrets))
+def _write_secrets(root: Path, secrets: dict) -> None:
+    """Write the gitignored secrets.yaml the loader includes implicitly."""
+    (root / SECRETS_FILE).write_text(yaml.safe_dump(secrets))
 
 
-def test_openstack_secrets_are_typed_and_existing_fields_remain(tmp_path):
-    cluster = {
-        "openstack": {
-            "url": "https://example.com/v3",
-            "availability_zone": "nova",
-            "external_net": "public",
-        }
-    }
-    _write_provider_files(
-        tmp_path,
-        cluster,
-        {"openstack": {"credential_id": "id", "credential_secret": "secret"}},
+OPENSTACK_CREDENTIALS = {"credential_id": "id", "credential_secret": "secret"}
+PROXMOX_CREDENTIALS = {"token_id": "user@pve!provider", "token_secret": "secret"}
+
+
+def test_openstack_credentials_are_read_from_secrets_yaml(make_config, tmp_path):
+    _write_secrets(tmp_path, {"openstack": dict(OPENSTACK_CREDENTIALS)})
+
+    cfg = make_config()
+
+    assert cfg.openstack_credentials == ("id", "secret")
+    assert cfg.provider.credential_id == "id"
+
+
+def test_proxmox_credentials_are_read_from_secrets_yaml(make_config, tmp_path):
+    _write_secrets(tmp_path, {"proxmox": dict(PROXMOX_CREDENTIALS)})
+
+    cfg = make_config(
+        {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+         "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
+         "proxmox": {"url": "https://pve.example", "storage": "vms",
+                     "iso_storage": "isos",
+                     "network": {"cluster": {"bridge": "vmbr0"}}}},
+        remove=("openstack",),
     )
 
-    secrets = load_secrets(tmp_path)
-
-    assert isinstance(secrets.provider, OpenStackSecrets)
-    assert secrets.openstack_credential_id == "id"
-    assert secrets.openstack_credential_secret == "secret"
+    assert cfg.provider.credentials() == ("user@pve!provider", "secret")
 
 
-def test_proxmox_secrets_are_typed(tmp_path):
-    _write_provider_files(
-        tmp_path,
-        {"proxmox": {"url": "https://pve.example"}},
-        {"proxmox": {"token_id": "user@pve!provider", "token_secret": "secret"}},
-    )
-
-    secrets = load_secrets(tmp_path)
-
-    assert isinstance(secrets.provider, ProxmoxSecrets)
-    assert secrets.provider.token_id == "user@pve!provider"
-
-
-def test_secrets_provider_must_match_cluster_provider(tmp_path):
-    _write_provider_files(
-        tmp_path,
-        {"proxmox": {"url": "https://pve.example"}},
-        {"openstack": {"credential_id": "id", "credential_secret": "secret"}},
-    )
-
-    with pytest.raises(ConfigError, match="proxmox.*credentials"):
-        load_secrets(tmp_path)
-
-
-# ---------------------------------------------------------------------------
-# secrets value validation (null, non-string, CHANGE-ME placeholders)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    ("secrets", "message"),
-    [
-        # null / non-string credential values
-        ({"openstack": {"credential_id": None, "credential_secret": "secret"}},
-         "credential_id must be a non-empty string"),
-        ({"openstack": {"credential_id": 123, "credential_secret": "secret"}},
-         "credential_id must be a non-empty string"),
-        ({"openstack": {"credential_id": "id", "credential_secret": None}},
-         "credential_secret must be a non-empty string"),
-        ({"openstack": {"credential_id": "id", "credential_secret": []}},
-         "credential_secret must be a non-empty string"),
-        ({"openstack": {"credential_id": "id", "credential_secret": ""}},
-         "credential_secret must be a non-empty string"),
-        # scaffolded CHANGE-ME placeholders
-        ({"openstack": {"credential_id": "CHANGE-ME", "credential_secret": "secret"}},
-         "CHANGE-ME"),
-        ({"openstack": {"credential_id": "id", "credential_secret": "CHANGE-ME"}},
-         "CHANGE-ME"),
-    ],
-)
-def test_openstack_secrets_reject_invalid_values(tmp_path, secrets, message):
-    _write_provider_files(
-        tmp_path,
-        {"openstack": {"url": "https://example.com/v3",
-                       "availability_zone": "nova", "external_net": "public"}},
-        secrets,
-    )
-    with pytest.raises(ConfigError, match=message):
-        load_secrets(tmp_path)
-
-
-@pytest.mark.parametrize(
-    ("secrets", "message"),
-    [
-        ({"proxmox": {"token_id": None, "token_secret": "secret"}},
-         "token_id must be a non-empty string"),
-        ({"proxmox": {"token_id": "u@pve!t", "token_secret": 42}},
-         "token_secret must be a non-empty string"),
-        ({"proxmox": {"token_id": "u@pve!t", "token_secret": "CHANGE-ME"}},
-         "CHANGE-ME"),
-    ],
-)
-def test_proxmox_secrets_reject_invalid_values(tmp_path, secrets, message):
-    _write_provider_files(
-        tmp_path,
-        {"proxmox": {"url": "https://pve.example"}},
-        secrets,
-    )
-    with pytest.raises(ConfigError, match=message):
-        load_secrets(tmp_path)
-
-
-def test_tailscale_auth_key_may_be_omitted(tmp_path):
-    """An absent tailscale.auth_key leaves the tailscale extension idle."""
-    _write_provider_files(
-        tmp_path,
-        {"proxmox": {"url": "https://pve.example"}},
-        {"proxmox": {"token_id": "u@pve!t", "token_secret": "secret"}},
-    )
-    secrets = load_secrets(tmp_path)
-    assert secrets.tailscale_auth_key is None
-
-
-def test_tailscale_auth_key_none_is_allowed(tmp_path):
-    _write_provider_files(
-        tmp_path,
-        {"proxmox": {"url": "https://pve.example"}},
-        {"proxmox": {"token_id": "u@pve!t", "token_secret": "secret"},
-         "tailscale": {"auth_key": None}},
-    )
-    assert load_secrets(tmp_path).tailscale_auth_key is None
-
-
-def test_tailscale_auth_key_rejects_non_string_and_placeholder(tmp_path):
-    cluster = {"proxmox": {"url": "https://pve.example"}}
-    for bad, message in (
-        ({"auth_key": 42}, "tailscale.auth_key must be a non-empty string"),
-        ({"auth_key": "CHANGE-ME"}, "CHANGE-ME"),
-        ({"auth_key": ""}, "tailscale.auth_key must be a non-empty string"),
-    ):
-        _write_provider_files(
-            tmp_path,
-            cluster,
-            {"proxmox": {"token_id": "u@pve!t", "token_secret": "secret"},
-             "tailscale": bad},
+@pytest.mark.parametrize("source", ["secrets.yaml", "an include", "cluster.yaml"])
+def test_credentials_load_from_whichever_file_supplies_them(make_config, tmp_path, source):
+    """Where a credential is written is the user's choice, not the schema's."""
+    overrides: dict = {}
+    if source == "secrets.yaml":
+        _write_secrets(tmp_path, {"openstack": dict(OPENSTACK_CREDENTIALS)})
+    elif source == "an include":
+        (tmp_path / "creds.yaml").write_text(
+            yaml.safe_dump({"openstack": dict(OPENSTACK_CREDENTIALS)})
         )
-        with pytest.raises(ConfigError, match=message):
-            load_secrets(tmp_path)
+        overrides["include"] = ["creds.yaml"]
+    else:
+        overrides["openstack"] = dict(OPENSTACK_CREDENTIALS)
+
+    assert make_config(overrides).openstack_credentials == ("id", "secret")
 
 
-def test_valid_real_secrets_load(tmp_path):
-    _write_provider_files(
+def test_a_credential_set_in_two_files_names_both(make_config, tmp_path):
+    _write_secrets(tmp_path, {"openstack": {"credential_id": "from-secrets"}})
+
+    with pytest.raises(
+        ConfigError,
+        match="openstack.credential_id is set in both cluster.yaml and secrets.yaml",
+    ):
+        make_config({"openstack": {"credential_id": "from-cluster"}})
+
+
+def test_credentials_are_only_required_when_a_command_needs_them(make_config):
+    """`check` and friends load a cluster without any credential configured."""
+    cfg = make_config()
+
+    assert cfg.provider.credential_id == ""
+    with pytest.raises(ConfigError, match="credential_id must be a non-empty string"):
+        assert cfg.openstack_credentials
+
+
+@pytest.mark.parametrize(
+    ("credentials", "message"),
+    [
+        ({"credential_id": None, "credential_secret": "secret"},
+         "credential_id must be a non-empty string"),
+        ({"credential_id": 123, "credential_secret": "secret"},
+         "credential_id must be a non-empty string"),
+        ({"credential_id": "id", "credential_secret": None},
+         "credential_secret must be a non-empty string"),
+        ({"credential_id": "id", "credential_secret": ""},
+         "credential_secret must be a non-empty string"),
+        ({"credential_id": "CHANGE-ME", "credential_secret": "secret"}, "CHANGE-ME"),
+        ({"credential_id": "id", "credential_secret": "CHANGE-ME"}, "CHANGE-ME"),
+    ],
+)
+def test_openstack_credentials_reject_invalid_values(make_config, tmp_path,
+                                                     credentials, message):
+    _write_secrets(tmp_path, {"openstack": credentials})
+    cfg = make_config()
+    with pytest.raises(ConfigError, match=message):
+        assert cfg.openstack_credentials
+
+
+@pytest.mark.parametrize(
+    ("credentials", "message"),
+    [
+        ({"token_id": None, "token_secret": "secret"},
+         "token_id must be a non-empty string"),
+        ({"token_id": "u@pve!t", "token_secret": 42},
+         "token_secret must be a non-empty string"),
+        ({"token_id": "u@pve!t", "token_secret": "CHANGE-ME"}, "CHANGE-ME"),
+    ],
+)
+def test_proxmox_credentials_reject_invalid_values(make_config, tmp_path,
+                                                   credentials, message):
+    _write_secrets(tmp_path, {"proxmox": credentials})
+    cfg = make_config(
+        {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+         "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
+         "proxmox": {"url": "https://pve.example", "storage": "vms",
+                     "iso_storage": "isos",
+                     "network": {"cluster": {"bridge": "vmbr0"}}}},
+        remove=("openstack",),
+    )
+    with pytest.raises(ConfigError, match=message):
+        cfg.provider.credentials()
+
+
+def test_the_other_providers_credentials_are_still_refused(make_config, tmp_path):
+    """A secrets.yaml for the wrong provider now trips the one-provider rule."""
+    _write_secrets(tmp_path, {"proxmox": dict(PROXMOX_CREDENTIALS)})
+
+    with pytest.raises(ConfigError, match="exactly one provider section"):
+        make_config()
+
+
+def test_tailscale_auth_key_may_be_omitted(make_config, tmp_path):
+    """An absent tailscale.auth_key leaves the tailscale extension idle."""
+    _write_secrets(tmp_path, {"openstack": dict(OPENSTACK_CREDENTIALS)})
+
+    assert make_config().tailscale_auth_key is None
+    assert make_config({"tailscale": {"auth_key": None}}).tailscale_auth_key is None
+
+
+def test_tailscale_auth_key_loads_and_rejects_placeholders(make_config, tmp_path):
+    _write_secrets(
         tmp_path,
-        {"openstack": {"url": "https://example.com/v3",
-                       "availability_zone": "nova", "external_net": "public"}},
-        {"openstack": {"credential_id": "real-id", "credential_secret": "real-secret"},
+        {"openstack": dict(OPENSTACK_CREDENTIALS),
          "tailscale": {"auth_key": "tskey-auth-abc123"}},
     )
-    secrets = load_secrets(tmp_path)
-    assert secrets.provider.credential_id == "real-id"
-    assert secrets.provider.credential_secret == "real-secret"
-    assert secrets.tailscale_auth_key == "tskey-auth-abc123"
+    assert make_config().tailscale_auth_key == "tskey-auth-abc123"
+
+    for bad, message in (
+        (42, "tailscale.auth_key must be a non-empty string"),
+        ("CHANGE-ME", "CHANGE-ME"),
+        ("", "tailscale.auth_key must be a non-empty string"),
+    ):
+        _write_secrets(
+            tmp_path,
+            {"openstack": dict(OPENSTACK_CREDENTIALS), "tailscale": {"auth_key": bad}},
+        )
+        cfg = make_config()
+        with pytest.raises(ConfigError, match=message):
+            assert cfg.tailscale_auth_key
 
 
 # ---------------------------------------------------------------------------
@@ -1128,25 +1122,18 @@ def test_installed_plugin_sections_are_retained(make_config):
     assert cfg.raw["argocd"]["admins"] == []
 
 
-def test_unknown_top_level_secrets_key_is_rejected(tmp_path):
-    _write_provider_files(
-        tmp_path,
-        {"proxmox": {"url": "https://pve.example"}},
-        {"proxmox": {"token_id": "a", "token_secret": "b"}, "taliscla": {"auth_key": "x"}},
-    )
-    with pytest.raises(ConfigError, match=r"unknown key\(s\): taliscla"):
-        load_secrets(tmp_path)
+def test_unknown_top_level_secrets_key_is_rejected(make_config, tmp_path):
+    """secrets.yaml follows the cluster.yaml schema, and names itself on a typo."""
+    _write_secrets(tmp_path, {"taliscla": {"auth_key": "x"}})
+    with pytest.raises(ConfigError, match=r"secrets.yaml: unknown key\(s\): taliscla"):
+        make_config()
 
 
-def test_unknown_top_level_secrets_plugin_key_still_rejected(tmp_path):
+def test_unknown_top_level_secrets_plugin_key_still_rejected(make_config, tmp_path):
     """A section that no installed plugin owns is unknown, not a valid retention."""
-    _write_provider_files(
-        tmp_path,
-        {"proxmox": {"url": "https://pve.example"}},
-        {"proxmox": {"token_id": "a", "token_secret": "b"}, "gitlab": {"url": "x"}},
-    )
-    with pytest.raises(ConfigError, match=r"unknown key\(s\): gitlab"):
-        load_secrets(tmp_path)
+    _write_secrets(tmp_path, {"gitlab": {"url": "x"}})
+    with pytest.raises(ConfigError, match=r"secrets.yaml: unknown key\(s\): gitlab"):
+        make_config()
 
 
 # ---------------------------------------------------------------------------
@@ -1244,36 +1231,19 @@ def test_pool_freeform_keys_are_preserved(make_config):
 
 
 @pytest.mark.parametrize(
-    "secrets_overrides, field",
+    ("secrets", "field"),
     [
-        ({"openstack": {"credential_id": "a", "credential_secret": "b", "regoin": "x"}},
+        ({"openstack": {"credential_id": "a", "regoin": "x"}},
          r"openstack: unknown key\(s\): regoin"),
-        ({"proxmox": {"token_id": "a", "token_secret": "b", "storag": "x"}},
-         r"proxmox: unknown key\(s\): storag"),
+        ({"tailscale": {"auth_key": "x", "authky": "y"}},
+         r"tailscale: unknown key\(s\): authky"),
     ],
 )
-def test_unknown_nested_secrets_provider_key_is_rejected(tmp_path, secrets_overrides, field):
-    """A miscapped key inside the selected provider's secrets.yaml section is refused."""
-    if "openstack" in secrets_overrides:
-        cluster_section = {"openstack": {"url": "https://os.example", "availability_zone": "z",
-                                         "external_net": "n"}}
-    else:
-        cluster_section = {"proxmox": {"url": "https://pve.example"}}
-    _write_provider_files(tmp_path, cluster_section, secrets_overrides)
+def test_unknown_nested_secrets_key_is_rejected(make_config, tmp_path, secrets, field):
+    """A miscapped key inside a secrets.yaml section is refused like any other."""
+    _write_secrets(tmp_path, secrets)
     with pytest.raises(ConfigError, match=field):
-        load_secrets(tmp_path)
-
-
-def test_unknown_nested_secrets_tailscale_key_is_rejected(tmp_path):
-    """A miscapped key inside the secrets.yaml `tailscale:` section is refused."""
-    _write_provider_files(
-        tmp_path,
-        {"proxmox": {"url": "https://pve.example"}},
-        {"proxmox": {"token_id": "a", "token_secret": "b"},
-         "tailscale": {"auth_key": "x", "authky": "y"}},
-    )
-    with pytest.raises(ConfigError, match=r"tailscale: unknown key\(s\): authky"):
-        load_secrets(tmp_path)
+        make_config()
 
 
 # ---------------------------------------------------------------------------
@@ -1654,3 +1624,54 @@ def test_include_treats_an_explicit_null_section_as_absent(make_config, tmp_path
     cfg = make_config({"include": ["ts.yaml"], "tailscale": None})
 
     assert cfg.login_server == "https://hs.example"
+
+
+def test_credentials_stay_out_of_the_config_repr(make_config, tmp_path):
+    """A traceback or debug print of the config must not leak a credential."""
+    _write_secrets(
+        tmp_path,
+        {"openstack": {"credential_id": "id", "credential_secret": "super-secret"},
+         "tailscale": {"auth_key": "tskey-secret"}},
+    )
+    cfg = make_config()
+
+    assert "super-secret" not in repr(cfg)
+    assert "tskey-secret" not in repr(cfg)
+    assert "super-secret" not in repr(cfg.provider)
+    # the values are still there for the commands that need them
+    assert cfg.openstack_credentials == ("id", "super-secret")
+
+
+def test_a_tailscale_section_only_in_secrets_does_not_enable_tailscale(make_config, tmp_path):
+    """secrets.yaml holds credentials, not the decision to run tailscale."""
+    _write_secrets(
+        tmp_path,
+        {"openstack": dict(OPENSTACK_CREDENTIALS), "tailscale": {"auth_key": "tskey-x"}},
+    )
+    cfg = make_config()
+
+    assert cfg.tailscale_enabled is False
+    for machine in cfg.machines.values():
+        assert "siderolabs/tailscale" not in machine.extensions
+
+
+def test_a_tailscale_section_in_an_include_enables_tailscale(make_config, tmp_path):
+    (tmp_path / "ts.yaml").write_text(
+        yaml.safe_dump({"tailscale": {"login_server": "https://hs.example"}})
+    )
+    _write_secrets(
+        tmp_path,
+        {"openstack": dict(OPENSTACK_CREDENTIALS), "tailscale": {"auth_key": "tskey-x"}},
+    )
+    cfg = make_config({"include": ["ts.yaml"]})
+
+    assert cfg.tailscale_enabled is True
+    assert cfg.tailscale_auth_key == "tskey-x"
+    for machine in cfg.machines.values():
+        assert "siderolabs/tailscale" in machine.extensions
+
+
+def test_include_may_not_list_secrets_yaml(make_config, tmp_path):
+    _write_secrets(tmp_path, {"openstack": dict(OPENSTACK_CREDENTIALS)})
+    with pytest.raises(ConfigError, match="secrets.yaml is always included"):
+        make_config({"include": ["secrets.yaml"]})

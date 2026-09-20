@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import yaml
 
@@ -78,7 +77,7 @@ def test_build_configs_stacks_the_firewall_patch_on_every_node(
     monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
     contributions = {h: TalosContribution(install_disk="/dev/vda") for h in cfg.machines}
     machineconfig.build_configs(
-        cfg, SimpleNamespace(tailscale_auth_key=None), cfg.machines,
+        cfg, cfg.machines,
         Endpoint(vip="192.0.2.10", advertised_address="203.0.113.10"), tmp_path / "s",
         {m.extensions: "installer" for m in cfg.machines.values()}, contributions,
     )

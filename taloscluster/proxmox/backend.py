@@ -21,8 +21,6 @@ from ..config import (
     Machine,
     ProxmoxConfig,
     ProxmoxSdn,
-    ProxmoxSecrets,
-    Secrets,
     proxmox_sdn,
 )
 from ..errors import ConfigError, ReconcileError
@@ -76,18 +74,14 @@ class ProxmoxBackend:
     name = "proxmox"
     installer_platform = talos.INSTALLER_PLATFORM
 
-    def __init__(self, cfg: Config, secrets: Secrets, client: ProxmoxClient | None = None):
+    def __init__(self, cfg: Config, client: ProxmoxClient | None = None):
         if not isinstance(cfg.provider, ProxmoxConfig):
             raise ConfigError("Proxmox backend requires proxmox configuration")
-        if not isinstance(secrets.provider, ProxmoxSecrets):
-            raise ConfigError("Proxmox backend requires proxmox credentials")
         self.cfg = cfg
         self.provider = cfg.provider
-        self.secrets = secrets.provider
         self.client = client or ProxmoxClient(
             self.provider.url,
-            self.secrets.token_id,
-            self.secrets.token_secret,
+            *self.provider.credentials(),
             verify=self.provider.tls_verify,
         )
         self.sdn: ProxmoxSdn | None = proxmox_sdn(cfg.name, self.provider)
@@ -1653,8 +1647,9 @@ class ProxmoxBackend:
 
     def print_environment(self) -> None:
         print(f"export PVE_API_URL={shlex.quote(self.provider.url)}")
-        print(f"export PVE_API_TOKEN_ID={shlex.quote(self.secrets.token_id)}")
-        print(f"export PVE_API_TOKEN_SECRET={shlex.quote(self.secrets.token_secret)}")
+        token_id, token_secret = self.provider.credentials()
+        print(f"export PVE_API_TOKEN_ID={shlex.quote(token_id)}")
+        print(f"export PVE_API_TOKEN_SECRET={shlex.quote(token_secret)}")
 
     def download_image(self) -> str:
         return self.ensure_boot_artifact()

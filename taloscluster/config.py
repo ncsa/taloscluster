@@ -31,9 +31,6 @@ _CLUSTER_KEYS = {
     "name", "tags", "talos", "kubernetes", "controlplane", "workers",
     "network", "security", "tailscale", "openstack", "proxmox", "include",
 }
-# Top-level `secrets.yaml` keys taloscluster reads (plus plugin sections).
-_SECRETS_KEYS = {"tailscale", "openstack", "proxmox"}
-
 # Direct keys each fixed-schema section of `cluster.yaml` accepts. These catch
 # a miscapped or unsupported key inside a section -- `talos.extensons`,
 # `network.dnss`, `openstack.regoin` -- that the top-level allowlist alone would
@@ -47,11 +44,13 @@ _L2_KEYS = {"cidr", "gateway", "vlan", "mtu", "kubeapi_vip"}
 #: L2 keys that only describe the externally routed network, never the node L2.
 _L2_EXTERNAL_ONLY_KEYS = {"anchor_cidr", "ingress_pool"}
 _KUBERNETES_KEYS = {"version"}
-_TAILSCALE_KEYS = {"login_server"}
+_TAILSCALE_KEYS = {"login_server", "auth_key"}
 _PROVIDER_KEYS = {
-    "openstack": {"url", "availability_zone", "external_net", "region"},
+    "openstack": {"url", "availability_zone", "external_net", "region",
+                  "credential_id", "credential_secret"},
     "proxmox": {"url", "storage", "iso_storage", "cidata_storage",
-                "placement_strategy", "nodes", "tls_verify", "network"},
+                "placement_strategy", "nodes", "tls_verify", "network",
+                "token_id", "token_secret"},
 }
 #: Direct keys `proxmox.network` accepts. Both subsections are fixed-schema, so
 #: a miscapped `clustr`/`extrnl` section is refused instead of ignored.
@@ -84,13 +83,6 @@ _MOVED_KEYS: dict[tuple[str, ...], dict[str, str]] = {
 #: `config_patches` are freeform lists, so only the structural keys are fixed.
 _POOL_KEYS = {"count", "flavor", "disk", "cores", "memory", "node",
               "extensions", "config_patches", "tags"}
-#: Direct keys each `secrets.yaml` section accepts.
-_SECRETS_SECTION_KEYS = {
-    "openstack": {"credential_id", "credential_secret"},
-    "proxmox": {"token_id", "token_secret"},
-    "tailscale": {"auth_key"},
-}
-
 _NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 # `taloscluster init` scaffolds this placeholder into secrets.yaml; leaving it
 # in place must not survive loading, or the provider client fails deep in an
@@ -150,6 +142,17 @@ class OpenStackConfig:
     external_net: str
     # Default region; override in cluster.yaml with `openstack.region`.
     region: str = "RegionOne"
+    # application credential; scaffolded into secrets.yaml, which is merged in.
+    # kept out of the repr so a traceback or a debug print cannot leak it
+    credential_id: str = field(default="", repr=False)
+    credential_secret: str = field(default="", repr=False)
+
+    def credentials(self) -> tuple[str, str]:
+        """The application credential, refusing a missing or placeholder value."""
+        return (
+            _require_secret("openstack.credential_id", self.credential_id),
+            _require_secret("openstack.credential_secret", self.credential_secret),
+        )
 
 
 @dataclass(frozen=True)
@@ -162,6 +165,17 @@ class ProxmoxConfig:
     nodes: tuple[str, ...] = ()
     tls_verify: bool | str = True
     network: dict[str, Any] = field(default_factory=dict)
+    # api token; scaffolded into secrets.yaml, which is merged in; kept out of
+    # the repr so a traceback or a debug print cannot leak it
+    token_id: str = field(default="", repr=False)
+    token_secret: str = field(default="", repr=False)
+
+    def credentials(self) -> tuple[str, str]:
+        """The API token, refusing a missing or placeholder value."""
+        return (
+            _require_secret("proxmox.token_id", self.token_id),
+            _require_secret("proxmox.token_secret", self.token_secret),
+        )
 
 
 @dataclass(frozen=True)
@@ -216,58 +230,6 @@ def proxmox_sdn(cluster: str, provider: ProxmoxConfig) -> ProxmoxSdn | None:
 
 
 ProviderConfig = OpenStackConfig | ProxmoxConfig
-
-
-@dataclass(frozen=True)
-class OpenStackSecrets:
-    credential_id: str
-    credential_secret: str
-
-
-@dataclass(frozen=True)
-class ProxmoxSecrets:
-    token_id: str
-    token_secret: str
-
-
-ProviderSecrets = OpenStackSecrets | ProxmoxSecrets
-
-
-@dataclass(frozen=True, init=False)
-class Secrets:
-    provider: ProviderSecrets
-    tailscale_auth_key: str | None     # None => tailscale extension idles
-
-    def __init__(
-        self,
-        provider: ProviderSecrets | None = None,
-        tailscale_auth_key: str | None = None,
-        *,
-        openstack_credential_id: str | None = None,
-        openstack_credential_secret: str | None = None,
-    ) -> None:
-        """Keep the pre-provider constructor available to in-tree plugins/tests."""
-        if provider is None:
-            if openstack_credential_id is None or openstack_credential_secret is None:
-                raise ConfigError("provider credentials are required")
-            provider = OpenStackSecrets(
-                credential_id=openstack_credential_id,
-                credential_secret=openstack_credential_secret,
-            )
-        object.__setattr__(self, "provider", provider)
-        object.__setattr__(self, "tailscale_auth_key", tailscale_auth_key)
-
-    @property
-    def openstack_credential_id(self) -> str:
-        if not isinstance(self.provider, OpenStackSecrets):
-            raise ConfigError("OpenStack credentials requested for a Proxmox cluster")
-        return self.provider.credential_id
-
-    @property
-    def openstack_credential_secret(self) -> str:
-        if not isinstance(self.provider, OpenStackSecrets):
-            raise ConfigError("OpenStack credentials requested for a Proxmox cluster")
-        return self.provider.credential_secret
 
 
 @dataclass(frozen=True)
@@ -337,13 +299,29 @@ class Config:
     security: dict[str, SecurityRule]
 
     login_server: str | None           # headscale/tailscale login server
+    # pre-auth key nodes register with; None leaves the extension idle, and it
+    # stays out of the repr like the provider credentials
+    auth_key: str | None = field(default=None, repr=False)
     # a `tailscale:` section in cluster.yaml opts the installed system into the
     # tailscale extension; the shared boot ISO always carries it either way
     tailscale_enabled: bool = True
 
+    # the merged cluster.yaml + secrets.yaml + include tree: it carries the
+    # credentials verbatim, so never print or serialize it
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     # -- derived ------------------------------------------------------------
+
+    @property
+    def tailscale_auth_key(self) -> str | None:
+        """The pre-auth key, or None when the extension is left idle.
+
+        Refuses a scaffolded or empty key here rather than letting every node
+        fail to register: a cluster that configures a key means to use it.
+        """
+        if self.auth_key is None:
+            return None
+        return _require_secret("tailscale.auth_key", self.auth_key)
 
     @property
     def provider_name(self) -> str:
@@ -364,6 +342,10 @@ class Config:
     @property
     def region(self) -> str:
         return self._openstack.region
+
+    @property
+    def openstack_credentials(self) -> tuple[str, str]:
+        return self._openstack.credentials()
 
     @property
     def security_kubernetes(self) -> dict[str, str]:
@@ -513,7 +495,11 @@ def _merge_yaml(
         if isinstance(value, dict) and isinstance(base.get(key), dict):
             _merge_yaml(base[key], value, extra_name, origins, base_name, f"{path}.")
             continue
-        # an explicit null is no value at all, as everywhere else in the loader
+        # an explicit null is no value at all, as everywhere else in the loader:
+        # a comment-only section (`rancher:` with only comments under it) adds
+        # nothing and collides with nothing
+        if value is None:
+            continue
         if base.get(key) is not None:
             raise ConfigError(
                 f"{path} is set in both {origins.get(path, base_name)} and "
@@ -542,6 +528,10 @@ def _include_paths(d: dict[str, Any], root: Path, where: str) -> list[Path]:
             raise ConfigError(
                 f"{where}: include {entry!r} must be a path inside the cluster directory"
             )
+        if path.resolve() == (root / SECRETS_FILE).resolve():
+            raise ConfigError(
+                f"{where}: {SECRETS_FILE} is always included; do not list it"
+            )
         if path.resolve() in seen:
             raise ConfigError(
                 f"{where}: include lists {entry} twice"
@@ -554,8 +544,14 @@ def _include_paths(d: dict[str, Any], root: Path, where: str) -> list[Path]:
     return paths
 
 
-def _apply_includes(d: dict[str, Any], root: Path, known: set[str]) -> dict[str, Any]:
+def _apply_includes(
+    d: dict[str, Any], root: Path, known: set[str]
+) -> tuple[dict[str, Any], set[str]]:
     """Merge every `include:` file into the `cluster.yaml` tree.
+
+    Returns the merged tree and the top-level sections the cluster opted into
+    by hand -- everything but the ones only `secrets.yaml` contributes, which
+    holds credentials for features, not the choice to use them.
 
     Included files carry the same keys as `cluster.yaml` and are merged before
     validation, so where a value lives is the user's choice and the schema is
@@ -565,7 +561,14 @@ def _apply_includes(d: dict[str, Any], root: Path, known: set[str]) -> dict[str,
     `cluster.yaml` whichever file supplied it.
     """
     origins: dict[str, str] = {}
-    for path in _include_paths(d, root, CLUSTER_FILE):
+    opted_in = set(d)
+    # secrets.yaml is always included first when it exists, so credentials are
+    # ordinary cluster keys that happen to live in a gitignored file
+    secrets = root / SECRETS_FILE
+    sources = ([secrets] if secrets.is_file() else []) + _include_paths(
+        d, root, CLUSTER_FILE
+    )
+    for path in sources:
         if path.exists() and not path.is_file():
             raise ConfigError(f"{CLUSTER_FILE}: include {path.name} is not a file")
         extra = read_yaml(path)
@@ -575,8 +578,10 @@ def _apply_includes(d: dict[str, Any], root: Path, known: set[str]) -> dict[str,
                 "included files cannot include further files"
             )
         _reject_unknown_keys(extra, path.name, known - {"include"})
+        if path != secrets:
+            opted_in.update(extra)
         _merge_yaml(d, extra, path.name, origins, CLUSTER_FILE)
-    return d
+    return d, opted_in
 
 
 def _plugin_config_sections() -> set[str]:
@@ -636,6 +641,11 @@ def _secret(name: str, value: Any, where: str) -> str:
             "placeholder; set it to your real credential"
         )
     return value
+
+
+def _require_secret(name: str, value: Any) -> str:
+    """A credential the command about to run needs, wherever it was written."""
+    return _secret(name, value or None, f"{SECRETS_FILE} (or any included file)")
 
 
 def _string_list(value: Any, field: str) -> list[str]:
@@ -715,6 +725,8 @@ def _provider_config(d: dict[str, Any], where: str) -> ProviderConfig:
             ),
             external_net=require(provider, "external_net", where=f"{where}: openstack"),
             region=str(provider.get("region") or "RegionOne"),
+            credential_id=provider.get("credential_id") or "",
+            credential_secret=provider.get("credential_secret") or "",
         )
     return ProxmoxConfig(
         url=require(provider, "url", where=f"{where}: proxmox"),
@@ -725,6 +737,8 @@ def _provider_config(d: dict[str, Any], where: str) -> ProviderConfig:
         nodes=tuple(_string_list(provider.get("nodes"), f"{where}: proxmox.nodes")),
         tls_verify=provider.get("tls_verify", True),
         network=_mapping(provider.get("network"), f"{where}: proxmox.network"),
+        token_id=provider.get("token_id") or "",
+        token_secret=provider.get("token_secret") or "",
     )
 
 
@@ -894,7 +908,7 @@ def load_config(root: Path) -> Config:
     where = CLUSTER_FILE
     known = _CLUSTER_KEYS | _plugin_config_sections()
     _reject_unknown_keys(d, where, known)
-    d = _apply_includes(d, root, known)
+    d, opted_in = _apply_includes(d, root, known)
     _reject_moved_keys(d, where)
 
     talos = _mapping(d.get("talos"), f"{where}: talos")
@@ -928,7 +942,10 @@ def load_config(root: Path) -> Config:
         network=network,
         security=_security_rules(security, where),
         login_server=tailscale.get("login_server"),
-        tailscale_enabled="tailscale" in d,
+        auth_key=tailscale.get("auth_key"),
+        # a `tailscale:` section that only secrets.yaml carries is a leftover
+        # credential, not a decision to run tailscale on the nodes
+        tailscale_enabled="tailscale" in opted_in,
         raw=d,
     )
     _validate(cfg)
@@ -944,63 +961,6 @@ def load_config(root: Path) -> Config:
     if not cfg.kubernetes_version.startswith("v"):
         cfg.kubernetes_version = f"v{cfg.kubernetes_version}"
     return cfg
-
-
-def load_secrets(root: Path) -> Secrets:
-    d = read_yaml(root / SECRETS_FILE)
-    where = SECRETS_FILE
-    _reject_unknown_keys(d, where, _SECRETS_KEYS | _plugin_config_sections())
-    cluster = read_yaml(root / CLUSTER_FILE)
-    selected = [name for name in ("openstack", "proxmox") if name in cluster]
-    if len(selected) != 1:
-        raise ConfigError(
-            f"{CLUSTER_FILE}: exactly one provider section is required: openstack or proxmox"
-        )
-    provider_name = selected[0]
-    other = "proxmox" if provider_name == "openstack" else "openstack"
-    if provider_name not in d or other in d:
-        raise ConfigError(
-            f"{where}: {provider_name} credentials must match the {CLUSTER_FILE} provider"
-        )
-    provider_data = _mapping(d[provider_name], f"{where}: {provider_name}")
-    _reject_unknown_keys(
-        provider_data, f"{where}: {provider_name}", _SECRETS_SECTION_KEYS[provider_name]
-    )
-    if provider_name == "openstack":
-        provider: ProviderSecrets = OpenStackSecrets(
-            credential_id=_secret(
-                "openstack.credential_id",
-                require(provider_data, "credential_id", where=f"{where}: openstack"),
-                where=f"{where}: openstack",
-            ),
-            credential_secret=_secret(
-                "openstack.credential_secret",
-                require(provider_data, "credential_secret", where=f"{where}: openstack"),
-                where=f"{where}: openstack",
-            ),
-        )
-    else:
-        provider = ProxmoxSecrets(
-            token_id=_secret(
-                "proxmox.token_id",
-                require(provider_data, "token_id", where=f"{where}: proxmox"),
-                where=f"{where}: proxmox",
-            ),
-            token_secret=_secret(
-                "proxmox.token_secret",
-                require(provider_data, "token_secret", where=f"{where}: proxmox"),
-                where=f"{where}: proxmox",
-            ),
-        )
-    ts = _mapping(d.get("tailscale"), f"{where}: tailscale")
-    _reject_unknown_keys(ts, f"{where}: tailscale", _SECRETS_SECTION_KEYS["tailscale"])
-    auth_key = ts.get("auth_key")
-    return Secrets(
-        provider=provider,
-        tailscale_auth_key=(
-            None if auth_key is None else _secret("tailscale.auth_key", auth_key, where)
-        ),
-    )
 
 
 def _int(value: Any, field: str, where: str) -> int:

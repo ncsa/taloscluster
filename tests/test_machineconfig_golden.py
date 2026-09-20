@@ -17,7 +17,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from taloscluster.config import Secrets
 from taloscluster.infrastructure import Endpoint
 from taloscluster.openstack import talos
 from taloscluster.talos import machineconfig
@@ -105,7 +104,10 @@ def cfg(make_config):
     return make_config({
         "controlplane": {"count": 1, "flavor": "gp.medium", "disk": 40},
         "workers": {"worker": {"count": 1, "flavor": "gp.xlarge", "disk": 50}},
-        "tailscale": {"login_server": "https://headscale.example.com"},
+        "tailscale": {
+            "login_server": "https://headscale.example.com",
+            "auth_key": "tskey-secret",
+        },
     })
 
 
@@ -127,11 +129,6 @@ def test_openstack_patch_stack_matches_golden(cfg, monkeypatch, tmp_path):
 
     machineconfig.build_configs(
         cfg,
-        Secrets(
-            openstack_credential_id="id",
-            openstack_credential_secret="secret",
-            tailscale_auth_key="tskey-secret",
-        ),
         cfg.machines,
         endpoint=endpoint,
         secrets_path=secrets_path,

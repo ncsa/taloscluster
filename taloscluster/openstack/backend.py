@@ -10,7 +10,7 @@ from keystoneauth1.exceptions import ClientException, RetriableConnectionFailure
 from openstack import exceptions as os_exceptions
 
 from .. import naming
-from ..config import Config, Machine, OpenStackConfig, OpenStackSecrets, Secrets
+from ..config import Config, Machine, OpenStackConfig
 from ..errors import ConfigError, ReconcileError
 from ..infrastructure import (
     Endpoint,
@@ -63,14 +63,11 @@ class OpenStackBackend:
     name = "openstack"
     installer_platform = talos.INSTALLER_PLATFORM
 
-    def __init__(self, cfg: Config, secrets: Secrets):
+    def __init__(self, cfg: Config):
         if not isinstance(cfg.provider, OpenStackConfig):
             raise ConfigError("OpenStack backend requires openstack configuration")
-        if not isinstance(secrets.provider, OpenStackSecrets):
-            raise ConfigError("OpenStack backend requires openstack credentials")
         self.cfg = cfg
-        self.secrets = secrets
-        self.conn = connect(cfg, secrets)
+        self.conn = connect(cfg)
 
     def talos_contribution(
         self, machine: Machine, endpoint: Endpoint
@@ -218,13 +215,10 @@ class OpenStackBackend:
         print(f"export OS_AUTH_URL={shlex.quote(provider.url)}")
         print("export OS_AUTH_TYPE=v3applicationcredential")
         print(f"export OS_REGION_NAME={shlex.quote(self.cfg.region)}")
+        credential_id, credential_secret = self.cfg.openstack_credentials
+        print(f"export OS_APPLICATION_CREDENTIAL_ID={shlex.quote(credential_id)}")
         print(
-            "export OS_APPLICATION_CREDENTIAL_ID="
-            f"{shlex.quote(self.secrets.openstack_credential_id)}"
-        )
-        print(
-            "export OS_APPLICATION_CREDENTIAL_SECRET="
-            f"{shlex.quote(self.secrets.openstack_credential_secret)}"
+            f"export OS_APPLICATION_CREDENTIAL_SECRET={shlex.quote(credential_secret)}"
         )
 
     @_reconcile_errors

@@ -37,9 +37,7 @@ from . import plugins, versions
 from .config import (
     Config,
     Machine,
-    Secrets,
     load_config,
-    load_secrets,
     validate_warnings,
 )
 from .context import Context
@@ -67,13 +65,12 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     happen; an unreachable existing cluster is the reverse -- nothing was
     reconciled, so it must not look like one that did."""
     cfg = load_config(root)
-    secrets = load_secrets(root)
 
     log("preflight")
     preflight_tools()
     for w in validate_warnings(cfg):
         warn(w)
-    if secrets.tailscale_auth_key is None:
+    if cfg.tailscale_auth_key is None:
         info("no tailscale key -> tailscale extension will idle (node still boots)")
 
     state = State(root)
@@ -81,7 +78,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     kubeconfig_path = root / "kubeconfig"
     machines = cfg.machines
 
-    backend = backend_for(cfg, secrets)
+    backend = backend_for(cfg)
 
     # installer image ref and schematic id per extension set (the schematic
     # drives extension removal; converge compares it against the RUNNING node to
@@ -205,7 +202,6 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         config_kubernetes_version = _config_kubernetes_version(cfg, kubeconfig_path, up)
         configs = machineconfig.build_configs(
             cfg,
-            secrets,
             machines,
             refs.kubernetes,
             secrets_path,
@@ -271,7 +267,6 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             configs.update(
                 _new_node_configs(
                     cfg,
-                    secrets,
                     machines,
                     inv,
                     refs,
@@ -930,7 +925,6 @@ def _running_kubernetes_version(kubeconfig: Path) -> str | None:
 
 def _new_node_configs(
     cfg: Config,
-    secrets: Secrets,
     machines: dict[str, Machine],
     inv: InfrastructureInventory,
     refs: NetworkResult,
@@ -953,7 +947,6 @@ def _new_node_configs(
         return {}
     return machineconfig.build_configs(
         cfg,
-        secrets,
         {h: machines[h] for h in fresh},
         refs.kubernetes,
         secrets_path,
@@ -1617,8 +1610,7 @@ def status_report(root: Path) -> dict[str, Any]:
     re-derive them.
     """
     cfg = load_config(root)
-    secrets = load_secrets(root)
-    backend = backend_for(cfg, secrets)
+    backend = backend_for(cfg)
     inv = backend.load_inventory()
     refs = backend.current_network(inv)
     kubeconfig_path = root / "kubeconfig"
@@ -1925,7 +1917,7 @@ def dashboard(root: Path, nodes: list[str] | None = None) -> None:
     if nodes:
         targets = {n: n for n in nodes}
     else:
-        backend = backend_for(cfg, load_secrets(root))
+        backend = backend_for(cfg)
         inv = backend.load_inventory()
         refs = backend.current_network(inv)
         members = talosctl.member_addresses(
@@ -1986,8 +1978,7 @@ def print_env(root: Path) -> None:
     for logging.
     """
     cfg = load_config(root)
-    secrets = load_secrets(root)
-    backend_for(cfg, secrets).print_environment()
+    backend_for(cfg).print_environment()
 
 
 def image_download(root: Path) -> None:
@@ -1995,8 +1986,7 @@ def image_download(root: Path) -> None:
     isn't there yet. Standalone version of the converge image phase;
     handy for pre-seeding the image without touching the cluster."""
     cfg = load_config(root)
-    secrets = load_secrets(root)
-    backend = backend_for(cfg, secrets)
+    backend = backend_for(cfg)
     log("image download")
     name = backend.download_image()
     info(f"boot image: {name}")
@@ -2010,14 +2000,12 @@ def image_remove(root: Path, assume_yes: bool = False) -> None:
     base extensions.
     """
     cfg = load_config(root)
-    secrets = load_secrets(root)
-    backend_for(cfg, secrets).remove_image(assume_yes=assume_yes)
+    backend_for(cfg).remove_image(assume_yes=assume_yes)
 
 
 def destroy(root: Path, assume_yes: bool = False) -> int:
     cfg = load_config(root)
-    secrets = load_secrets(root)
-    backend = backend_for(cfg, secrets)
+    backend = backend_for(cfg)
     inv = backend.load_inventory()
 
     log(f"destroy {cfg.name}: {backend.destroy_summary(inv)}")

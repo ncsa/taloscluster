@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from taloscluster.config import ConfigError, ProxmoxSecrets, Secrets
+from taloscluster.config import ConfigError
 from taloscluster.infrastructure import (
     InfrastructureInventory,
     InfrastructureMachine,
@@ -76,6 +76,8 @@ def test_proxmox_backend_is_selected(make_config):
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
+                "token_id": "user@pve!provider",
+                "token_secret": "secret",
                 "network": {
                     "cluster": {"bridge": "vmbr0"},
                 },
@@ -83,12 +85,7 @@ def test_proxmox_backend_is_selected(make_config):
         },
         remove=("openstack",),
     )
-    secrets = Secrets(
-        provider=ProxmoxSecrets("user@pve!provider", "secret"),
-        tailscale_auth_key=None,
-    )
-
-    assert backend_for(cfg, secrets).name == "proxmox"
+    assert backend_for(cfg).name == "proxmox"
 
 
 def test_backends_declare_a_talos_contribution_and_installer_platform():
@@ -130,8 +127,7 @@ def test_proxmox_backend_contribution_rejects_anchor_collisions(make_config):
         },
         remove=("openstack",),
     )
-    secrets = Secrets(provider=ProxmoxSecrets("user@pve!provider", "secret"))
-    backend = ProxmoxBackend(cfg, secrets, client=object())
+    backend = ProxmoxBackend(cfg, client=object())
     machine = cfg.machines["testcluster-controlplane-01"]
 
     with pytest.raises(ConfigError, match="anchor address collision"):

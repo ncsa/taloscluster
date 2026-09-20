@@ -21,7 +21,7 @@ from openstack.connection import Connection
 import openstack
 
 from .. import naming
-from ..config import Config, Secrets
+from ..config import Config
 from ..errors import ReconcileError
 
 # Neutron resource kinds we cache (all support tags). Servers/volumes are Nova/
@@ -29,13 +29,14 @@ from ..errors import ReconcileError
 _NETWORK_KINDS = ("networks", "subnets", "routers", "ports", "security_groups", "ips")
 
 
-def connect(cfg: Config, secrets: Secrets) -> Connection:
+def connect(cfg: Config) -> Connection:
+    credential_id, credential_secret = cfg.openstack_credentials
     return openstack.connect(
         auth_type="v3applicationcredential",
         auth={
             "auth_url": cfg.openstack_url,
-            "application_credential_id": secrets.openstack_credential_id,
-            "application_credential_secret": secrets.openstack_credential_secret,
+            "application_credential_id": credential_id,
+            "application_credential_secret": credential_secret,
         },
         region_name=cfg.region,
     )

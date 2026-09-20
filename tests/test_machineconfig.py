@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 import yaml as _yaml
 
-from taloscluster.config import ConfigError, Secrets
+from taloscluster.config import ConfigError
 from taloscluster.infrastructure import Endpoint, TalosContribution, TalosPatch
 from taloscluster.talos import machineconfig
 
@@ -34,6 +34,19 @@ def cfg(make_config):
         "controlplane": {"count": 1, "flavor": "gp.medium", "disk": 40},
         "workers": {"worker": {"count": 1, "flavor": "gp.xlarge", "disk": 50}},
         "tailscale": {"login_server": "https://headscale.example.com"},
+    })
+
+
+@pytest.fixture
+def cfg_with_key(make_config):
+    """The same cluster with a tailscale pre-auth key configured."""
+    return make_config({
+        "controlplane": {"count": 1, "flavor": "gp.medium", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "gp.xlarge", "disk": 50}},
+        "tailscale": {
+            "login_server": "https://headscale.example.com",
+            "auth_key": "tskey-secret",
+        },
     })
 
 
@@ -204,16 +217,11 @@ def test_build_configs_one_entry_per_machine(cfg, monkeypatch, tmp_path):
 
     monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
 
-    secrets = Secrets(
-        openstack_credential_id="id",
-        openstack_credential_secret="secret",
-        tailscale_auth_key="tskey-secret",
-    )
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
 
     configs = machineconfig.build_configs(
-        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
+        cfg, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),
         contributions=_contributions(cfg),
     )
@@ -233,16 +241,11 @@ def test_build_configs_output_type_matches_role(cfg, monkeypatch, tmp_path):
 
     monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
 
-    secrets = Secrets(
-        openstack_credential_id="id",
-        openstack_credential_secret="secret",
-        tailscale_auth_key="tskey-secret",
-    )
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
 
     machineconfig.build_configs(
-        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
+        cfg, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),
         contributions=_contributions(cfg),
     )
@@ -264,12 +267,11 @@ def test_build_configs_passes_contribution_disk_to_talosctl(cfg, monkeypatch, tm
         return "CONFIG"
 
     monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
-    secrets = Secrets(openstack_credential_id="id", openstack_credential_secret="secret")
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
 
     machineconfig.build_configs(
-        cfg, secrets, cfg.machines, endpoint=ep, secrets_path=secrets_path,
+        cfg, cfg.machines, endpoint=ep, secrets_path=secrets_path,
         installer_images=_installer_images(cfg),
         contributions=_contributions(cfg, install_disk=FAKE_DISK),
     )
@@ -281,7 +283,9 @@ def test_build_configs_passes_contribution_disk_to_talosctl(cfg, monkeypatch, tm
     )
 
 
-def test_build_configs_tailscale_patch_present_when_key_set(cfg, monkeypatch, tmp_path):
+def test_build_configs_tailscale_patch_present_when_key_set(
+    cfg_with_key, monkeypatch, tmp_path
+):
     calls = []
 
     def fake_gen_config(**kwargs):
@@ -290,21 +294,16 @@ def test_build_configs_tailscale_patch_present_when_key_set(cfg, monkeypatch, tm
 
     monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
 
-    secrets = Secrets(
-        openstack_credential_id="id",
-        openstack_credential_secret="secret",
-        tailscale_auth_key="tskey-secret",
-    )
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
 
     machineconfig.build_configs(
-        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
-        secrets_path=secrets_path, installer_images=_installer_images(cfg),
-        contributions=_contributions(cfg),
+        cfg_with_key, cfg_with_key.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
+        secrets_path=secrets_path, installer_images=_installer_images(cfg_with_key),
+        contributions=_contributions(cfg_with_key),
     )
 
-    for call, host in zip(calls, cfg.machines.keys(), strict=True):
+    for call, host in zip(calls, cfg_with_key.machines.keys(), strict=True):
         patch_names = [Path(p).name for p in call["patches"]]
         assert f"{host}-tailscale.yaml" in patch_names
 
@@ -318,16 +317,11 @@ def test_build_configs_no_tailscale_patch_when_key_absent(cfg, monkeypatch, tmp_
 
     monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
 
-    secrets = Secrets(
-        openstack_credential_id="id",
-        openstack_credential_secret="secret",
-        tailscale_auth_key=None,
-    )
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
 
     machineconfig.build_configs(
-        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
+        cfg, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),
         contributions=_contributions(cfg),
     )
@@ -346,16 +340,11 @@ def test_build_configs_cluster_patch_only_for_controlplane(cfg, monkeypatch, tmp
 
     monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
 
-    secrets = Secrets(
-        openstack_credential_id="id",
-        openstack_credential_secret="secret",
-        tailscale_auth_key=None,
-    )
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
 
     machineconfig.build_configs(
-        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
+        cfg, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),
         contributions=_contributions(cfg),
     )
@@ -387,11 +376,10 @@ def _capture(monkeypatch):
 
 
 def _build(cfg, tmp_path, contributions, **kwargs):
-    secrets = Secrets(openstack_credential_id="id", openstack_credential_secret="secret")
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
     return machineconfig.build_configs(
-        cfg, secrets, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
+        cfg, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),
         contributions=contributions, **kwargs,
     )
