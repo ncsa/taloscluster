@@ -45,7 +45,7 @@ The Kubernetes role of every machine in the group; a server may override it.
 
 Optional · boolean · default `false`
 
-Whether taloscluster may talk to the machines' BMCs. Redfish is how the machines are powered and booted from their install media; `false` never touches the BMC, so the operator boots the machines into maintenance mode themselves.
+Whether taloscluster may talk to the machines' BMCs. Redfish is how the machines are powered and booted from their install media; `false` never touches the BMC, so the operator boots the machines into maintenance mode themselves. Enabling it requires real BMC credentials for every machine in the group; see [`metal.<group>.bmc`](#metalgroupbmc).
 
 ### `metal.<group>.disk`
 
@@ -87,7 +87,7 @@ The resolvers written for this link.
 
 Optional · mapping
 
-The Redfish settings every machine in the group starts from: `ip` (the BMC's IPv4 address), `username` and `password`. The credentials are ordinary cluster settings: like every other key they may live in `secrets.yaml` or any included file instead of `cluster.yaml`.
+The Redfish settings every machine in the group starts from: `ip` (the BMC's IPv4 address), `username` and `password`. The credentials are ordinary cluster settings: like every other key they may live in `secrets.yaml` or any included file instead of `cluster.yaml`. A [`redfish`](#metalgroupredfish) group must end up with a real `username` and `password` for every machine once each server's overrides merge in — an empty or still-scaffolded `CHANGE-ME` value refuses to load.
 
 ### `metal.<group>.servers`
 

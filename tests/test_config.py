@@ -549,6 +549,119 @@ def test_metal_group_defaults_resolve_into_each_server(make_config):
     assert rp002.interfaces == group.interfaces
 
 
+def test_metal_redfish_credentials_resolve_from_group_default_or_server_override(make_config):
+    """A `redfish: true` machine takes its credentials from the group or its overrides."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "redfish": True,
+        "disk": "/dev/sda",
+        "bmc": {"username": "root", "password": "secret"},
+        "servers": {"rp001": {"bmc": {"ip": "172.28.50.5"}}},
+    }}})
+    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
+    assert rp001.bmc == MetalBmc(ip="172.28.50.5", username="root", password="secret")
+
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "redfish": True,
+        "disk": "/dev/sda",
+        "servers": {
+            "rp001": {"bmc": {"ip": "172.28.50.5", "username": "admin", "password": "s3cret"}},
+        },
+    }}})
+    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
+    assert rp001.bmc == MetalBmc(ip="172.28.50.5", username="admin", password="s3cret")
+
+
+@pytest.mark.parametrize("source", ["secrets.yaml", "an include", "cluster.yaml"])
+def test_metal_redfish_credentials_load_from_whichever_file_supplies_them(
+    make_config, tmp_path, source
+):
+    """Where a BMC credential is written is the user's choice, not the schema's."""
+    credentials = {"username": "root", "password": "secret"}
+    overrides: dict = {"metal": {"phoenix": {
+        "role": "worker",
+        "redfish": True,
+        "disk": "/dev/sda",
+        "servers": {"rp001": {"bmc": {"ip": "172.28.50.5"}}},
+    }}}
+    if source == "secrets.yaml":
+        _write_secrets(tmp_path, {"metal": {"phoenix": {"bmc": credentials}}})
+    elif source == "an include":
+        (tmp_path / "bmc.yaml").write_text(
+            yaml.safe_dump({"metal": {"phoenix": {"bmc": credentials}}})
+        )
+        overrides["include"] = ["bmc.yaml"]
+    else:
+        overrides["metal"]["phoenix"]["bmc"] = credentials
+
+    cfg = make_config(overrides)
+    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
+    assert (rp001.bmc.username, rp001.bmc.password) == ("root", "secret")
+
+
+@pytest.mark.parametrize(
+    ("bmc", "message"),
+    [
+        (
+            {"ip": "172.28.50.5"},
+            r"metal\.phoenix\.servers\.rp001: bmc\.username must be a non-empty string",
+        ),
+        (
+            {"ip": "172.28.50.5", "username": "root"},
+            r"metal\.phoenix\.servers\.rp001: bmc\.password must be a non-empty string",
+        ),
+        (
+            {"ip": "172.28.50.5", "username": "root", "password": ""},
+            r"metal\.phoenix\.servers\.rp001: bmc\.password must be a non-empty string",
+        ),
+        (
+            {"ip": "172.28.50.5", "username": "CHANGE-ME", "password": "secret"},
+            r"metal\.phoenix\.servers\.rp001: bmc\.username is still the scaffolded "
+            r"'CHANGE-ME' placeholder",
+        ),
+        (
+            {"ip": "172.28.50.5", "username": "root", "password": "CHANGE-ME"},
+            r"metal\.phoenix\.servers\.rp001: bmc\.password is still the scaffolded "
+            r"'CHANGE-ME' placeholder",
+        ),
+    ],
+)
+def test_metal_redfish_rejects_missing_or_placeholder_credentials(make_config, bmc, message):
+    """A `redfish: true` machine must end up with real BMC credentials."""
+    with pytest.raises(ConfigError, match=message):
+        make_config({"metal": {"phoenix": {
+            "role": "worker",
+            "redfish": True,
+            "disk": "/dev/sda",
+            "servers": {"rp001": {"bmc": bmc}},
+        }}})
+
+
+def test_metal_without_redfish_needs_no_bmc_credentials(make_config):
+    """`redfish: false` never touches the BMC, so credentials may stay unset."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "servers": {"rp001": {"bmc": {"ip": "172.28.50.5", "username": "CHANGE-ME"}}},
+    }}})
+
+    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
+    assert rp001.bmc == MetalBmc(ip="172.28.50.5", username="CHANGE-ME")
+
+
+def test_metal_server_opting_out_of_redfish_skips_the_credentials(make_config):
+    """The requirement follows the merged flag, so a server may turn redfish off."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "redfish": True,
+        "disk": "/dev/sda",
+        "servers": {"rp001": {"redfish": False, "bmc": {"ip": "172.28.50.5"}}},
+    }}})
+
+    assert cfg.metal.groups["phoenix"].servers["rp001"].redfish is False
+
+
 def test_metal_server_can_add_an_interface(make_config):
     """A server's interfaces merge with the group's per name, adding new ones."""
     cfg = make_config({"metal": {"phoenix": {

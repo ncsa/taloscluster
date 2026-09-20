@@ -853,7 +853,9 @@ def _metal_server(
     Plain settings are replaced outright, while `bmc` merges key by key and
     `interfaces` merge per interface name -- the prototype's `load_machines`
     merge, so the group carries the credentials and the cabling plan and each
-    server adds only its own addresses.
+    server adds only its own addresses. The merged `bmc` is where a machine's
+    credentials have settled, whichever file wrote each key, so a machine on a
+    `redfish: true` group must end up with real ones here.
     """
     interfaces = {
         ifname: dict(iface)
@@ -874,6 +876,9 @@ def _metal_server(
         },
         "interfaces": interfaces,
     }
+    if merged.get("redfish") is True:
+        for key in ("username", "password"):
+            _secret(f"bmc.{key}", merged["bmc"].get(key), where)
     return MetalServer(name=name, group=group_name, **_metal_fields(merged, where, cluster))
 
 
