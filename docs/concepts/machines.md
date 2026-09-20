@@ -14,7 +14,7 @@ For each node taloscluster generates a Talos machine configuration from `cluster
 
 ## OpenStack
 
-Converge creates a private network from [`network.cidr`](../configuration/network.md#networkcidr), a router to `external_net`, a security group from the allowlists, and one port per machine. Two extra ports with floating IPs carry the Kubernetes API VIP and the ingress address. Each server boots from the shared image with its machine configuration delivered through the config drive. Servers themselves have no floating IP. See the [OpenStack settings](../configuration/openstack.md).
+Converge creates a private network from [`network.cluster.cidr`](../configuration/network.md#networkcluster), a router to `external_net`, a security group from the allowlists, and one port per machine. Two extra ports with floating IPs carry the Kubernetes API VIP and the ingress address. Each server boots from the shared image with its machine configuration delivered through the config drive. Servers themselves have no floating IP. See the [OpenStack settings](../configuration/openstack.md).
 
 ## Proxmox
 
@@ -53,7 +53,7 @@ A cluster without a `tailscale` section works, but only where you can already re
 
 To use this path end to end:
 
-1. **Make the node addresses reachable**: route the private `network.cidr` from the management machine — a routed bridge on Proxmox, a router+floating setup on a tenant network, or a VPN. There must be no firewall in the way of TCP/50000.
+1. **Make the node addresses reachable**: route the private `network.cluster.cidr` from the management machine — a routed bridge on Proxmox, a router+floating setup on a tenant network, or a VPN. There must be no firewall in the way of TCP/50000.
 2. **Omit the `tailscale` section** from `cluster.yaml`; a leftover `tailscale.auth_key` in `secrets.yaml` is simply unused. Removing the section also drops the tailscale extension from new installer images (see [Tailscale](../configuration/tailscale.md)).
 3. **Let the allowlists include your management network**: put the source CIDR you reach the node addresses from into the `kubernetes` and `talos` rules under [`security`](../configuration/security.md), or converge locks itself out.
 4. **Run `taloscluster converge`.** Without Tailscale, taloscluster resolves the control plane's address in this order: a managed-SDN static address from the network plan, then the address the guest agent reports, polling until a freshly booted node reports one, then the endpoint an earlier `talosconfig` recorded.

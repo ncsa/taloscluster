@@ -56,7 +56,9 @@ def test_cluster_yaml_is_valid_and_uses_name(tmp_path):
     assert d["kubernetes"]["version"]
     assert {"count", "flavor", "disk"} <= d["controlplane"].keys()
     assert d["openstack"].keys() >= {"url", "availability_zone", "external_net"}
-    assert d["network"].keys() >= {"cidr", "dns", "ntp"}
+    assert d["network"].keys() >= {"cluster", "dns", "ntp"}
+    assert d["network"]["cluster"]["cidr"]
+    assert load_config(tmp_path).provider_name == "openstack"
 
 
 def test_secrets_yaml_is_valid_and_mode_0600(tmp_path):
@@ -80,9 +82,13 @@ def test_proxmox_templates_are_valid_and_provider_specific(tmp_path):
         "url", "storage", "iso_storage", "cidata_storage", "placement_strategy",
         "network",
     }
-    assert cluster["proxmox"]["network"]["cluster"].keys() >= {
-        "bridge", "kubeapi_vip",
-    }
+    # the Proxmox section carries the plumbing; the L2 lives under `network`
+    assert cluster["proxmox"]["network"]["cluster"].keys() == {"bridge"}
+    assert cluster["network"]["cluster"].keys() >= {"cidr", "kubeapi_vip"}
+    # the VIP carries its operator note into the written file, not just the source
+    written = (tmp_path / "cluster.yaml").read_text()
+    assert "must sit OUTSIDE any DHCP range" in written
+    assert "outside the static layout" in written
 
     secrets = yaml.safe_load((tmp_path / "secrets.yaml").read_text())
     assert "openstack" not in secrets
@@ -100,8 +106,8 @@ def test_proxmox_scaffold_kubeapi_vip_sits_outside_the_sdn_layout(tmp_path):
     (controlplane block / worker pool blocks), which would then be rejected."""
     init(tmp_path, name="demo", provider="proxmox")
     cluster = yaml.safe_load((tmp_path / "cluster.yaml").read_text())
-    vip = cluster["proxmox"]["network"]["cluster"]["kubeapi_vip"]
-    cidr = cluster["network"]["cidr"]
+    vip = cluster["network"]["cluster"]["kubeapi_vip"]
+    cidr = cluster["network"]["cluster"]["cidr"]
     assert ipaddress.ip_address(vip) not in naming.sdn_reserved(
         cidr, tuple(cluster["workers"])
     )

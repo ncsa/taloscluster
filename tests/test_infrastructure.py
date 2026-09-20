@@ -71,15 +71,13 @@ def test_proxmox_backend_is_selected(make_config):
     cfg = make_config(
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
-                    "cluster": {
-                        "bridge": "vmbr0",
-                        "kubeapi_vip": "192.168.0.10",
-                    }
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },
@@ -111,20 +109,22 @@ def test_proxmox_backend_contribution_rejects_anchor_collisions(make_config):
     cfg = make_config(
         {
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    # a /32 forces every machine onto the same anchor
+                    "anchor_cidr": "169.254.40.1/32",
+                    "kubeapi_vip": "203.0.113.10",
+                },
+            },
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
                     "cluster": {"bridge": "vmbr0"},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        # a /32 forces every machine onto the same anchor
-                        "anchor_cidr": "169.254.40.1/32",
-                        "kubeapi_vip": "203.0.113.10",
-                    },
+                    "external": {"bridge": "vmbr1"},
                 },
             },
         },

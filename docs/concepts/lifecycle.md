@@ -16,7 +16,7 @@ Decide the shape of the cluster before anything exists.
 
 Run three control planes. One works and is fine for a test cluster, but it has no HA and every upgrade takes the API down for the duration of that node's reboot. etcd needs a majority, so a two-member control plane still cannot tolerate the loss of one member; even counts are warned about. Talos and etcd handle a three-node control plane without any extra load balancer.
 
-Always give the Kubernetes API a single stable address of its own rather than pointing clients at a node. taloscluster sets this up on every provider: on OpenStack a reserved port whose fixed address is a Layer 2 VIP shared by the control planes, with a floating IP in front of it; on Proxmox the [`kubeapi_vip`](../configuration/proxmox.md#kubeapi_vip), either on the private cluster network or on the routed external subnet. The VIP moves to a healthy control plane when its owner goes away, so kubeconfigs, CI and other clusters never need to learn a new endpoint. Proxmox supports changing its configured VIP later, which moves the API endpoint; OpenStack allocates the addresses through provider ports rather than a configurable VIP key.
+Always give the Kubernetes API a single stable address of its own rather than pointing clients at a node. taloscluster sets this up on every provider: on OpenStack a reserved port whose fixed address is a Layer 2 VIP shared by the control planes, with a floating IP in front of it; on Proxmox the [`kubeapi_vip`](../configuration/network.md#networkcluster), either on the private cluster network or on the routed external subnet. The VIP moves to a healthy control plane when its owner goes away, so kubeconfigs, CI and other clusters never need to learn a new endpoint. Proxmox supports changing its configured VIP later, which moves the API endpoint; OpenStack allocates the addresses through provider ports rather than a configurable VIP key.
 
 ### Worker capacity
 
@@ -29,7 +29,7 @@ Node count alone does not ensure availability. Applications need suitable replic
 Services of type LoadBalancer need addresses that route to the workers. Install and configure MetalLB or another load balancer separately, or through a configured plugin. The provider setup differs:
 
 - **OpenStack**: a second reserved port and floating IP for ingress, floated onto the workers the same way as the API VIP. Point the MetalLB pool at that fixed address.
-- **Proxmox with an external NIC**: [`ingress_pool`](../configuration/proxmox.md#ingress_pool), a range on the routed subnet that you must also configure in MetalLB. It enables taloscluster’s ingress return-path configuration and is passed to the ArgoCD plugin, which renders it verbatim as the MetalLB address pool.
+- **Proxmox with an external NIC**: [`ingress_pool`](../configuration/network.md#networkexternal), a range on the routed subnet that you must also configure in MetalLB. It enables taloscluster’s ingress return-path configuration and is passed to the ArgoCD plugin, which renders it verbatim as the MetalLB address pool.
 - **Proxmox on a plain bridge**: any free range on the cluster network; reachability is whatever the bridge's network provides.
 
 Keep the API VIP out of the ingress range so MetalLB can never hand the API address to a service; the Proxmox configuration rejects an external API VIP inside `ingress_pool`. Separately managed MetalLB pools must be checked by the operator.
@@ -44,7 +44,7 @@ The [`security`](../configuration/security.md) rules become the OpenStack securi
 | tcp/50000, Talos API | the `talos` rule's hosts | you |
 | tcp/80 and tcp/443, ingress | everyone, until any rule claims the port | you, optional |
 | any other port, such as node exporters | hosts of a named rule with an explicit `port` | you, optional |
-| everything between nodes on `network.cidr` (etcd, kubelet, CNI, trustd) | the nodes | taloscluster |
+| everything between nodes on `network.cluster.cidr` (etcd, kubelet, CNI, trustd) | the nodes | taloscluster |
 | udp/68 DHCP replies | anyone | taloscluster |
 | udp/41641 Tailscale | anyone when the `tailscale` section is present | taloscluster |
 | ICMP, loopback, established connections, pod/service traffic | Talos built-in exceptions | Talos |

@@ -61,7 +61,7 @@ An etcd snapshot is only consistent for the moment it was taken. Workloads that 
 
 etcd snapshots protect cluster control-plane state. They are not a backup of your data: PersistentVolumes, uncommitted writes, and anything managed by external controllers live elsewhere. Back up application data with a real Kubernetes backup tool (for example [Velero](https://velero.io/)), taking the running cluster's storage, CSI snapshots, and restore procedures into account. Verify and practice a restore before you need it.
 
-The Talos host firewall allows intra-cluster traffic from `network.cidr` by default, so in-cluster backup pods can reach their storage; out-of-cluster sources need the [security](configuration/security.md) allowlists to reach port 6443.
+The Talos host firewall allows intra-cluster traffic from `network.cluster.cidr` by default, so in-cluster backup pods can reach their storage; out-of-cluster sources need the [security](configuration/security.md) allowlists to reach port 6443.
 
 ## Recovery: lost management machine
 

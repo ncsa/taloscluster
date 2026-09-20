@@ -29,20 +29,22 @@ def _proxmox_external_cfg(make_config):
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
             "workers": {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "ingress_pool": "203.0.113.20-203.0.113.40",
+                    "kubeapi_vip": "203.0.113.10",
+                },
+            },
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
                     "cluster": {"bridge": "vmbr0"},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        "anchor_cidr": "169.254.40.0/24",
-                        "kubeapi_vip": "203.0.113.10",
-                        "ingress_pool": "203.0.113.20-203.0.113.40",
-                    },
+                    "external": {"bridge": "vmbr1"},
                 },
             },
         },
@@ -68,19 +70,21 @@ def test_anchor_addresses_rejects_collisions(make_config):
     cfg = make_config(
         {
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "kubeapi_vip": "203.0.113.10",
+                },
+            },
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
                     "cluster": {"bridge": "vmbr0"},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        "anchor_cidr": "169.254.40.0/24",
-                        "kubeapi_vip": "203.0.113.10",
-                    },
+                    "external": {"bridge": "vmbr1"},
                 },
             },
         },
@@ -104,11 +108,12 @@ def test_contribution_without_external_uses_dhcp_eth0_documents(make_config, ep)
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
             "workers": {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {"cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}},
+                "network": {"cluster": {"bridge": "vmbr0"}},
             },
         },
         remove=("openstack",),
@@ -140,19 +145,21 @@ def test_contribution_without_ingress_pool_has_no_return_path(make_config, ep):
     cfg = make_config(
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "kubeapi_vip": "203.0.113.10",
+                },
+            },
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
                     "cluster": {"bridge": "vmbr0"},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        "anchor_cidr": "169.254.40.0/24",
-                        "kubeapi_vip": "203.0.113.10",
-                    },
+                    "external": {"bridge": "vmbr1"},
                 },
             },
         },
@@ -196,20 +203,22 @@ def test_return_path_pod_image_tag_carries_v_for_unprefixed_pin(make_config):
             "kubernetes": {"version": k8s_version},
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
             "workers": {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "ingress_pool": "203.0.113.20-203.0.113.40",
+                    "kubeapi_vip": "203.0.113.10",
+                },
+            },
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
                     "cluster": {"bridge": "vmbr0"},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        "anchor_cidr": "169.254.40.0/24",
-                        "kubeapi_vip": "203.0.113.10",
-                        "ingress_pool": "203.0.113.20-203.0.113.40",
-                    },
+                    "external": {"bridge": "vmbr1"},
                 },
             },
         }
@@ -260,18 +269,21 @@ def test_external_network_docs_vip_on_private_link_when_in_cluster(make_config):
     cfg = make_config(
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "network": {
+                "cluster": {"kubeapi_vip": "192.168.0.10"},
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                },
+            },
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        "anchor_cidr": "169.254.40.0/24",
-                    },
+                    "cluster": {"bridge": "vmbr0"},
+                    "external": {"bridge": "vmbr1"},
                 },
             },
         },
@@ -296,19 +308,21 @@ def test_external_network_docs_worker_has_no_vip_or_routes(make_config):
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
             "workers": {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "kubeapi_vip": "203.0.113.10",
+                },
+            },
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
                     "cluster": {"bridge": "vmbr0"},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        "anchor_cidr": "169.254.40.0/24",
-                        "kubeapi_vip": "203.0.113.10",
-                    },
+                    "external": {"bridge": "vmbr1"},
                 },
             },
         },
@@ -428,19 +442,21 @@ def test_external_docs_with_sdn_replace_private_dhcp_with_static(make_config):
         {
             "name": "testc",
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "kubeapi_vip": "203.0.113.10",
+                },
+            },
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
                     "cluster": {"sdn": {}},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        "anchor_cidr": "169.254.40.0/24",
-                        "kubeapi_vip": "203.0.113.10",
-                    },
+                    "external": {"bridge": "vmbr1"},
                 },
             },
         },
@@ -457,8 +473,8 @@ def test_external_docs_with_sdn_replace_private_dhcp_with_static(make_config):
     assert private["routes"] == [{"gateway": "192.168.0.1"}]
 
 
-def _proxmox_external_cfg_new_shape(make_config):
-    """The cluster of `_proxmox_external_cfg`, described in the `network` blocks."""
+def _proxmox_external_cfg_old_shape(make_config):
+    """The cluster of `_proxmox_external_cfg`, in the old key locations."""
     return make_config(
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
@@ -467,26 +483,26 @@ def _proxmox_external_cfg_new_shape(make_config):
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
-                "network": {"cluster": {"bridge": "vmbr0"}, "external": {"bridge": "vmbr1"}},
-            },
-            "network": {
-                "cluster": {"cidr": "192.168.0.0/21"},
-                "external": {
-                    "cidr": "203.0.113.0/24",
-                    "gateway": "203.0.113.1",
-                    "anchor_cidr": "169.254.40.0/24",
-                    "kubeapi_vip": "203.0.113.10",
-                    "ingress_pool": "203.0.113.20-203.0.113.40",
+                "network": {
+                    "cluster": {"bridge": "vmbr0"},
+                    "external": {
+                        "bridge": "vmbr1",
+                        "cidr": "203.0.113.0/24",
+                        "gateway": "203.0.113.1",
+                        "anchor_cidr": "169.254.40.0/24",
+                        "kubeapi_vip": "203.0.113.10",
+                        "ingress_pool": "203.0.113.20-203.0.113.40",
+                    },
                 },
             },
         },
-        remove=("openstack", "network.cidr"),
+        remove=("openstack",),
     )
 
 
 def test_new_shape_network_blocks_render_the_same_machine_config(make_config, ep):
-    old = _proxmox_external_cfg(make_config)
-    new = _proxmox_external_cfg_new_shape(make_config)
+    old = _proxmox_external_cfg_old_shape(make_config)
+    new = _proxmox_external_cfg(make_config)
 
     assert talos.vip(new) == talos.vip(old) == ("203.0.113.10", "external")
     assert talos.external_network(new) == talos.external_network(old)
@@ -510,7 +526,7 @@ def test_kubeapi_vip_in_the_new_cluster_block_is_used_as_the_private_vip(make_co
             },
             "network": {"cluster": {"cidr": "192.168.0.0/21", "kubeapi_vip": "192.168.0.10"}},
         },
-        remove=("openstack", "network.cidr"),
+        remove=("openstack",),
     )
 
     assert talos.vip(cfg) == ("192.168.0.10", "private")

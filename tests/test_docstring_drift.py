@@ -19,6 +19,7 @@ These tests keep the surviving wording honest so the drift does not resurface:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,17 +47,24 @@ def test_managed_sdn_example_uses_a_placeholder_not_phoenix():
 
 
 def test_vip_move_is_not_claimed_to_avoid_a_reboot():
+    checked = 0
     for path in (
         DOCS / "providers" / "proxmox.md",
         DOCS / "configuration" / "proxmox.md",
+        DOCS / "configuration" / "network.md",
         DOCS / "usage.md",
     ):
         text = path.read_text()
         assert "without a reboot" not in text
+        # only the pages that describe moving the VIP make the claim
+        if not re.search(r"(Changing|Moving) .?kubeapi_vip|Changing it later moves", text):
+            continue
+        checked += 1
         assert (
             "not guaranteed to avoid a restart" in text
             or "may or may not settle without a restart" in text
         )
+    assert checked, "no page describes moving the VIP any more"
 
 
 def test_reachability_timeout_points_at_troubleshooting():

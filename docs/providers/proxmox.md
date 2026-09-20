@@ -23,10 +23,11 @@ proxmox:
   network:
     cluster:
       bridge: vmbr0
-      kubeapi_vip: 10.0.0.240
 
 network:
-  cidr: 10.0.0.0/24
+  cluster:
+    cidr: 10.0.0.0/24
+    kubeapi_vip: 10.0.0.240
   dns: [10.0.0.1]
   ntp: [ntp.example.edu]
 ```
@@ -56,16 +57,21 @@ proxmox:
     cluster:
       bridge: vmbr0
     external:
-      bridge: vmbr0
-      vlan: 1691
-      cidr: 203.0.113.0/25
-      gateway: 203.0.113.1
-      anchor_cidr: 169.254.32.0/20
-      kubeapi_vip: 203.0.113.79
-      ingress_pool: 203.0.113.75-203.0.113.78
+      bridge: vmbr1
+
+network:
+  cluster:
+    cidr: 10.0.0.0/24
+  external:
+    vlan: 100
+    cidr: 203.0.113.0/25
+    gateway: 203.0.113.1
+    anchor_cidr: 169.254.32.0/20
+    kubeapi_vip: 203.0.113.79
+    ingress_pool: 203.0.113.75-203.0.113.78
 ```
 
-To expose the Kubernetes API on this NIC, put `kubeapi_vip` in the external section; alternatively, keep it in the cluster section for a private API. Set it in only one section. Each machine gets a deterministic link-local anchor address derived from the cluster and hostname; a collision aborts the run, so size `anchor_cidr` at `/20` or larger rather than reusing a `/24`.
+To expose the Kubernetes API on this NIC, put `kubeapi_vip` in `network.external`; alternatively, keep it in the cluster section for a private API. Set it in only one section. Each machine gets a deterministic link-local anchor address derived from the cluster and hostname; a collision aborts the run, so size `anchor_cidr` at `/20` or larger rather than reusing a `/24`.
 
 Why the anchor: Talos will not send or receive on an interface without an address, and there is no NAT in this mode, so a NIC that only ever carries a moving VIP still needs one. The `169.254.0.0/16` `/32` is never routed and never advertised; the VIP owner announces the real address on top of it. The same NIC creates an asymmetric-routing problem: a reply to an API or ingress request would otherwise leave through the private default route. Control planes therefore get a dedicated routing table and a source rule for the external API VIP’s `/32` address, and when `ingress_pool` is set every machine also runs a small generated static pod that marks connections entering the external NIC with nftables and restores the mark on replies, so traffic that kube-proxy has reverse-NATed still returns through the external gateway. The routes are native Talos network configuration and the connection-marking rules are installed by the generated static pod after boot.
 
@@ -78,7 +84,7 @@ For each desired, owned VM, converge compares CPU, memory, disk size, placement,
 - `cores` and `memory` are updated in place and take effect when the VM next restarts. Converge lists nodes with pending cores or memory on every run until they restart; `converge --reboot` restarts them for you, one at a time with control planes first and a health check between each. The restart is a Proxmox reboot (an ACPI shutdown Talos handles gracefully, then a fresh start with the new sizing). A reboot from inside the guest, including a Talos upgrade, keeps the old VM process and does not apply pending sizing, so use the flag or stop/start the VM.
 - `disk` may only grow: the Proxmox disk is resized online and Talos extends its `EPHEMERAL` partition on the next reboot. The grow is remembered on the VM and re-listed as pending until a `converge --reboot` restarts the node (the pending grow is cleared on that reboot). A smaller `disk` is refused in the validate phase before any converge mutation. Revert it, or replace the machine by scaling its pool down past it and back up.
 - Moving a NIC to another bridge, VLAN or VNet, adding or removing the `external:` section, switching `bridge:` to `sdn:`, pinning a pool to a different `node`, or changing `proxmox.storage` is refused in the validate phase before any converge mutation: none of these migrate an existing VM. They renumber or re-home every node; recreate the cluster instead.
-- `security:` edits reconcile the per-VM firewall (see above); `ingress_pool` and `network.ntp` edits flow through the machine config, as do `network.dns` edits on managed SDN, which converge re-applies to every node and `plan` shows as a diff. On a `bridge`/`vnet` network DNS is DHCP-provided, so `network.dns` is not applied and converge warns about it. A `network.cidr` change on a managed SDN cluster is refused because it would renumber running nodes.
+- `security:` edits reconcile the per-VM firewall (see above); `ingress_pool` and `network.ntp` edits flow through the machine config, as do `network.dns` edits on managed SDN, which converge re-applies to every node and `plan` shows as a diff. On a `bridge`/`vnet` network DNS is DHCP-provided, so `network.dns` is not applied and converge warns about it. A `network.cluster.cidr` change on a managed SDN cluster is refused because it would renumber running nodes.
 - Changing `kubeapi_vip` moves the API endpoint of the running cluster. Control planes are re-applied one at a time (cluster endpoint, certificate SANs, the Layer 2 VIP) and each is waited for before the next, the kubeconfig is regenerated from a control plane, converge waits until the API answers on the new address, and only then are the workers re-applied. A move applies the new endpoint through each node's machine config, which may or may not settle without a restart — it is not guaranteed to avoid one. The old address keeps answering until every control plane has switched, so the move is gradual rather than a hard cutover; still, update anything external that pins the old address. The move is detected against the endpoint recorded in the `kubeconfig` converge wrote, so keep that file next to `cluster.yaml`. The VIP may not sit inside `ingress_pool`.
 
 ## Proxmox API token permissions
@@ -96,7 +102,7 @@ The preflight checks the following paths are `/` (`Pool.Allocate`), the ISO, cid
 
 ## Managed EVPN SDN
 
-Replace `bridge:` with an `sdn:` block under `proxmox.network.cluster` to have taloscluster create the private network itself: an EVPN zone, a VNet and an SNAT subnet from `network.cidr`, applied cluster-wide and verified as a bridge on every compute node. The bridge is re-verified on every converge and, because the apply task can return before each node's network reload finishes, converge keeps retrying for up to a minute before it reports a node that still lacks the bridge. Every field is optional:
+Replace `bridge:` with an `sdn:` block under `proxmox.network.cluster` to have taloscluster create the private network itself: an EVPN zone, a VNet and an SNAT subnet from `network.cluster.cidr`, applied cluster-wide and verified as a bridge on every compute node. The bridge is re-verified on every converge and, because the apply task can return before each node's network reload finishes, converge keeps retrying for up to a minute before it reports a node that still lacks the bridge. Every field is optional:
 
 ```yaml
 proxmox:
@@ -112,14 +118,16 @@ proxmox:
         # primary_exit_node: pve001
         # mtu: 8950              # underlay MTU minus 50 bytes of VXLAN overhead
         # nodes: [pve001, pve003]       # restrict the zone (and placement) to these
-      kubeapi_vip: 192.168.100.2   # or under external: when that section is present
 
 network:
-  cidr: 192.168.100.0/24   # anycast gateway at .1, first control plane .11, first worker .61; 50-address pool blocks
+  cluster:
+    # anycast gateway at .1, first control plane .11, first worker .61; 50-address pool blocks
+    cidr: 192.168.100.0/24
+    kubeapi_vip: 192.168.100.2   # or under network.external: when that section is present
   dns: [192.0.2.53]       # required: the overlay has no DHCP
 ```
 
-Nodes get deterministic static addresses from `network.cidr`, so reordering worker pools would renumber later pools; converge refuses to renumber a running node. Proxmox marks EVPN as a technology preview, and the hosts need preparation that taloscluster cannot do for you:
+Nodes get deterministic static addresses from `network.cluster.cidr`, so reordering worker pools would renumber later pools; converge refuses to renumber a running node. Proxmox marks EVPN as a technology preview, and the hosts need preparation that taloscluster cannot do for you:
 
 - FRR installed and running on every node, and `net.ipv4.ip_forward=1` (persist it under `/etc/sysctl.d/`), or the exit node silently drops forwarded traffic.
 - With the datacenter firewall on, rules accepting tcp/179 (BGP) and udp/4789 (VXLAN) between the nodes; a zone reports `available` even while BGP sessions sit in `Connect`.

@@ -15,8 +15,8 @@ All example addresses and hostnames in these pages are placeholders (RFC 5737 do
 | `controlplane` | yes | Control plane pool: count and sizing | [Pools](configuration/pools.md) |
 | `workers` | no | Worker pools by name: count, sizing, extensions, tags | [Pools](configuration/pools.md) |
 | `openstack` | one of | OpenStack endpoint, availability zone, external network, optional region | [OpenStack](configuration/openstack.md) |
-| `proxmox` | one of | Proxmox endpoint, storages, placement, networks | [Proxmox](configuration/proxmox.md) |
-| `network` | yes | Private CIDR, DNS and NTP servers | [Network](configuration/network.md) |
+| `proxmox` | one of | Proxmox endpoint, storages, placement, bridges | [Proxmox](configuration/proxmox.md) |
+| `network` | yes | The cluster and external L2 networks, DNS and NTP servers | [Network](configuration/network.md) |
 | `security` | no | Named ingress allowlists per port | [Security](configuration/security.md) |
 | `tailscale` | no | Opt into the tailscale extension, login server | [Tailscale](configuration/tailscale.md) |
 | `rancher` | no | Rancher plugin: members to grant access | [Rancher](configuration/rancher.md) |
@@ -54,10 +54,11 @@ proxmox:
   network:
     cluster:
       bridge: vmbr0
-      kubeapi_vip: 10.0.0.10
 
 network:
-  cidr: 10.0.0.0/24
+  cluster:
+    cidr: 10.0.0.0/24
+    kubeapi_vip: 10.0.0.10
   dns: [192.0.2.53]
   ntp: [ntp.example.edu]
 

@@ -57,6 +57,7 @@ def proxmox_cfg(make_config):
     return make_config(
         {
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
@@ -64,7 +65,7 @@ def proxmox_cfg(make_config):
                 "cidata_storage": "local",
                 "nodes": ["pve001", "pve002"],
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },
@@ -793,6 +794,16 @@ def _external_cfg(make_config):
     return make_config(
         {
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "ingress_pool": "203.0.113.20-203.0.113.40",
+                    "kubeapi_vip": "203.0.113.10",
+                    "vlan": 1691,
+                },
+            },
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
@@ -801,15 +812,7 @@ def _external_cfg(make_config):
                 "nodes": ["pve001", "pve002"],
                 "network": {
                     "cluster": {"bridge": "vmbr0"},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "vlan": 1691,
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        "anchor_cidr": "169.254.40.0/24",
-                        "kubeapi_vip": "203.0.113.10",
-                        "ingress_pool": "203.0.113.20-203.0.113.40",
-                    },
+                    "external": {"bridge": "vmbr1"},
                 },
             },
         },
@@ -843,13 +846,14 @@ def test_current_network_metallb_empty_without_external_network(make_config):
     cfg = make_config(
         {
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "cidata_storage": "local",
                 "nodes": ["pve001", "pve002"],
-                "network": {"cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}},
+                "network": {"cluster": {"bridge": "vmbr0"}},
             },
         },
         remove=("openstack",),
@@ -938,6 +942,7 @@ def test_firewall_matches_openstack_security_group(make_config, monkeypatch):
     cfg = make_config(
         {
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
@@ -945,7 +950,7 @@ def test_firewall_matches_openstack_security_group(make_config, monkeypatch):
                 "cidata_storage": "local",
                 "nodes": ["pve001", "pve002"],
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"},
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
             "security": {
@@ -1040,6 +1045,7 @@ def _firewall_cfg(make_config, security):
     return make_config(
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
@@ -1047,7 +1053,7 @@ def _firewall_cfg(make_config, security):
                 "cidata_storage": "local",
                 "nodes": ["pve001", "pve002"],
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"},
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
             "security": security,
@@ -1207,19 +1213,21 @@ def test_anchor_collision_check_runs_once_per_backend(make_config, monkeypatch):
     cfg = make_config(
         {
             "controlplane": {"count": 3, "cores": 4, "memory": 8, "disk": 40},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "kubeapi_vip": "203.0.113.10",
+                },
+            },
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
                     "cluster": {"bridge": "vmbr0"},
-                    "external": {
-                        "bridge": "vmbr1",
-                        "cidr": "203.0.113.0/24",
-                        "gateway": "203.0.113.1",
-                        "anchor_cidr": "169.254.40.0/24",
-                        "kubeapi_vip": "203.0.113.10",
-                    },
+                    "external": {"bridge": "vmbr1"},
                 },
             },
         },
@@ -1431,13 +1439,14 @@ def sdn_cfg(make_config):
         {
             "name": SDN_CLUSTER,
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "cidata_storage": "local",
                 "nodes": ["pve001", "pve002"],
-                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.9"}},
+                "network": {"cluster": {"sdn": {}}},
             },
         },
         remove=("openstack",),
@@ -2028,12 +2037,13 @@ def test_sdn_default_exit_nodes_include_offline_cluster_nodes(make_config):
         {
             "name": SDN_CLUSTER,
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "cidata_storage": "local",
-                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.9"}},
+                "network": {"cluster": {"sdn": {}}},
             },
         },
         remove=("openstack",),
@@ -2136,12 +2146,13 @@ def test_sdn_offline_default_primary_exit_node_warns(make_config, capsys):
         {
             "name": SDN_CLUSTER,
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "cidata_storage": "local",
-                "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.9"}},
+                "network": {"cluster": {"sdn": {}}},
             },
         },
         remove=("openstack",),
@@ -2277,12 +2288,13 @@ def test_sdn_name_override_becomes_the_vnet_bridge(make_config):
         {
             "name": SDN_CLUSTER,
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.9"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
-                    "cluster": {"sdn": {"name": "grid"}, "kubeapi_vip": "192.168.0.9"}
+                    "cluster": {"sdn": {"name": "grid"}}
                 },
             },
         },
@@ -2301,6 +2313,7 @@ def _resized_cfg(make_config, **sizing):
     return make_config(
         {
             "controlplane": controlplane,
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
@@ -2308,7 +2321,7 @@ def _resized_cfg(make_config, **sizing):
                 "cidata_storage": "local",
                 "nodes": ["pve001", "pve002"],
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },
@@ -2659,6 +2672,7 @@ def _placement_cfg(make_config, node):
             "controlplane": {
                 "count": 2, "cores": 4, "memory": 8, "disk": 40, "node": node
             },
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
@@ -2666,7 +2680,7 @@ def _placement_cfg(make_config, node):
                 "cidata_storage": "local",
                 "nodes": ["pve001", "pve002"],
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },
@@ -2678,6 +2692,7 @@ def _storage_cfg(make_config, storage):
     return make_config(
         {
             "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": storage,
@@ -2685,7 +2700,7 @@ def _storage_cfg(make_config, storage):
                 "cidata_storage": "local",
                 "nodes": ["pve001", "pve002"],
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },
@@ -2849,7 +2864,7 @@ def _external_cfg_new_shape(make_config):
                 },
             },
         },
-        remove=("openstack", "network.cidr"),
+        remove=("openstack",),
     )
 
 

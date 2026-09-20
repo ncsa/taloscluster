@@ -43,7 +43,7 @@ Ports 80 and 443 accept traffic from every source until some rule claims that po
 
 ## Always allowed
 
-The Talos host firewall allows TCP and UDP from `network.cidr`, DHCP replies on UDP/68, and UDP/41641 when the `tailscale` section is present. Talos also has built-in allowances for loopback, established connections, ICMP, and pod/service traffic. The Proxmox per-VM firewall permits ICMP and intra-cluster TCP/UDP; OpenStack permits ICMP and TCP/UDP between members of the cluster security group. Provider firewalls do not add the same explicit UDP/41641 allowance as the Talos firewall, so direct Tailscale connectivity also depends on the surrounding network. Ports no rule mentions, such as tcp/22, are left to you on Proxmox and stay closed by the Talos firewall's default deny.
+The Talos host firewall allows TCP and UDP from `network.cluster.cidr`, DHCP replies on UDP/68, and UDP/41641 when the `tailscale` section is present. Talos also has built-in allowances for loopback, established connections, ICMP, and pod/service traffic. The Proxmox per-VM firewall permits ICMP and intra-cluster TCP/UDP; OpenStack permits ICMP and TCP/UDP between members of the cluster security group. Provider firewalls do not add the same explicit UDP/41641 allowance as the Talos firewall, so direct Tailscale connectivity also depends on the surrounding network. Ports no rule mentions, such as tcp/22, are left to you on Proxmox and stay closed by the Talos firewall's default deny.
 
 ## Proxmox firewall enablement
 

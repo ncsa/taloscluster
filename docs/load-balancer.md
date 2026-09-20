@@ -13,7 +13,7 @@ The [ArgoCD plugin](configuration/argocd.md) bridges the two: when you set `argo
 
 ## OpenStack
 
-Converge creates the tenant network from `network.cidr`, a router and security group, one port per machine, and two extra reserved ports: `<cluster>-kubeapi` and `<cluster>-ingress`. Each reserved port gets a fixed IP on the tenant network and a floating IP on `external_net`. The ingress fixed IP becomes the MetalLB address; the ingress floating IP is the single externally reachable address the ingress controller advertises. Worker ports carry the ingress VIP in their `allowed_address_pairs`, so MetalLB can announce it from any worker.
+Converge creates the tenant network from `network.cluster.cidr`, a router and security group, one port per machine, and two extra reserved ports: `<cluster>-kubeapi` and `<cluster>-ingress`. Each reserved port gets a fixed IP on the tenant network and a floating IP on `external_net`. The ingress fixed IP becomes the MetalLB address; the ingress floating IP is the single externally reachable address the ingress controller advertises. Worker ports carry the ingress VIP in their `allowed_address_pairs`, so MetalLB can announce it from any worker.
 
 Converge reports its ingress allocation through the [ArgoCD plugin](configuration/argocd.md) cluster-apps values:
 
@@ -96,19 +96,22 @@ Clients reach `app.example.edu` through the floating IP `203.0.113.80`; MetalLB 
 
 ## Proxmox
 
-There is no single ingress VIP. Beyond the two physical NICs (the private cluster link, and the optional `external` NIC), you reserve a range for MetalLB in `proxmox.network.external.ingress_pool`. Core configures the routing and the connection-marking static pod so announcements on the external NIC work, but a MetalLB address pool is *yours* to create:
+There is no single ingress VIP. Beyond the two physical NICs (the private cluster link, and the optional `external` NIC), you reserve a range for MetalLB in `network.external.ingress_pool`. Core configures the routing and the connection-marking static pod so announcements on the external NIC work, but a MetalLB address pool is *yours* to create:
 
 ```yaml
 proxmox:
   network:
     external:
-      bridge: vmbr0
-      vlan: 1691
-      cidr: 203.0.113.0/25
-      gateway: 203.0.113.1
-      anchor_cidr: 169.254.32.0/20
-      kubeapi_vip: 203.0.113.79
-      ingress_pool: 203.0.113.75-203.0.113.78
+      bridge: vmbr1
+
+network:
+  external:
+    vlan: 100
+    cidr: 203.0.113.0/25
+    gateway: 203.0.113.1
+    anchor_cidr: 169.254.32.0/20
+    kubeapi_vip: 203.0.113.79
+    ingress_pool: 203.0.113.75-203.0.113.78
 ```
 
 The plugin passes the range through verbatim (MetalLB accepts `start-end`); with no single VIP, `publicIP`/`privateIP` stay empty:

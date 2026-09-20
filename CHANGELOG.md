@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Scaffold and document the network in `network.cluster` / `network.external`; `taloscluster init` writes the new shape.
 - Delete the legacy `talos-<version>-tailscale` image on `image remove`, refusing while a managed VM still boots it, and converge detaches the boot ISO cdrom once a node boots from disk.
 - Name the timed-out kubectl command in timeout errors and allow manifest apply, diff and delete more time than a probe.
 - Apply machine configs to control planes one at a time, waiting for each restart to finish.

@@ -24,7 +24,8 @@ CLUSTER = {
         "availability_zone": "nova",
         "external_net": "ext-net",
     },
-    "network": {"cidr": "192.168.0.0/21", "dns": ["1.1.1.1"], "ntp": ["ntp.example.com"]},
+    "network": {"cluster": {"cidr": "192.168.0.0/21"}, "dns": ["1.1.1.1"],
+                "ntp": ["ntp.example.com"]},
 }
 
 TALOS_VERSIONS = ["v1.13.8", "v1.13.9", "v1.14.0-rc.1"]

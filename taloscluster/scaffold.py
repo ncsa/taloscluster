@@ -54,7 +54,8 @@ workers:
 {provider_section}
 
 network:
-  cidr: 192.168.0.0/21
+  cluster: # the L2 the nodes sit on
+    cidr: 192.168.0.0/21{network_cluster}
   dns: [8.8.8.8, 8.8.4.4]
   ntp: [pool.ntp.org]
 
@@ -95,6 +96,7 @@ PROVIDER_TEMPLATES = {
     "openstack": {
         "controlplane_sizing": "  flavor: gp.medium",
         "worker_sizing": "    flavor: gp.xlarge",
+        "network_cluster": "",
         "cluster": """\
 openstack:
   url: https://openstack.example.edu:5000/v3/
@@ -110,6 +112,12 @@ openstack:
     "proxmox": {
         "controlplane_sizing": "  cores: 4\n  memory: 8 # GB",
         "worker_sizing": "    cores: 8\n    memory: 16 # GB",
+        "network_cluster": """
+    # the VIP must sit OUTSIDE any DHCP range on this network and, with a
+    # managed SDN, outside the static layout (.2 is the first free host: the
+    # layout reserves .1 for the gateway, the controlplane block, and a
+    # block per worker pool)
+    kubeapi_vip: 192.168.0.2""",
         "cluster": """\
 proxmox:
   url: https://pve.example.edu:8006
@@ -125,11 +133,7 @@ proxmox:
       #         # optional (name, zone, controller, asn, vrf_tag, tag, exit_nodes,
       #         # primary_exit_node, mtu, nodes); the zone/VNet id is `name`
       #         # (default: the cluster name, max 8 chars, no hyphens); removing
-      #         # a set mtu/nodes later does not unset it on the zone
-      #         # the VIP must sit OUTSIDE the static layout (.2 is the first
-      #         # free host: the layout reserves .1 for the gateway, the
-      #         # controlplane block, and a block per worker pool)
-      kubeapi_vip: 192.168.0.2""",
+      #         # a set mtu/nodes later does not unset it on the zone""",
         "secrets": """\
 proxmox:
   token_id: "taloscluster@pve!provider"
@@ -165,6 +169,7 @@ def init(root: Path, name: str, provider: str = "openstack") -> None:
             name=name,
             controlplane_sizing=template["controlplane_sizing"],
             worker_sizing=template["worker_sizing"],
+            network_cluster=template["network_cluster"],
             provider_section=template["cluster"],
         ))
         info(f"wrote {CLUSTER_FILE}")

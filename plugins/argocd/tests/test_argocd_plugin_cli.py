@@ -25,7 +25,7 @@ MINIMAL = {
         "external_net": "ext-net",
     },
     "network": {
-        "cidr": "192.168.0.0/21",
+        "cluster": {"cidr": "192.168.0.0/21"},
         "dns": ["1.1.1.1"],
         "ntp": ["ntp.example.com"],
     },

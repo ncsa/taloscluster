@@ -54,7 +54,7 @@ Hostnames are `<name>-<pool>-NN`. A pool name must be a valid hostname component
 
 Required · integer
 
-Number of machines. The loader accepts zero or more for a worker pool, and at least 1 for `controlplane`. For routine operation, use at least two eligible workers with capacity for one to be unavailable; see [Worker capacity](../concepts/lifecycle.md#worker-capacity). Managed Proxmox SDN permits at most 49 nodes per pool and also requires the computed addresses to fit `network.cidr`.
+Number of machines. The loader accepts zero or more for a worker pool, and at least 1 for `controlplane`. For routine operation, use at least two eligible workers with capacity for one to be unavailable; see [Worker capacity](../concepts/lifecycle.md#worker-capacity). Managed Proxmox SDN permits at most 49 nodes per pool and also requires the computed addresses to fit `network.cluster.cidr`.
 
 ### `disk`
 

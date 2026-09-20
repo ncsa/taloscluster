@@ -18,15 +18,24 @@ proxmox:
   network:
     cluster:
       bridge: vmbr0
-      vlan: 100
-      kubeapi_vip: 10.0.0.10
     external:
-      bridge: vmbr0
-      vlan: 200
-      cidr: 203.0.113.0/24
-      gateway: 203.0.113.1
-      anchor_cidr: 169.254.32.0/20
-      ingress_pool: 203.0.113.20-203.0.113.29
+      bridge: vmbr1
+```
+
+The addresses on those networks live under [`network`](network.md):
+
+```yaml
+network:
+  cluster:
+    cidr: 10.0.0.0/24
+    vlan: 10
+    kubeapi_vip: 10.0.0.10
+  external:
+    vlan: 100
+    cidr: 203.0.113.0/24
+    gateway: 203.0.113.1
+    anchor_cidr: 169.254.32.0/20
+    ingress_pool: 203.0.113.20-203.0.113.29
 ```
 
 ### `proxmox.url`
@@ -75,7 +84,7 @@ Verify the API certificate against the system trust store, skip verification, or
 
 Required · mapping
 
-The private network every VM's first NIC attaches to. Set exactly one of `bridge`, `vnet` or `sdn`. Moving a running cluster to another bridge, VLAN or VNet, or switching between `bridge` and `sdn`, is refused; recreate the cluster instead. Only the keys documented below are accepted inside `proxmox.network`, `cluster`, `cluster.sdn` and `external`; a miscapped key (such as `vlna` or `gatway`) is refused at load instead of being silently ignored.
+The private network every VM's first NIC attaches to. Set exactly one of `bridge`, `vnet` or `sdn`. The addresses on that network — cidr, gateway, VLAN tag, MTU and the API VIP — are described in [`network.cluster`](network.md#networkcluster). Moving a running cluster to another bridge, VLAN or VNet, or switching between `bridge` and `sdn`, is refused; recreate the cluster instead. Only the keys documented below are accepted inside `proxmox.network`, `cluster`, `cluster.sdn` and `external`; a miscapped key (such as `vlna` or `gatway`) is refused at load instead of being silently ignored.
 
 ### `bridge`
 
@@ -89,23 +98,11 @@ One of · VNet id
 
 An existing Proxmox SDN VNet.
 
-### `vlan`
-
-Optional · 1 to 4094
-
-VLAN tag on the NIC. Not allowed together with `sdn`.
-
-### `kubeapi_vip`
-
-Required here or under `external` · IPv4 inside `network.cidr`
-
-The address control planes share as a Layer 2 VIP for the Kubernetes API. Set it in exactly one of `cluster` or `external`. Changing it later moves the API endpoint of the running cluster by re-applying the new endpoint through the machine config; it is not guaranteed to avoid a restart. On a managed SDN it may not collide with the anycast gateway, a node's static address, or any address the static layout reserves.
-
 ## `proxmox.network.cluster.sdn`
 
 Optional · mapping, may be empty
 
-Replaces `bridge` or `vnet` with a managed EVPN network that taloscluster creates: an EVPN zone, a VNet and an SNAT subnet from `network.cidr`. `sdn: {}` accepts every default. Nodes get static addresses from `network.cidr`: the anycast gateway at the first host, controlplane-01 at host offset 11, and the first worker at offset 61. Control planes reserve offsets 10–59; each worker pool reserves a 50-address block beginning at offset 60 plus 50 times its zero-based position in file order. Each pool supports at most 49 nodes, and the subnet must be large enough for their addresses. `network.dns` must be set because the overlay has no DHCP, and `network.cidr` cannot change afterwards. The bridge is verified on every converge and, because the apply task can return before each node's network reload finishes, converge waits up to a minute for it to appear before reporting a node that still lacks it. The Proxmox hosts need FRR, IP forwarding and firewall rules for BGP and VXLAN; see [Proxmox setup](../providers/proxmox.md#managed-evpn-sdn).
+Replaces `bridge` or `vnet` with a managed EVPN network that taloscluster creates: an EVPN zone, a VNet and an SNAT subnet from `network.cluster.cidr`. `sdn: {}` accepts every default. Nodes get static addresses from `network.cluster.cidr`: the anycast gateway at the first host, controlplane-01 at host offset 11, and the first worker at offset 61. Control planes reserve offsets 10–59; each worker pool reserves a 50-address block beginning at offset 60 plus 50 times its zero-based position in file order. Each pool supports at most 49 nodes, and the subnet must be large enough for their addresses. `network.dns` must be set because the overlay has no DHCP, and `network.cluster.cidr` cannot change afterwards. The bridge is verified on every converge and, because the apply task can return before each node's network reload finishes, converge waits up to a minute for it to appear before reporting a node that still lacks it. The Proxmox hosts need FRR, IP forwarding and firewall rules for BGP and VXLAN; see [Proxmox setup](../providers/proxmox.md#managed-evpn-sdn).
 
 ```yaml
 proxmox:
@@ -117,7 +114,11 @@ proxmox:
         exit_nodes: [pve1, pve3]
         primary_exit_node: pve1
         mtu: 8950
-      kubeapi_vip: 10.0.0.2
+
+network:
+  cluster:
+    cidr: 10.0.0.0/24
+    kubeapi_vip: 10.0.0.2
 ```
 
 ### `sdn.name`
@@ -184,49 +185,13 @@ Restrict the zone to these hosts. Also set `proxmox.nodes` to a matching compute
 
 Optional · mapping
 
-Adds a second NIC on a directly routed external subnet. It can carry the API VIP and MetalLB ingress addresses without NAT; the API VIP may instead remain on the private cluster link. Adding or removing this section on a running cluster is refused. Control planes get an external routing table when the API VIP is external. With `ingress_pool`, every node gets the routing table and a connection-marking static pod for ingress replies.
+Adds a second NIC on a directly routed external subnet, described in [`network.external`](network.md#networkexternal). It can carry the API VIP and MetalLB ingress addresses without NAT; the API VIP may instead remain on the private cluster link. Adding or removing this section on a running cluster is refused. Control planes get an external routing table when the API VIP is external. With `ingress_pool`, every node gets the routing table and a connection-marking static pod for ingress replies.
 
 ### `bridge`
 
 Required · bridge name
 
 Bridge carrying the external subnet.
-
-### `vlan`
-
-Optional · 1 to 4094
-
-VLAN tag on the external NIC.
-
-### `cidr`
-
-Required · IPv4 network
-
-The externally routed subnet. Must not overlap `network.cidr`.
-
-### `gateway`
-
-Required · IPv4 inside `cidr`
-
-The subnet's gateway.
-
-### `anchor_cidr`
-
-Required · IPv4 network inside `169.254.0.0/16`
-
-Range each machine draws a deterministic link-local `/32` anchor address from, because Talos will not use an interface without an address. Use `/20` or larger; an address collision aborts the run.
-
-### `kubeapi_vip`
-
-Optional · IPv4 inside `cidr`, outside `ingress_pool`
-
-The API VIP on the external subnet. Set it here or under `cluster`, not both.
-
-### `ingress_pool`
-
-Optional · `start-end` IPv4 range inside `cidr`
-
-Range reserved in your address plan for MetalLB ingress. Install and configure MetalLB separately to announce it; core taloscluster does not create a MetalLB address pool. When set, every machine runs a small static pod that marks connections entering the external NIC so replies to reverse-NATed traffic return through the external gateway. Edits apply through the machine config on the next converge.
 
 ## secrets.yaml
 

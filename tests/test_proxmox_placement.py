@@ -15,12 +15,13 @@ def test_spread_accounts_for_in_flight_memory(make_config):
     cfg = make_config(
         {
             "controlplane": {"count": 3, "cores": 2, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },
@@ -42,12 +43,13 @@ def test_controlplanes_land_on_distinct_nodes(make_config):
     cfg = make_config(
         {
             "controlplane": {"count": 3, "cores": 2, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },
@@ -72,12 +74,13 @@ def test_controlplanes_respect_existing_controlplane_nodes(make_config):
     cfg = make_config(
         {
             "controlplane": {"count": 3, "cores": 2, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },
@@ -101,12 +104,13 @@ def test_controlplanes_colocate_when_fewer_nodes_than_controlplanes(make_config)
     cfg = make_config(
         {
             "controlplane": {"count": 3, "cores": 2, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },
@@ -127,12 +131,13 @@ def test_controlplanes_prefer_first_node_even_with_less_memory(make_config):
     cfg = make_config(
         {
             "controlplane": {"count": 3, "cores": 2, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },
@@ -159,12 +164,13 @@ def test_workers_still_spread_by_memory(make_config):
             "workers": {
                 "worker": {"count": 2, "cores": 2, "memory": 8, "disk": 40},
             },
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
             "proxmox": {
                 "url": "https://pve",
                 "storage": "vms",
                 "iso_storage": "isos",
                 "network": {
-                    "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"}
+                    "cluster": {"bridge": "vmbr0"},
                 },
             },
         },

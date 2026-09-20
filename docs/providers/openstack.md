@@ -47,8 +47,8 @@ A single cluster creates the following project-owned resources, so size the proj
 | Boot volume | nodes | volume-backed, `delete_on_termination` |
 | Port | nodes + 2 | one per machine plus one each for the API and ingress VIPs |
 | Floating IP | 2 | one for the Kubernetes API, one for ingress |
-| Network | 1 | the tenant network from `network.cidr` |
-| Subnet | 1 | the subnet underlying `network.cidr` |
+| Network | 1 | the tenant network from `network.cluster.cidr` |
+| Subnet | 1 | the subnet underlying `network.cluster.cidr` |
 | Router | 1 | attached to the external network |
 | Security group | 1 | named for the cluster |
 | Image | 1 | shared across all nodes (and potentially clusters) on the same `talos.version` |
