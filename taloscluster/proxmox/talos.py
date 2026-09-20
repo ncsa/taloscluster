@@ -14,7 +14,15 @@ import ipaddress
 from typing import Any
 
 from .. import naming
-from ..config import Config, ConfigError, Machine, ProxmoxConfig, ProxmoxSdn, proxmox_sdn
+from ..config import (
+    Config,
+    ConfigError,
+    Machine,
+    ProxmoxConfig,
+    ProxmoxSdn,
+    l2_facts,
+    proxmox_sdn,
+)
 from ..infrastructure import Endpoint, TalosContribution, TalosPatch, dhcp_link_documents
 
 # Proxmox VMs boot from a virtio-scsi disk.
@@ -34,9 +42,17 @@ def _provider(cfg: Config) -> ProxmoxConfig:
 
 
 def external_network(cfg: Config) -> dict[str, Any]:
-    """The directly routed external NIC settings, or an empty mapping."""
+    """The directly routed external NIC settings, or an empty mapping.
+
+    The L2 facts come from `cfg.network.external`, which merges the
+    `network.external` block with the same keys under `proxmox.network.external`;
+    the bridge is Proxmox plumbing and stays in the provider section.
+    """
+    if cfg.network.external is None:
+        return {}
     value = _provider(cfg).network.get("external")
-    return value if isinstance(value, dict) else {}
+    bridge = value.get("bridge") if isinstance(value, dict) else None
+    return {"bridge": bridge, **l2_facts(cfg.network.external)}
 
 
 def has_ingress(cfg: Config) -> bool:
@@ -132,7 +148,7 @@ def vip(cfg: Config) -> tuple[str, str]:
     ext = external_network(cfg)
     if ext.get("kubeapi_vip"):
         return str(ext["kubeapi_vip"]), "external"
-    return str(_provider(cfg).network["cluster"]["kubeapi_vip"]), "private"
+    return cfg.network.cluster.kubeapi_vip, "private"
 
 
 def return_path_pod(m: Machine, cfg: Config) -> dict:

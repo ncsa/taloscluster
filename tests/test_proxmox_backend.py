@@ -2822,3 +2822,105 @@ def test_restart_machine_refuses_an_unowned_vm(make_config):
     inventory = backend.load_inventory()
     with pytest.raises(ReconcileError, match="unowned"):
         backend.restart_machine("foreign", inventory)
+
+
+def _external_cfg_new_shape(make_config):
+    """The cluster of `_external_cfg` with its L2 facts in the `network` blocks."""
+    return make_config(
+        {
+            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "nodes": ["pve001", "pve002"],
+                "network": {"cluster": {"bridge": "vmbr0"}, "external": {"bridge": "vmbr1"}},
+            },
+            "network": {
+                "cluster": {"cidr": "192.168.0.0/21", "vlan": 7},
+                "external": {
+                    "vlan": 1691,
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "kubeapi_vip": "203.0.113.10",
+                    "ingress_pool": "203.0.113.20-203.0.113.40",
+                },
+            },
+        },
+        remove=("openstack", "network.cidr"),
+    )
+
+
+def _external_cfg_old_shape_with_vlan(make_config):
+    """The same cluster as `_external_cfg_new_shape`, in the old key locations."""
+    return make_config(
+        {
+            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "nodes": ["pve001", "pve002"],
+                "network": {
+                    "cluster": {"bridge": "vmbr0", "vlan": 7},
+                    "external": {
+                        "bridge": "vmbr1",
+                        "vlan": 1691,
+                        "cidr": "203.0.113.0/24",
+                        "gateway": "203.0.113.1",
+                        "anchor_cidr": "169.254.40.0/24",
+                        "kubeapi_vip": "203.0.113.10",
+                        "ingress_pool": "203.0.113.20-203.0.113.40",
+                    },
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+
+
+def _vm_create_payload(cfg, monkeypatch):
+    data = _external_data()
+    data["nodes/pve001/qemu/800/config"]["net0"] = (
+        "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1,tag=7"
+    )
+    data["cluster/nextid"] = 801
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+    monkeypatch.setattr(cidata, "build", lambda _src, dst, _h, _c: dst.write_text(""))
+    monkeypatch.setattr(ProxmoxBackend, "_upload_iso", lambda _self, _n, _s, _p: None)
+    backend.reconcile_machines(
+        cfg.machines, inventory, "isos:iso/talos.iso",
+        {name: "config" for name in cfg.machines},
+    )
+    creates = [
+        payload for method, path, payload in client.mutations
+        if method == "POST" and path.endswith("/qemu")
+    ]
+    assert len(creates) == 1
+    return creates[0]
+
+
+def test_new_shape_network_blocks_create_the_same_vm(make_config, monkeypatch):
+    """A cluster described in `network.cluster`/`network.external` converges the
+    same way as the identical cluster described in the old key locations."""
+    old = _vm_create_payload(_external_cfg_old_shape_with_vlan(make_config), monkeypatch)
+    new = _vm_create_payload(_external_cfg_new_shape(make_config), monkeypatch)
+
+    assert new == old
+    assert "tag=7" in new["net0"]
+    assert "tag=1691" in new["net1"]
+
+
+def test_new_shape_network_blocks_reach_the_provider_status(make_config):
+    cfg = _external_cfg_new_shape(make_config)
+    client = FakeClient(_data())
+    backend = _backend(cfg, client)
+    backend.load_inventory()
+
+    assert backend.provider_status()["ingress_pool"] == "203.0.113.20-203.0.113.40"
+    assert backend.current_network(backend.load_inventory()).kubernetes.vip == "203.0.113.10"

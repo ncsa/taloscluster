@@ -1262,3 +1262,298 @@ def test_unknown_nested_secrets_tailscale_key_is_rejected(tmp_path):
     )
     with pytest.raises(ConfigError, match=r"tailscale: unknown key\(s\): authky"):
         load_secrets(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# network.cluster / network.external L2 blocks
+# ---------------------------------------------------------------------------
+
+def _proxmox_new_network() -> dict:
+    """A Proxmox cluster whose L2 facts live in the new `network` blocks."""
+    return {
+        "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+        "proxmox": {
+            "url": "https://pve.example:8006",
+            "storage": "vms",
+            "iso_storage": "isos",
+            "network": {"cluster": {"bridge": "vmbr0"}, "external": {"bridge": "vmbr1"}},
+        },
+        "network": {
+            "cluster": {
+                "cidr": "192.168.0.0/21",
+                "gateway": "192.168.0.1",
+                "vlan": 21,
+                "mtu": 9000,
+            },
+            "external": {
+                "cidr": "203.0.113.0/24",
+                "gateway": "203.0.113.1",
+                "vlan": 1691,
+                "kubeapi_vip": "203.0.113.10",
+                "anchor_cidr": "169.254.32.0/20",
+                "ingress_pool": "203.0.113.20-203.0.113.40",
+            },
+        },
+    }
+
+
+def test_network_blocks_are_parsed(make_config):
+    cfg = make_config(_proxmox_new_network(), remove=("openstack", "network.cidr"))
+
+    assert cfg.network.dns == ["1.1.1.1"]
+    assert cfg.network.ntp == ["ntp.example.com"]
+    assert cfg.network.cluster.cidr == "192.168.0.0/21"
+    assert cfg.network.cluster.gateway == "192.168.0.1"
+    assert cfg.network.cluster.vlan == 21
+    assert cfg.network.cluster.mtu == 9000
+    assert cfg.network.cluster.kubeapi_vip == ""
+    assert cfg.network.external is not None
+    assert cfg.network.external.cidr == "203.0.113.0/24"
+    assert cfg.network.external.vlan == 1691
+    assert cfg.network.external.kubeapi_vip == "203.0.113.10"
+    assert cfg.network.external.anchor_cidr == "169.254.32.0/20"
+    assert cfg.network.external.ingress_pool == "203.0.113.20-203.0.113.40"
+    # the block still feeds the existing cidr field until it is removed
+    assert cfg.cidr == "192.168.0.0/21"
+
+
+def test_network_block_mtu_defaults_to_1500(make_config):
+    cfg = make_config()
+
+    assert cfg.network.cluster.cidr == "192.168.0.0/21"
+    assert cfg.network.cluster.mtu == 1500
+    assert cfg.network.cluster.vlan is None
+    assert cfg.network.external is None
+
+
+def test_old_keys_still_populate_the_network_blocks(make_config):
+    cfg = make_config(
+        {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+         **_proxmox_external_overrides()},
+        remove=("openstack",),
+    )
+
+    assert cfg.network.cluster.cidr == "192.168.0.0/21"
+    assert cfg.network.external is not None
+    assert cfg.network.external.gateway == "203.0.113.1"
+    assert cfg.network.external.kubeapi_vip == "203.0.113.10"
+    assert cfg.network.external.mtu == 1500
+
+
+def test_old_and_new_cidr_may_agree(make_config):
+    cfg = make_config({"network": {"cluster": {"cidr": "192.168.0.0/21"}}})
+
+    assert cfg.network.cluster.cidr == "192.168.0.0/21"
+
+
+def test_conflicting_old_and_new_cidr_is_rejected(make_config):
+    with pytest.raises(ConfigError, match="conflicts with network.cidr"):
+        make_config({"network": {"cluster": {"cidr": "10.0.0.0/24"}}})
+
+
+def test_conflicting_old_and_new_external_key_is_rejected(make_config):
+    overrides = _proxmox_external_overrides()
+    with pytest.raises(ConfigError, match="conflicts with proxmox.network.external.gateway"):
+        make_config(
+            {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+             **overrides,
+             "network": {"external": {"gateway": "203.0.113.2"}}},
+            remove=("openstack",),
+        )
+
+
+def test_missing_cluster_cidr_is_rejected(make_config):
+    with pytest.raises(ConfigError, match="network.cidr"):
+        make_config(remove=("network.cidr",))
+
+
+@pytest.mark.parametrize("key", ["anchor_cidr", "ingress_pool"])
+def test_external_only_keys_are_rejected_under_cluster(make_config, key):
+    values = {"anchor_cidr": "169.254.32.0/20", "ingress_pool": "192.168.0.20-192.168.0.40"}
+    with pytest.raises(ConfigError, match="set them under network.external"):
+        make_config({"network": {"cluster": {key: values[key]}}})
+
+
+@pytest.mark.parametrize(
+    ("block", "message"),
+    [
+        ({"cidr": "not-a-cidr"}, "network.cluster.cidr"),
+        ({"cidr": "192.168.0.5/21"}, "network.cluster.cidr"),
+        ({"gateway": "10.0.0.1"}, "gateway must be inside network.cluster.cidr"),
+        ({"gateway": "nope"}, "network.cluster.gateway is invalid"),
+        ({"vlan": 4095}, "network.cluster.vlan must be 1-4094"),
+        ({"vlan": "many"}, "'vlan' must be an integer"),
+        ({"mtu": 1000}, "network.cluster.mtu must be 1280 or greater"),
+        ({"mtu": "jumbo"}, "'mtu' must be an integer"),
+        ({"kubeapi_vip": "203.0.113.10"}, "kubeapi_vip must be inside network.cluster.cidr"),
+        ({"unknwn": 1}, r"network.cluster: unknown key\(s\): unknwn"),
+    ],
+)
+def test_network_cluster_block_rejects_invalid_fields(make_config, block, message):
+    overrides = {"network": {"cluster": {"cidr": "192.168.0.0/21", **block}}}
+    with pytest.raises(ConfigError, match=message):
+        make_config(overrides, remove=("network.cidr",))
+
+
+@pytest.mark.parametrize(
+    ("block", "message"),
+    [
+        ({"anchor_cidr": "10.0.0.0/24"}, "anchor_cidr must be inside 169.254.0.0/16"),
+        ({"kubeapi_vip": "192.168.0.10"}, "kubeapi_vip must be inside network.external.cidr"),
+        ({"ingress_pool": "203.0.113.40-203.0.113.20"}, "start must be <= end"),
+        ({"ingress_pool": "203.0.113.20"}, r"ingress_pool must be 'start-end'"),
+        ({"ingress_pool": "10.0.0.1-10.0.0.9"},
+         "ingress_pool must be inside network.external.cidr"),
+        ({"unknwn": 1}, r"network.external: unknown key\(s\): unknwn"),
+    ],
+)
+def test_network_external_block_rejects_invalid_fields(make_config, block, message):
+    overrides = _proxmox_new_network()
+    overrides["network"]["external"].update(block)
+    with pytest.raises(ConfigError, match=message):
+        make_config(overrides, remove=("openstack", "network.cidr"))
+
+
+def test_external_kubeapi_vip_inside_ingress_pool_is_rejected(make_config):
+    overrides = _proxmox_new_network()
+    overrides["network"]["external"]["kubeapi_vip"] = "203.0.113.30"
+    with pytest.raises(ConfigError, match="must not be inside ingress_pool"):
+        make_config(overrides, remove=("openstack", "network.cidr"))
+
+
+def test_kubeapi_vip_in_both_new_blocks_is_rejected(make_config):
+    overrides = _proxmox_new_network()
+    overrides["network"]["cluster"]["kubeapi_vip"] = "192.168.0.10"
+    with pytest.raises(ConfigError, match="only one of network.cluster or network.external"):
+        make_config(overrides, remove=("openstack", "network.cidr"))
+
+
+def test_kubeapi_vip_in_new_cluster_and_old_external_is_rejected(make_config):
+    overrides = _proxmox_external_overrides()
+    overrides["network"] = {"cluster": {"kubeapi_vip": "192.168.0.10"}}
+    with pytest.raises(ConfigError, match="only one of network.cluster or network.external"):
+        make_config(
+            {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40}, **overrides},
+            remove=("openstack",),
+        )
+
+
+def test_kubeapi_vip_in_the_new_cluster_block_satisfies_proxmox(make_config):
+    overrides = _proxmox_new_network()
+    overrides["network"]["cluster"]["kubeapi_vip"] = "192.168.0.10"
+    del overrides["network"]["external"]
+    del overrides["proxmox"]["network"]["external"]
+
+    cfg = make_config(overrides, remove=("openstack", "network.cidr"))
+
+    assert cfg.network.cluster.kubeapi_vip == "192.168.0.10"
+    assert cfg.network.external is None
+
+
+def test_bridge_only_external_section_is_rejected(make_config):
+    """An external section that names only a bridge is still incomplete."""
+    with pytest.raises(ConfigError, match="network.external.cidr must be an IPv4 CIDR"):
+        make_config(
+            {
+                "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+                "proxmox": {
+                    "url": "https://pve.example:8006",
+                    "storage": "vms",
+                    "iso_storage": "isos",
+                    "network": {
+                        "cluster": {"bridge": "vmbr0", "kubeapi_vip": "192.168.0.10"},
+                        "external": {"bridge": "vmbr1"},
+                    },
+                },
+            },
+            remove=("openstack",),
+        )
+
+
+@pytest.mark.parametrize(
+    ("missing", "message"),
+    [
+        ("cidr", "network.external.cidr must be an IPv4 CIDR"),
+        ("gateway", "network.external.gateway must be an IPv4 address"),
+        ("anchor_cidr", "network.external.anchor_cidr must be an IPv4 CIDR"),
+    ],
+)
+def test_new_external_block_requires_the_full_definition(make_config, missing, message):
+    overrides = _proxmox_new_network()
+    del overrides["network"]["external"][missing]
+    with pytest.raises(ConfigError, match=message):
+        make_config(overrides, remove=("openstack", "network.cidr"))
+
+
+def test_new_external_block_requires_a_proxmox_bridge(make_config):
+    overrides = _proxmox_new_network()
+    del overrides["proxmox"]["network"]["external"]
+    with pytest.raises(ConfigError, match="external.bridge"):
+        make_config(overrides, remove=("openstack", "network.cidr"))
+
+
+def test_external_cidr_overlapping_the_cluster_cidr_is_rejected(make_config):
+    overrides = _proxmox_new_network()
+    overrides["network"]["external"].update(
+        {"cidr": "192.168.0.0/24", "gateway": "192.168.0.1", "kubeapi_vip": "192.168.0.10"}
+    )
+    del overrides["network"]["external"]["ingress_pool"]
+    with pytest.raises(ConfigError, match="must not overlap network.cidr"):
+        make_config(overrides, remove=("openstack", "network.cidr"))
+
+
+def test_new_vip_inside_an_old_ingress_pool_is_rejected(make_config):
+    """The pair is checked whichever location supplied the VIP and the pool."""
+    overrides = _proxmox_external_overrides()
+    del overrides["proxmox"]["network"]["external"]["kubeapi_vip"]
+    overrides["network"] = {"external": {"kubeapi_vip": "203.0.113.30"}}
+    with pytest.raises(ConfigError, match="must not be inside ingress_pool"):
+        make_config(
+            {"controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40}, **overrides},
+            remove=("openstack",),
+        )
+
+
+def test_new_vlan_is_rejected_together_with_proxmox_sdn(make_config):
+    with pytest.raises(ConfigError, match="mutually exclusive"):
+        make_config(
+            {
+                "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+                "proxmox": {
+                    "url": "https://pve.example:8006",
+                    "storage": "vms",
+                    "iso_storage": "isos",
+                    "network": {"cluster": {"sdn": {}, "kubeapi_vip": "192.168.0.9"}},
+                },
+                "network": {"cluster": {"vlan": 7}},
+            },
+            remove=("openstack",),
+        )
+
+
+def test_the_same_fact_written_differently_is_not_a_conflict(make_config):
+    """`vlan: 21` and `vlan: "21"` are one value, not two conflicting ones."""
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"bridge": "vmbr0", "vlan": 21, "kubeapi_vip": "192.168.0.10"},
+                },
+            },
+            "network": {"cluster": {"vlan": "21"}},
+        },
+        remove=("openstack",),
+    )
+
+    assert cfg.network.cluster.vlan == 21
+
+
+def test_explicitly_null_l2_keys_are_treated_as_absent(make_config):
+    cfg = make_config({"network": {"cluster": {"vlan": None, "mtu": None}}})
+
+    assert cfg.network.cluster.vlan is None
+    assert cfg.network.cluster.mtu == 1500

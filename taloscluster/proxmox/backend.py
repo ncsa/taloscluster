@@ -132,8 +132,8 @@ class ProxmoxBackend:
 
     @property
     def external_network(self) -> dict[str, Any]:
-        value = self.provider.network.get("external")
-        return value if isinstance(value, dict) else {}
+        """The external L2 facts (merged from both locations) plus the bridge."""
+        return talos.external_network(self.cfg)
 
     def _raw_inventory(self, *, refresh: bool = False) -> ProxmoxInventory:
         if refresh or self._inventory is None:
@@ -345,7 +345,7 @@ class ProxmoxBackend:
 
     def current_network(self, inventory: InfrastructureInventory) -> NetworkResult:
         ext = self.external_network
-        vip = str(ext.get("kubeapi_vip") or self.cluster_network.get("kubeapi_vip") or "")
+        vip = str(ext.get("kubeapi_vip") or self.cfg.network.cluster.kubeapi_vip or "")
         attachments: dict[str, tuple[NetworkAttachment, ...]] = {}
         if self.sdn:
             # static addresses are pure config, so plan/dry-run can resolve
@@ -1169,7 +1169,7 @@ class ProxmoxBackend:
                 "proxmox.storage does not migrate existing disks; revert the "
                 "change in cluster.yaml or recreate the cluster"
             )
-        want_nics = {"net0": (self.cluster_link, self.cluster_network.get("vlan"))}
+        want_nics = {"net0": (self.cluster_link, self.cfg.network.cluster.vlan)}
         ext = self.external_network
         if ext:
             want_nics["net1"] = (str(ext["bridge"]), ext.get("vlan"))
@@ -1318,8 +1318,8 @@ class ProxmoxBackend:
                 f"bridge={self.cluster_link},"
                 f"firewall=1"
             )
-            if self.cluster_network.get("vlan") is not None:
-                net0 += f",tag={int(self.cluster_network['vlan'])}"
+            if self.cfg.network.cluster.vlan is not None:
+                net0 += f",tag={self.cfg.network.cluster.vlan}"
             data: dict[str, Any] = {
                 "vmid": vmid,
                 "name": machine.name,
@@ -1882,7 +1882,7 @@ class ProxmoxBackend:
         # the talos endpoint and target the wrong owner. Skip it and keep the
         # first real address; return "" when only the VIP is left rather than
         # fall back to a floating address (see current_network for the VIP).
-        cluster_vip = str(self.cluster_network.get("kubeapi_vip") or "")
+        cluster_vip = str(self.cfg.network.cluster.kubeapi_vip or "")
         for interface in interfaces if isinstance(interfaces, list) else []:
             addresses = interface.get("ip-addresses", []) if isinstance(interface, dict) else []
             for address in addresses if isinstance(addresses, list) else []:

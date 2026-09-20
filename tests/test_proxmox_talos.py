@@ -455,3 +455,62 @@ def test_external_docs_with_sdn_replace_private_dhcp_with_static(make_config):
     )
     assert private["addresses"] == [{"address": "192.168.0.11/21"}]
     assert private["routes"] == [{"gateway": "192.168.0.1"}]
+
+
+def _proxmox_external_cfg_new_shape(make_config):
+    """The cluster of `_proxmox_external_cfg`, described in the `network` blocks."""
+    return make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "workers": {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0"}, "external": {"bridge": "vmbr1"}},
+            },
+            "network": {
+                "cluster": {"cidr": "192.168.0.0/21"},
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "kubeapi_vip": "203.0.113.10",
+                    "ingress_pool": "203.0.113.20-203.0.113.40",
+                },
+            },
+        },
+        remove=("openstack", "network.cidr"),
+    )
+
+
+def test_new_shape_network_blocks_render_the_same_machine_config(make_config, ep):
+    old = _proxmox_external_cfg(make_config)
+    new = _proxmox_external_cfg_new_shape(make_config)
+
+    assert talos.vip(new) == talos.vip(old) == ("203.0.113.10", "external")
+    assert talos.external_network(new) == talos.external_network(old)
+    for host in old.machines:
+        old_patches = talos.contribution(old.machines[host], old, ep).patches
+        new_patches = talos.contribution(new.machines[host], new, ep).patches
+        assert [(p.name, p.document) for p in new_patches] == [
+            (p.name, p.document) for p in old_patches
+        ]
+
+
+def test_kubeapi_vip_in_the_new_cluster_block_is_used_as_the_private_vip(make_config):
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0"}},
+            },
+            "network": {"cluster": {"cidr": "192.168.0.0/21", "kubeapi_vip": "192.168.0.10"}},
+        },
+        remove=("openstack", "network.cidr"),
+    )
+
+    assert talos.vip(cfg) == ("192.168.0.10", "private")

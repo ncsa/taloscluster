@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Add `network.cluster` and `network.external` blocks describing the node and external L2 networks, with optional `mtu`.
 - Bound every `kubectl` call with a request timeout so a hung kube-api fails converge.
 - Report a machine missing from both Talos discovery and Kubernetes as an incomplete `check`.
 - Exit nonzero from `check` when version data is incomplete, with `incomplete` and `incomplete_reasons` in the report.
