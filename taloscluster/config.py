@@ -67,6 +67,19 @@ _PROXMOX_SDN_KEYS = {"name", "zone", "controller", "asn", "vrf_tag", "tag",
 #: Direct keys `proxmox.network.external` accepts; the addresses on that
 #: network live in `network.external`.
 _PROXMOX_EXTERNAL_KEYS = {"bridge"}
+#: Direct keys a `metal` group accepts. A group is the defaults its `servers`
+#: start from: each server carries the same keys and overrides its own.
+_METAL_GROUP_KEYS = {"role", "redfish", "disk", "network", "interfaces", "bmc",
+                     "servers"}
+#: Direct keys one `metal.<group>.servers` entry accepts: the group settings it
+#: may override, minus the servers list itself.
+_METAL_SERVER_KEYS = _METAL_GROUP_KEYS - {"servers"}
+#: Direct keys one `metal.<group>.interfaces` entry accepts.
+_METAL_INTERFACE_KEYS = {"role", "ip", "dns"}
+#: Direct keys a `metal.<group>.bmc` block accepts.
+_METAL_BMC_KEYS = {"ip", "username", "password"}
+#: What an interface's `role` may say, as a bare value or a list of them.
+_METAL_INTERFACE_ROLES = ("cluster", "external", "pxe")
 #: Keys that moved into the `network` blocks, by the section they used to live
 #: in, so an old cluster.yaml is refused with the new location rather than a
 #: bare "unknown key".
@@ -236,14 +249,62 @@ ProviderConfig = OpenStackConfig | ProxmoxConfig
 
 @dataclass(frozen=True)
 class MetalConfig:
-    """The `metal:` section: groups of bare-metal machines beside the cluster.
+    """The `metal:` section: groups of bare-metal machines beside the cluster."""
 
-    Groups are carried as written until the metal provider ports their schema
-    (role, redfish, disk, network, interfaces, bmc, servers); the loader checks
-    only the section and group shape, so a mixed or metal-only cluster parses.
+    groups: dict[str, MetalGroup] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MetalInterface:
+    """One NIC of a bare-metal machine, keyed by its OS interface name.
+
+    `pxe` marks the boot/maintenance link, `cluster` the node L2 and `external`
+    the externally routed one; one interface may carry several roles.
     """
 
-    groups: dict[str, dict[str, Any]] = field(default_factory=dict)
+    role: tuple[str, ...] = ()
+    ip: str = ""                       # static address, with its prefix length
+    dns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MetalBmc:
+    """The Redfish controller of one bare-metal machine.
+
+    username/password are kept out of the repr like the provider credentials.
+    """
+
+    ip: str = ""
+    username: str = field(default="", repr=False)
+    password: str = field(default="", repr=False)
+
+
+@dataclass(frozen=True)
+class MetalGroup:
+    """One `metal:` group: the defaults every server in `servers` starts from."""
+
+    name: str
+    role: str                          # controlplane | worker
+    disk: str                          # install disk device
+    network: L2Network                 # the group's node L2
+    redfish: bool = False
+    interfaces: dict[str, MetalInterface] = field(default_factory=dict)
+    bmc: MetalBmc = field(default_factory=MetalBmc)
+    servers: dict[str, MetalServer] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MetalServer:
+    """One bare-metal machine: its group's defaults with its overrides merged in."""
+
+    name: str
+    group: str
+    role: str                          # controlplane | worker
+    disk: str                          # install disk device
+    network: L2Network                 # the machine's node L2
+    redfish: bool = False
+    interfaces: dict[str, MetalInterface] = field(default_factory=dict)
+    bmc: MetalBmc = field(default_factory=MetalBmc)
 
 
 @dataclass(frozen=True)
@@ -731,25 +792,222 @@ def _security_rules(security: dict[str, Any], where: str) -> dict[str, SecurityR
     return rules
 
 
-def _metal_config(d: dict[str, Any], where: str) -> MetalConfig:
-    """The `metal:` section, carried verbatim until the metal provider lands."""
+def _metal_config(
+    d: dict[str, Any], where: str, cluster: L2Network
+) -> MetalConfig:
+    """Parse the `metal:` section into typed groups, server merges applied."""
     raw = _mapping(d.get("metal"), f"{where}: metal")
-    groups: dict[str, dict[str, Any]] = {}
+    groups: dict[str, MetalGroup] = {}
+    names: set[str] = set()
     for name, group in raw.items():
         if not isinstance(name, str) or not name:
             raise ConfigError(f"{where}: metal group names must be non-empty strings")
-        groups[name] = _mapping(group, f"{where}: metal.{name}")
+        gwhere = f"{where}: metal.{name}"
+        group = {k: v for k, v in _mapping(group, gwhere).items() if v is not None}
+        _reject_unknown_keys(group, gwhere, _METAL_GROUP_KEYS)
+        groups[name] = _metal_group(name, group, gwhere, cluster)
+        duplicate = names.intersection(groups[name].servers)
+        if duplicate:
+            raise ConfigError(
+                f"{where}: metal server {sorted(duplicate)[0]!r} is defined in "
+                "more than one group"
+            )
+        names.update(groups[name].servers)
     return MetalConfig(groups=groups)
 
 
+def _metal_group(
+    name: str, group: dict[str, Any], where: str, cluster: L2Network
+) -> MetalGroup:
+    """One group: its parsed defaults plus every server merged over them."""
+    parsed = _metal_fields(group, where, cluster)
+    servers: dict[str, MetalServer] = {}
+    for server_name, server in _mapping(
+        group.get("servers"), f"{where}.servers"
+    ).items():
+        swhere = f"{where}.servers.{server_name}"
+        if not isinstance(server_name, str) or not server_name:
+            raise ConfigError(f"{where}.servers: server names must be non-empty strings")
+        if not _NAME_RE.fullmatch(server_name):
+            raise ConfigError(
+                f"{swhere}: server name {server_name!r} is not a valid hostname component"
+            )
+        server = {k: v for k, v in _mapping(server, swhere).items() if v is not None}
+        _reject_unknown_keys(server, swhere, _METAL_SERVER_KEYS)
+        servers[server_name] = _metal_server(
+            server_name, name, server, group, swhere, cluster
+        )
+    return MetalGroup(name=name, servers=servers, **parsed)
+
+
+def _metal_server(
+    name: str,
+    group_name: str,
+    server: dict[str, Any],
+    group: dict[str, Any],
+    where: str,
+    cluster: L2Network,
+) -> MetalServer:
+    """One machine: the group defaults with the server's overrides merged in.
+
+    Plain settings are replaced outright, while `bmc` merges key by key and
+    `interfaces` merge per interface name -- the prototype's `load_machines`
+    merge, so the group carries the credentials and the cabling plan and each
+    server adds only its own addresses.
+    """
+    interfaces = {
+        ifname: dict(iface)
+        for ifname, iface in _mapping(
+            group.get("interfaces"), f"{where}.interfaces"
+        ).items()
+    }
+    for ifname, iface in _mapping(server.get("interfaces"), f"{where}.interfaces").items():
+        interfaces.setdefault(ifname, {}).update(
+            _mapping(iface, f"{where}.interfaces.{ifname}")
+        )
+    merged = {
+        **{k: v for k, v in group.items() if k not in ("bmc", "interfaces", "servers")},
+        **{k: v for k, v in server.items() if k not in ("bmc", "interfaces")},
+        "bmc": {
+            **_mapping(group.get("bmc"), f"{where}.bmc"),
+            **_mapping(server.get("bmc"), f"{where}.bmc"),
+        },
+        "interfaces": interfaces,
+    }
+    return MetalServer(name=name, group=group_name, **_metal_fields(merged, where, cluster))
+
+
+def _metal_fields(
+    raw: dict[str, Any], where: str, cluster: L2Network
+) -> dict[str, Any]:
+    """The settings a group -- or a server merged over one -- carries, parsed."""
+    return {
+        "role": _metal_role(require(raw, "role", where=where), f"{where}.role"),
+        "disk": _metal_disk(require(raw, "disk", where=where), f"{where}.disk"),
+        "redfish": _metal_flag(raw.get("redfish", False), f"{where}.redfish"),
+        "network": _metal_l2(
+            _mapping(raw.get("network"), f"{where}.network"), f"{where}.network", cluster
+        ),
+        "interfaces": _metal_interfaces(raw.get("interfaces"), f"{where}.interfaces"),
+        "bmc": _metal_bmc(_mapping(raw.get("bmc"), f"{where}.bmc"), f"{where}.bmc"),
+    }
+
+
+def _metal_role(value: Any, where: str) -> str:
+    if value not in ("controlplane", "worker"):
+        raise ConfigError(f"{where} must be 'controlplane' or 'worker'")
+    return value
+
+
+def _metal_flag(value: Any, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{where} must be true or false")
+    return value
+
+
+def _metal_disk(value: Any, where: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{where} must be a non-empty string")
+    return value
+
+
+def _metal_l2(raw: dict[str, Any], where: str, cluster: L2Network) -> L2Network:
+    """A metal group's node L2: the explicit block, or `network.cluster` itself."""
+    if not raw:
+        return cluster
+    _reject_unknown_keys(raw, where, _L2_KEYS)
+    # _validate_l2 names cluster.yaml itself, so it takes the path without it
+    return _l2_network(
+        {k: v for k, v in raw.items() if v is not None},
+        where.removeprefix(f"{CLUSTER_FILE}: "),
+        external=False,
+    )
+
+
+def _metal_interfaces(raw: Any, where: str) -> dict[str, MetalInterface]:
+    interfaces: dict[str, MetalInterface] = {}
+    for ifname, iface in _mapping(raw, where).items():
+        iwhere = f"{where}.{ifname}"
+        if not isinstance(ifname, str) or not ifname:
+            raise ConfigError(f"{where}: interface names must be non-empty strings")
+        iface = {k: v for k, v in _mapping(iface, iwhere).items() if v is not None}
+        _reject_unknown_keys(iface, iwhere, _METAL_INTERFACE_KEYS)
+        interfaces[ifname] = MetalInterface(
+            role=_metal_interface_role(
+                require(iface, "role", where=iwhere), f"{iwhere}.role"
+            ),
+            ip=_metal_address(iface.get("ip"), f"{iwhere}.ip"),
+            dns=_metal_resolvers(iface.get("dns"), f"{iwhere}.dns"),
+        )
+    return interfaces
+
+
+def _metal_interface_role(value: Any, where: str) -> tuple[str, ...]:
+    roles = (
+        (value,)
+        if isinstance(value, str)
+        else tuple(value)
+        if isinstance(value, list)
+        else ()
+    )
+    if not roles or any(role not in _METAL_INTERFACE_ROLES for role in roles):
+        raise ConfigError(
+            f"{where} must be 'cluster', 'external', 'pxe', or a list of those"
+        )
+    return roles
+
+
+def _metal_address(value: Any, where: str) -> str:
+    """A static address, with or without its prefix length (`203.0.113.5/24`)."""
+    if value is None:
+        return ""
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{where} must be an IPv4 address with an optional /prefix")
+    try:
+        addr = ipaddress.ip_interface(value.strip())
+    except (TypeError, ValueError):
+        raise ConfigError(f"{where} is invalid: {value!r}") from None
+    if not isinstance(addr, ipaddress.IPv4Interface):
+        raise ConfigError(f"{where} must be IPv4")
+    return value
+
+
+def _metal_resolvers(value: Any, where: str) -> tuple[str, ...]:
+    resolvers = _string_list(value, where)
+    for resolver in resolvers:
+        try:
+            ipaddress.ip_address(resolver)
+        except ValueError:
+            raise ConfigError(
+                f"{where} contains an invalid address: {resolver!r}"
+            ) from None
+    return tuple(resolvers)
+
+
+def _metal_bmc(raw: dict[str, Any], where: str) -> MetalBmc:
+    _reject_unknown_keys(raw, where, _METAL_BMC_KEYS)
+    ip = raw.get("ip")
+    if ip is not None:
+        _metal_address(ip, f"{where}.ip")
+    fields: dict[str, str] = {}
+    for key in ("username", "password"):
+        value = raw.get(key)
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ConfigError(f"{where}.{key} must be a non-empty string")
+        fields[key] = value or ""
+    return MetalBmc(ip=ip or "", username=fields["username"], password=fields["password"])
+
+
 def _provider_config(
-    d: dict[str, Any], where: str
+    d: dict[str, Any], where: str, cluster: L2Network
 ) -> tuple[ProviderConfig | None, MetalConfig | None]:
     """The selected VM provider plus the optional `metal` section.
 
     One VM provider (openstack or proxmox) may carry a `metal` section beside
     it, or `metal` may stand alone; which machines land on which side is a
     per-pool decision the rest of the config is not asked to make yet.
+    A metal group without its own `network` sits on the cluster L2, so the
+    parsed blocks arrive here.
     """
     vm = [name for name in ("openstack", "proxmox") if name in d]
     if len(vm) > 1:
@@ -796,7 +1054,7 @@ def _provider_config(
                 token_id=provider_map.get("token_id") or "",
                 token_secret=provider_map.get("token_secret") or "",
             )
-    metal = _metal_config(d, where) if "metal" in d else None
+    metal = _metal_config(d, where, cluster) if "metal" in d else None
     return provider, metal
 
 
@@ -986,7 +1244,7 @@ def load_config(root: Path) -> Config:
     network = _network_config(d, where)
     _reject_unknown_keys(_mapping(d.get("kubernetes"), f"{where}: kubernetes"),
                          f"{where}: kubernetes", _KUBERNETES_KEYS)
-    provider, metal = _provider_config(d, where)
+    provider, metal = _provider_config(d, where, network.cluster)
     cfg = Config(
         name=require(d, "name", where=where),
         talos_version=require(d, "talos", "version", where=where),

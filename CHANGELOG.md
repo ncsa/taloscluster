@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Accept a `metal` section in `cluster.yaml` alongside one VM provider, or alone for all-bare-metal clusters.
+- Accept a `metal` section defining bare-metal machine groups alongside one VM provider, or alone for all-bare-metal clusters.
 - Enable KubeSpan by default, sized to the L2 MTU and excluding the external network from endpoints.
 - Document the KubeSpan reachability contract for clusters spanning layer-2 networks, including the API VIP and proxy requirements.
 - Document the MTU rules for jumbo layer-2 networks, including the jumbo-frame ping recipe.

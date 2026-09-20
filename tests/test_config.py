@@ -12,6 +12,12 @@ from taloscluster import naming
 from taloscluster.config import (
     SECRETS_FILE,
     ConfigError,
+    L2Network,
+    MetalBmc,
+    MetalConfig,
+    MetalGroup,
+    MetalInterface,
+    MetalServer,
     OpenStackConfig,
     ProxmoxConfig,
     SecurityRule,
@@ -426,16 +432,16 @@ def test_at_most_one_vm_provider_is_allowed(make_config):
 
 def test_metal_section_loads_alongside_a_vm_provider(make_config):
     cfg = make_config({"metal": {
-        "cp": {"role": "controlplane"},
-        "worker": {"role": "worker"},
+        "cp": {"role": "controlplane", "disk": "/dev/sda"},
+        "worker": {"role": "worker", "disk": "/dev/sda"},
     }})
 
     assert isinstance(cfg.provider, OpenStackConfig)
     assert cfg.metal is not None
-    assert cfg.metal.groups == {
-        "cp": {"role": "controlplane"},
-        "worker": {"role": "worker"},
-    }
+    assert cfg.metal.groups["cp"].role == "controlplane"
+    assert cfg.metal.groups["worker"].role == "worker"
+    # a group without its own `network` sits on the cluster L2
+    assert cfg.metal.groups["worker"].network == cfg.network.cluster
     assert cfg.provider_name == "openstack"
 
 
@@ -444,14 +450,23 @@ def test_metal_alone_loads_without_a_vm_provider(make_config):
         {
             "controlplane": {"count": 3, "disk": 40},
             "workers": {"worker": {"count": 2, "disk": 100}},
-            "metal": {"worker": {"servers": {"rp001-worker": {}}}},
+            "metal": {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "servers": {"rp001-worker": {}},
+                }
+            },
         },
         remove=("openstack",),
     )
 
     assert cfg.provider is None
     assert cfg.metal is not None
-    assert cfg.metal.groups["worker"]["servers"] == {"rp001-worker": {}}
+    server = cfg.metal.groups["worker"].servers["rp001-worker"]
+    assert server.group == "worker"
+    assert server.role == "worker"
+    assert server.disk == "/dev/sda"
     assert cfg.provider_name == ""
     # metal-only pools carry no VM sizing keys, and the machines still expand
     assert cfg.machines["testcluster-controlplane-01"].disk == 40
@@ -469,6 +484,244 @@ def test_metal_alone_loads_without_a_vm_provider(make_config):
 def test_metal_section_shape_is_checked(make_config, metal, message):
     with pytest.raises(ConfigError, match=message):
         make_config({"metal": metal})
+
+
+# ---------------------------------------------------------------------------
+# the metal group schema
+# ---------------------------------------------------------------------------
+
+def test_metal_group_defaults(make_config):
+    """`redfish` is off unless a group turns it on, and `network` is the cluster L2."""
+    cfg = make_config({"metal": {"worker": {"role": "worker", "disk": "/dev/sda"}}})
+
+    group = cfg.metal.groups["worker"]
+    assert group.redfish is False
+    assert group.network == cfg.network.cluster
+    assert group.interfaces == {}
+    assert group.bmc == MetalBmc()
+    assert group.servers == {}
+
+
+def test_metal_group_defaults_resolve_into_each_server(make_config):
+    """Servers start from the group defaults; `bmc` and `interfaces` merge per key."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "redfish": True,
+        "disk": "/dev/sda",
+        "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000},
+        "interfaces": {
+            "enp1s0f0": {"role": "pxe"},
+            "enp2s0f0": {"role": ["cluster", "external"], "dns": ["192.0.2.53"]},
+        },
+        "bmc": {"username": "root", "password": "secret"},
+        "servers": {
+            "rp001": {
+                "bmc": {"ip": "172.28.50.5"},
+                "interfaces": {"enp2s0f0": {"ip": "172.29.21.5/24"}},
+            },
+            "rp002": {"disk": "/dev/nvme0n1"},
+        },
+    }}})
+
+    group = cfg.metal.groups["phoenix"]
+    assert group.network == L2Network(
+        cidr="172.29.21.0/24", gateway="172.29.21.1", mtu=9000
+    )
+    rp001 = group.servers["rp001"]
+    assert rp001.group == "phoenix"
+    assert rp001.role == "worker"
+    assert rp001.redfish is True
+    assert rp001.disk == "/dev/sda"
+    assert rp001.network == group.network
+    # the group's bmc credentials with the server's own BMC address merged in
+    assert rp001.bmc == MetalBmc(ip="172.28.50.5", username="root", password="secret")
+    # the group's interface roles with the server's own cluster address merged in
+    assert rp001.interfaces == {
+        "enp1s0f0": MetalInterface(role=("pxe",)),
+        "enp2s0f0": MetalInterface(
+            role=("cluster", "external"), ip="172.29.21.5/24", dns=("192.0.2.53",)
+        ),
+    }
+    # rp002 overrides only its disk; everything else comes from the group
+    rp002 = group.servers["rp002"]
+    assert rp002.disk == "/dev/nvme0n1"
+    assert rp002.bmc == group.bmc
+    assert rp002.interfaces == group.interfaces
+
+
+def test_metal_server_can_add_an_interface(make_config):
+    """A server's interfaces merge with the group's per name, adding new ones."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "interfaces": {"enp1s0f0": {"role": "pxe", "ip": "172.29.21.9/24"}},
+        "servers": {"rp001": {"interfaces": {"enp2s0f0": {"role": "cluster"}}}},
+    }}})
+
+    assert cfg.metal.groups["phoenix"].servers["rp001"].interfaces == {
+        "enp1s0f0": MetalInterface(role=("pxe",), ip="172.29.21.9/24"),
+        "enp2s0f0": MetalInterface(role=("cluster",)),
+    }
+
+
+@pytest.mark.parametrize(
+    ("metal", "message"),
+    [
+        ({"worker": {"disk": "/dev/sda"}}, r"metal\.worker: missing 'role'"),
+        (
+            {"worker": {"role": "master", "disk": "/dev/sda"}},
+            r"metal\.worker\.role must be 'controlplane' or 'worker'",
+        ),
+        ({"worker": {"role": "worker"}}, r"metal\.worker: missing 'disk'"),
+        (
+            {"worker": {"role": "worker", "disk": " "}},
+            r"metal\.worker\.disk must be a non-empty string",
+        ),
+        (
+            {"worker": {"role": "worker", "disk": "/dev/sda", "redfish": "yes"}},
+            r"metal\.worker\.redfish must be true or false",
+        ),
+        (
+            {"worker": {"role": "worker", "disk": "/dev/sda", "driver": "redfish"}},
+            r"metal\.worker: unknown key\(s\): driver",
+        ),
+        (
+            {"worker": {"role": "worker", "disk": "/dev/sda", "network": {"cidr": "nope"}}},
+            r"metal\.worker\.network\.cidr is not a valid network: 'nope'",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "network": {"cidr": "172.29.21.0/24", "anchor_cidr": "169.254.40.0/24"},
+                }
+            },
+            r"metal\.worker\.network: unknown key\(s\): anchor_cidr",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "interfaces": {"enp1s0f0": {"speed": 10000}},
+                }
+            },
+            r"metal\.worker\.interfaces\.enp1s0f0: unknown key\(s\): speed",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "interfaces": {"enp1s0f0": {"role": "mgmt"}},
+                }
+            },
+            r"metal\.worker\.interfaces\.enp1s0f0\.role must be 'cluster', 'external', "
+            r"'pxe', or a list of those",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "interfaces": {"enp1s0f0": {"role": ["cluster", "mgmt"]}},
+                }
+            },
+            r"metal\.worker\.interfaces\.enp1s0f0\.role must be 'cluster', 'external', "
+            r"'pxe', or a list of those",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "interfaces": {"enp1s0f0": {"role": []}},
+                }
+            },
+            r"metal\.worker\.interfaces\.enp1s0f0\.role must be 'cluster', 'external', "
+            r"'pxe', or a list of those",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "nope"}},
+                }
+            },
+            r"metal\.worker\.interfaces\.enp1s0f0\.ip is invalid: 'nope'",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "interfaces": {
+                        "enp1s0f0": {"role": "cluster", "dns": ["dns.example.edu"]}
+                    },
+                }
+            },
+            r"metal\.worker\.interfaces\.enp1s0f0\.dns contains an invalid address",
+        ),
+        (
+            {"worker": {"role": "worker", "disk": "/dev/sda", "bmc": {"user": "root"}}},
+            r"metal\.worker\.bmc: unknown key\(s\): user",
+        ),
+        (
+            {"worker": {"role": "worker", "disk": "/dev/sda", "bmc": {"ip": "bmc.example.edu"}}},
+            r"metal\.worker\.bmc\.ip is invalid: 'bmc\.example\.edu'",
+        ),
+        (
+            {"worker": {"role": "worker", "disk": "/dev/sda", "servers": ["rp001"]}},
+            r"metal\.worker\.servers must be a YAML mapping",
+        ),
+        (
+            {"worker": {"role": "worker", "disk": "/dev/sda", "servers": {"rp 001": {}}}},
+            r"server name 'rp 001' is not a valid hostname component",
+        ),
+        (
+            {"worker": {"role": "worker", "disk": "/dev/sda", "servers": {1: {}}}},
+            r"metal\.worker\.servers: server names must be non-empty strings",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "servers": {"rp001": {"user": "x"}},
+                }
+            },
+            r"metal\.worker\.servers\.rp001: unknown key\(s\): user",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "servers": {"rp001": {"role": "controlplane", "role2": "x"}},
+                }
+            },
+            r"metal\.worker\.servers\.rp001: unknown key\(s\): role2",
+        ),
+    ],
+)
+def test_metal_schema_is_checked(make_config, metal, message):
+    with pytest.raises(ConfigError, match=message):
+        make_config({"metal": metal})
+
+
+def test_metal_server_name_must_be_unique_across_groups(make_config):
+    group = {"role": "worker", "disk": "/dev/sda", "servers": {"rp001": {}}}
+    with pytest.raises(
+        ConfigError, match=r"metal server 'rp001' is defined in more than one group"
+    ):
+        make_config({
+            "metal": {
+                "a": group,
+                "b": {**group, "servers": {"rp001": {}, "rp002": {}}},
+            }
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +756,54 @@ def _metal_groups() -> dict:
     }
 
 
+def _expected_metal_groups(cluster: L2Network) -> MetalConfig:
+    """`_metal_groups()` as the loader resolves it: typed, merges applied.
+
+    The group `network` defaults to the cluster L2, so the caller passes the
+    one its cluster carries.
+    """
+    def group(name: str, role: str, server: MetalServer) -> MetalGroup:
+        return MetalGroup(
+            name=name,
+            role=role,
+            redfish=True,
+            disk="/dev/sda",
+            network=cluster,
+            interfaces={
+                "enp1s0f0": MetalInterface(role=("pxe",)),
+                "enp2s0f0": MetalInterface(role=("cluster",)),
+            },
+            bmc=MetalBmc(username="root", password="secret"),
+            servers={server.name: server},
+        )
+
+    def server(name: str, group: str, role: str, bmc_ip: str) -> MetalServer:
+        return MetalServer(
+            name=name,
+            group=group,
+            role=role,
+            disk="/dev/sda",
+            network=cluster,
+            redfish=True,
+            interfaces={
+                "enp1s0f0": MetalInterface(role=("pxe",)),
+                "enp2s0f0": MetalInterface(role=("cluster",)),
+            },
+            bmc=MetalBmc(ip=bmc_ip, username="root", password="secret"),
+        )
+
+    return MetalConfig(groups={
+        "cp": group(
+            "cp", "controlplane",
+            server("rp001-cp", "cp", "controlplane", "192.0.2.10"),
+        ),
+        "worker": group(
+            "worker", "worker",
+            server("rp001-worker", "worker", "worker", "192.0.2.11"),
+        ),
+    })
+
+
 def test_openstack_with_metal_loads(make_config):
     """A mixed cluster: OpenStack VMs plus bare-metal groups beside them."""
     cfg = make_config({
@@ -512,8 +813,7 @@ def test_openstack_with_metal_loads(make_config):
 
     assert isinstance(cfg.provider, OpenStackConfig)
     assert cfg.provider_name == "openstack"
-    assert cfg.metal is not None
-    assert cfg.metal.groups == _metal_groups()
+    assert cfg.metal == _expected_metal_groups(cfg.network.cluster)
     assert cfg.network.external is None
     # the pools expand regardless of which side each machine lands on
     assert len(cfg.machines) == 5
@@ -540,8 +840,7 @@ def test_proxmox_with_metal_loads(make_config):
 
     assert isinstance(cfg.provider, ProxmoxConfig)
     assert cfg.provider_name == "proxmox"
-    assert cfg.metal is not None
-    assert cfg.metal.groups == _metal_groups()
+    assert cfg.metal == _expected_metal_groups(cfg.network.cluster)
     assert cfg.network.cluster.kubeapi_vip == "192.168.0.10"
     assert len(cfg.machines) == 5
 
@@ -554,8 +853,7 @@ def test_proxmox_sdn_with_metal_loads(make_config):
 
     assert isinstance(cfg.provider, ProxmoxConfig)
     assert proxmox_sdn(cfg.name, cfg.provider) is not None
-    assert cfg.metal is not None
-    assert cfg.metal.groups == _metal_groups()
+    assert cfg.metal == _expected_metal_groups(cfg.network.cluster)
     assert len(cfg.machines) == 1
 
 
@@ -572,8 +870,7 @@ def test_metal_only_cluster_loads(make_config):
 
     assert cfg.provider is None
     assert cfg.provider_name == ""
-    assert cfg.metal is not None
-    assert cfg.metal.groups == _metal_groups()
+    assert cfg.metal == _expected_metal_groups(cfg.network.cluster)
     assert len(cfg.machines) == 5
 
 
