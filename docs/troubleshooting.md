@@ -52,6 +52,18 @@ Diagnostics: destroy aborts before any VM or the pool is deleted; nothing is mut
 
 Recovery: clear the pending state on the shared controller — apply or revert the staged SDN change — then re-run `taloscluster plan` and `taloscluster destroy`. See [Managed SDN](providers/proxmox.md#managed-evpn-sdn).
 
+## A BMC cannot boot a machine from its install media
+
+`metal join`'s boot step mounts the Talos install ISO in the machine's virtual media and one-time boots it, but some BMCs never fetch a mounted URL or refuse the media; the machine never reaches maintenance mode and `metal wait` times out:
+
+```
+rp001 did not answer the maintenance apid on 172.29.21.5 within 10m; is the machine booted from the install media and reachable on the cluster network?
+```
+
+Diagnostics: `taloscluster metal inspect SERVER` shows the machine's power state, boot setting and NIC summary — a machine that is powered on but still answers nothing on its cluster address after several minutes is stuck at the boot, not at the network.
+
+Recovery: set [`redfish: false`](configuration/metal.md#metalgroupredfish) for the machine (or its group), boot the machine into maintenance mode yourself — through a PXE server or a USB stick with the same install ISO — and run `taloscluster metal join SERVER` again. The join skips the BMC from then on (wait, apply, verify) and applies the configuration to the machine you booted. With a PXE server, making an installed machine boot from disk afterwards is your job: the Redfish flow leans on the one-time boot falling back to the machine's own boot order, which for an installed machine is its disk, and PXE has no such fallback. Hardware- and site-specific observations — a particular BMC firmware's media behaviour, NIC boot ROM quirks, boot timings — stay in the cluster's own notes, not in taloscluster's docs. See [Metal setup](providers/metal.md#without-redfish).
+
 ## `check` exits with status 1
 
 Read the report, or use `taloscluster check -o yaml`. Exit status 1 can mean an available version update, a node running a different version, a leftover cordon, a plugin needing changes, or an error. It is not by itself evidence that the cluster is down. See [`check`](commands.md#check).

@@ -1,0 +1,33 @@
+# Metal setup
+
+Prepare the machines before joining them to the cluster. For each configuration key, see the [Metal reference](../configuration/metal.md). taloscluster does not provision bare metal: you rack and cable the machines, describe them in a [`metal:` section](../configuration/metal.md) — alone for an all-bare-metal cluster or beside the one [OpenStack](openstack.md) or [Proxmox](proxmox.md) section — and join each machine with `taloscluster metal join SERVER`. The join flow itself is described under [Machines and access](../concepts/machines.md#metal); this page is the preparation it needs.
+
+## Network and cabling
+
+Cable every machine to match its group's `interfaces` plan: the `cluster` link carries the machine's static address on the group's L2 (defaulting to `network.cluster`), an optional `external` link rides the external network as a VLAN child, and a `pxe` link exists only to boot and reach the machine in maintenance mode. Nothing on any link picks up a lease — every link states `dhcp: false` — so the machine is reachable at its cluster address from the first boot, in maintenance mode and after it installs. The machine running taloscluster must reach that address (the Talos API on port 50000) during the join, and reach the BMC address described below.
+
+A group on an L2 of its own needs [KubeSpan](../configuration/general.md#taloskubespan), which is on by default, and the Kubernetes API VIP must be reachable from the metal L2 — see [what KubeSpan does and does not cover](../concepts/talos.md#one-pod-network-across-networks).
+
+## BMC access
+
+With `redfish: true`, taloscluster talks Redfish to each machine's BMC at `bmc.ip` over https (falling back to http) with the group's `username` and `password`. `init --metal` scaffolds those credentials as `CHANGE-ME` placeholders in `secrets.yaml`, and a `redfish` group refuses to load until every machine has real ones. The BMC is asked for exactly three things: mount the Talos install ISO as virtual media, one-time boot from it, and power the machine on. `metal inspect` also reads a summary of the machine's power state, boot setting, NICs and disks, and `metal eject` unmounts the media.
+
+The BMC is never asked to change BIOS boot modes or the persistent boot order. After the one-time boot the machine falls back to its own boot order, which for an installed machine is its disk, so a machine rebooted with media still mounted boots from the disk. Re-running `join` on a machine that already answers apid with the cluster's identity is refused — it would reinstall the machine — so configuration changes go through `talosctl apply-config` instead.
+
+A BMC with no internet egress cannot fetch the factory ISO URL itself: run `metal join SERVER --serve` (or `metal boot SERVER --serve`) and the machine running taloscluster downloads the ISO and hands it out over the LAN for as long as the command runs.
+
+## Joining a machine
+
+```bash
+taloscluster metal join rp001
+```
+
+`join` runs the whole flow for one machine: boot, wait for the maintenance-mode apid on its cluster address, apply the generated machine configuration, eject the media, and verify that the node comes back with its configuration after installing Talos to `disk`. The generated configuration is kept at `.metal/<server>-<role>.yaml` in the cluster directory, mode 0600, because it carries the cluster's credentials. Every step can also be run on its own (`inspect`, `boot`, `wait`, `apply`, `eject`); see [`metal`](../commands.md#metal) for the syntax.
+
+## Without Redfish
+
+Set `redfish: false` on a group or a single server when the BMC is unreachable, unsupported, or simply not to be touched: taloscluster never talks to that machine's BMC. Boot the machine into Talos maintenance mode yourself — through a PXE server or a USB stick written with the same install ISO — and run `taloscluster metal join SERVER`: it waits for the machine to answer, applies the configuration and verifies it came back with it. `inspect`, `boot` and `eject` skip the machine with a notice. With a PXE server, making an installed machine boot from disk afterwards is your job: the Redfish flow leans on the one-time boot falling back to the machine's own boot order, and PXE has no such fallback.
+
+## Site notes
+
+Hardware- and site-specific observations — how a particular BMC firmware treats mounted media, NIC boot ROM quirks, boot timings — belong in the cluster's own notes, not in these pages: the flow above is the same everywhere, and the quirks are not.

@@ -2,7 +2,7 @@
 
 Back to the [configuration index](../configuration.md).
 
-A `metal:` section brings bare-metal machines into the cluster. It may sit beside the one [OpenStack](openstack.md) or [Proxmox](proxmox.md) section — VMs and bare metal sharing one cluster — or stand alone when every machine is bare metal; at most one VM provider may be set, with or without `metal`. `taloscluster init --metal` scaffolds the example group below, beside a provider or instead of one, with the group's BMC credentials as `CHANGE-ME` placeholders in `secrets.yaml`.
+A `metal:` section brings bare-metal machines into the cluster. It may sit beside the one [OpenStack](openstack.md) or [Proxmox](proxmox.md) section — VMs and bare metal sharing one cluster — or stand alone when every machine is bare metal; at most one VM provider may be set, with or without `metal`. `taloscluster init --metal` scaffolds the example group below, beside a provider or instead of one, with the group's BMC credentials as `CHANGE-ME` placeholders in `secrets.yaml`. See [Metal setup](../providers/metal.md) for the preparation the machines and their BMCs need.
 
 ## `metal`
 

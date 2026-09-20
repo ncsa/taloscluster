@@ -20,6 +20,10 @@ Converge creates a private network from [`network.cluster.cidr`](../configuratio
 
 Converge downloads the boot ISO to `iso_storage`, writes each node's machine configuration to a small cloud-init volume on node-local storage, creates the VM in the resource pool `taloscluster-<name>`, and configures the per-VM firewall. The first NIC attaches to an existing bridge or VNet, or to a managed EVPN SDN network that taloscluster creates itself. An optional second NIC on a routed subnet can carry the API VIP and ingress addresses directly. After successful health checks, converge detaches and deletes the temporary cloud-init ISO, and detaches the `ide2` boot ISO cdrom now that each node boots from disk. Proxmox keys machines by VM name, so a VM name shared with a cluster-managed machine aborts converge and destroy rather than letting the `cluster/resources` list order hide the managed machine; collisions among unmanaged VMs are ignored. See the [Proxmox settings](../configuration/proxmox.md).
 
+## Metal
+
+Converge does not create bare-metal machines: the [pools](../configuration/pools.md) describe them, you rack, cable and power them, and `taloscluster metal join SERVER` joins each one. Join boots the machine from the Talos install ISO — the same factory image the VM providers boot — by mounting it in the BMC's virtual media and one-time booting from it (`--serve` hands the ISO out over the LAN when the BMC has no internet egress), waits for the maintenance-mode apid on the machine's cluster address, applies the generated machine configuration, ejects the media, and waits for the node to come back with its configuration after installing Talos to `disk`. The BMC is only ever asked to mount media, one-time boot it and manage power: no BIOS boot-mode changes and no boot-order manipulation, so after the one-time boot the machine falls back to its own boot order, which for an installed machine is its disk. A machine whose [`redfish`](../configuration/metal.md#metalgroupredfish) is off is never touched through its BMC: boot it into maintenance mode yourself (PXE, USB) and `join` becomes wait, apply and verify. See [Metal setup](../providers/metal.md) for the preparation the machines need.
+
 ## Reaching the nodes
 
 On OpenStack, and on Proxmox with a managed SDN, the nodes sit on a private network with no public address. Only the API VIP and the ingress address are reachable from outside. There is no SSH on Talos anyway, but `talosctl` and `taloscluster` still have to reach the Talos API on port 50000 of a real node address to bootstrap and manage the cluster. The usual answer is a bastion host or a VPN into the tenant network; taloscluster supports two management access paths, and which one applies is decided by whether the `tailscale` section is present in `cluster.yaml`:
@@ -27,7 +31,7 @@ On OpenStack, and on Proxmox with a managed SDN, the nodes sit on a private netw
 - **Tailscale** — the `tailscale` section (even empty) is present, so management talks to the first control plane by its MagicDNS name.
 - **Direct** — no `tailscale` section, so management talks to the first control plane's real node address, which your machine must already be able to route to.
 
-Both paths reach the same Talos API on port 50000 of one real node (controlplane-01). The Kubernetes API VIP and the ingress floating IP are not Talos API endpoints; they answer only the Kubernetes API and ingress traffic.
+Both paths reach the same Talos API on port 50000 of one real node (controlplane-01). The Kubernetes API VIP and the ingress floating IP are not Talos API endpoints; they answer only the Kubernetes API and ingress traffic. Bare-metal machines of a [`metal`](../providers/metal.md) section follow the same two paths: they join the tailnet at boot like any node, and without one they are reached on the static address of their cluster link.
 
 ### Path A: an already-connected Tailscale management machine
 
