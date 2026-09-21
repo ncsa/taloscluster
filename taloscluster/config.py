@@ -1499,16 +1499,28 @@ def _validate(cfg: Config) -> None:
     if not cfg.kubespan and cfg.metal is not None:
         # a group on another L2 has no path to the cluster network without the
         # KubeSpan overlay, so turning it off there cannot converge; the L2 is
-        # the subnet, so the VIP and MTU fields do not make a group remote
+        # the subnet, so the VIP and MTU fields do not make a group remote. A
+        # server may replace the group's network wholesale, so the merged
+        # servers get the same check.
+        cluster_cidr = cfg.network.cluster.cidr
         off_l2 = sorted(
             name
             for name, group in cfg.metal.groups.items()
-            if group.network.cidr != cfg.network.cluster.cidr
+            if group.network.cidr != cluster_cidr
+        )
+        off_l2 += sorted(
+            f"{group.name}/{server.name}"
+            for group in cfg.metal.groups.values()
+            for server in group.servers.values()
+            # a server still on the group's L2 is covered by the group's own
+            # entry above
+            if server.network.cidr not in (group.network.cidr, cluster_cidr)
         )
         if off_l2:
             raise ConfigError(
                 "cluster.yaml: talos.kubespan must be true when a metal group's "
-                f"network differs from network.cluster ({', '.join(off_l2)}): "
+                "or a server's network differs from network.cluster "
+                f"({', '.join(off_l2)}): "
                 "the KubeSpan overlay is what carries their traffic to the cluster"
             )
 

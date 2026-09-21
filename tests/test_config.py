@@ -551,6 +551,42 @@ def test_metal_group_on_another_l2_requires_explicit_kubespan(make_config):
         })
 
 
+def test_metal_server_on_another_l2_requires_kubespan(make_config):
+    """A server may replace the group's network wholesale; KubeSpan is still
+    the only path between its L2 and the cluster network."""
+    with pytest.raises(ConfigError, match="talos.kubespan must be true.*phoenix/rp001"):
+        make_config({
+            "talos": {"kubespan": False},
+            "metal": {"phoenix": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "servers": {
+                    "rp001": {
+                        "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+                    },
+                },
+            }},
+        })
+
+
+def test_metal_server_on_another_l2_loads_with_kubespan(make_config):
+    """The server-level check only forces KubeSpan on; opting in loads the shape."""
+    cfg = make_config({
+        "talos": {"kubespan": True},
+        "metal": {"phoenix": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "servers": {
+                "rp001": {
+                    "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+                },
+            },
+        }},
+    })
+
+    assert cfg.metal.groups["phoenix"].servers["rp001"].network.cidr == "172.29.21.0/24"
+
+
 def test_metal_group_on_the_cluster_l2_allows_kubespan_off(make_config):
     """A group on the cluster L2 -- by omission or by the same values -- needs no overlay."""
     cfg = make_config({

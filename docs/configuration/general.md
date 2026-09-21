@@ -82,7 +82,7 @@ talos:
           HTTPS_PROXY: http://proxy.example.edu:3128
 ```
 
-The overlay is off unless you enable it here, and upgrading to a new release never turns it on on an existing cluster: converge applies it only after you set it, so nodes keep their plain routing until you opt in. The load refuses to leave it off — `false` or unset — while a [`metal`](metal.md) group's [`network`](metal.md#metalgroupnetwork) differs from [`network.cluster`](network.md#networkcluster), because the overlay is what carries that group's pod traffic to the rest of the cluster.
+The overlay is off unless you enable it here, and upgrading to a new release never turns it on on an existing cluster: converge applies it only after you set it, so nodes keep their plain routing until you opt in. The load refuses to leave it off — `false` or unset — while a [`metal`](metal.md) group's [`network`](metal.md#metalgroupnetwork) — or a single server's override of it — differs from [`network.cluster`](network.md#networkcluster), because the overlay is what carries their pod traffic to the rest of the cluster.
 
 ## `kubernetes`
 
