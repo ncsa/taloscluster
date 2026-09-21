@@ -916,6 +916,47 @@ def test_vm_create_omits_mtu_at_the_default(proxmox_cfg, monkeypatch):
     assert "mtu" not in payload["net0"]
 
 
+def _jumbo_external_cfg(make_config):
+    return make_config(
+        {
+            "controlplane": {"count": 2, "cores": 4, "memory": 8, "disk": 40},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "ingress_pool": "203.0.113.20-203.0.113.40",
+                    "kubeapi_vip": "203.0.113.10",
+                    "vlan": 1691,
+                    "mtu": 9000,
+                },
+            },
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "cidata_storage": "local",
+                "nodes": ["pve001", "pve002"],
+                "network": {
+                    "cluster": {"bridge": "vmbr0"},
+                    "external": {"bridge": "vmbr1"},
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+
+
+def test_vm_create_states_mtu1_on_a_jumbo_external_l2(make_config, monkeypatch):
+    """The external NIC inherits its own bridge's MTU, per its own L2."""
+    payload = _create_first_vm(
+        _jumbo_external_cfg(make_config), _external_data(), monkeypatch
+    )
+
+    assert payload["net1"].endswith(",mtu=1")
+    assert "mtu" not in payload["net0"]
+
+
 def test_plan_warns_when_a_bridge_is_below_the_cluster_mtu(make_config, capsys):
     """An interface without an explicit MTU reads as the Proxmox 1500 default,
     so a bridge left unconfigured warns on every target node."""
@@ -977,6 +1018,58 @@ def test_no_bridge_mtu_warning_at_the_default_mtu(proxmox_cfg, capsys):
     inventory = backend.load_inventory()
 
     backend.reconcile_network(proxmox_cfg.machines, inventory)
+
+    assert capsys.readouterr().err == ""
+
+
+def test_plan_warns_when_the_external_bridge_is_below_the_external_mtu(
+    make_config, capsys
+):
+    """The external bridge is warned against `network.external.mtu` the same
+    way the cluster bridge is warned against `network.cluster.mtu`."""
+    cfg = _jumbo_external_cfg(make_config)
+    data = _external_data()
+    data["nodes/pve001/network"] = [
+        {"iface": "vmbr0", "type": "bridge", "mtu": "1500"},
+        {"iface": "vmbr1", "type": "bridge", "mtu": "1500"},
+    ]
+    data["nodes/pve002/network"] = [
+        {"iface": "vmbr0", "type": "bridge", "mtu": "1500"},
+        {"iface": "vmbr1", "type": "bridge", "mtu": 9000},
+    ]
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+    set_dry_run(True)
+
+    backend.reconcile_network(cfg.machines, inventory)
+
+    err = capsys.readouterr().err
+    # the cluster bridge is not jumbo here, so only the external one warns
+    assert "bridge vmbr1 MTU is below the external MTU 9000" in err
+    assert "pve001 (1500)" in err
+    assert "pve002" not in err
+    assert all(method == "GET" for method, _path in client.calls)
+
+
+def test_no_external_bridge_warning_when_it_carries_the_external_mtu(
+    make_config, capsys
+):
+    cfg = _jumbo_external_cfg(make_config)
+    data = _external_data()
+    data["nodes/pve001/network"] = [
+        {"iface": "vmbr0", "type": "bridge", "mtu": "1500"},
+        {"iface": "vmbr1", "type": "bridge", "mtu": 9000},
+    ]
+    data["nodes/pve002/network"] = [
+        {"iface": "vmbr0", "type": "bridge", "mtu": "1500"},
+        {"iface": "vmbr1", "type": "bridge", "mtu": 9000},
+    ]
+    client = FakeClient(data)
+    backend = _backend(cfg, client)
+    inventory = backend.load_inventory()
+
+    backend.reconcile_network(cfg.machines, inventory)
 
     assert capsys.readouterr().err == ""
 
@@ -2640,6 +2733,83 @@ def test_disk_shrink_is_refused_before_any_mutation(make_config):
     with pytest.raises(ReconcileError, match="refusing to shrink the disk"):
         _reconcile_cp1(_resized_cfg(make_config, disk=20), client)
     assert client.mutations == []
+
+
+# NIC MTU: VMs created before the MTU was raised lack `mtu=1` and stay capped
+# at 1500; the rewrite applies live, so it is reconcilable drift.
+
+def test_plan_reports_missing_nic_mtu_as_drift_without_mutating(make_config, capsys):
+    set_dry_run(True)
+    client = FakeClient(_data())
+
+    _reconcile_cp1(_jumbo_cfg(make_config), client)
+
+    out = capsys.readouterr().out
+    assert (
+        "set mtu=1 on testcluster-controlplane-01 net0 to inherit the bridge MTU" in out
+    )
+    assert client.mutations == []
+
+
+def test_converge_sets_mtu1_on_the_cluster_nic(make_config):
+    client = FakeClient(_data())
+
+    backend = _reconcile_cp1(_jumbo_cfg(make_config), client)
+
+    assert (
+        "PUT",
+        "nodes/pve001/qemu/800/config",
+        {"net0": "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1,mtu=1"},
+    ) in client.mutations
+    # the rewrite applies live, so no restart is asked for
+    assert backend.restart_result == set()
+
+
+def test_converge_sets_mtu1_on_the_external_nic(make_config):
+    # only the external L2 is jumbo here: net1 gets mtu=1, net0 is untouched
+    client = FakeClient(_external_data())
+
+    _reconcile_cp1(_jumbo_external_cfg(make_config), client)
+
+    puts = [
+        payload
+        for method, path, payload in client.mutations
+        if method == "PUT" and path == "nodes/pve001/qemu/800/config"
+    ]
+    assert {
+        "net1": "virtio=02:00:00:00:00:01,bridge=vmbr1,firewall=1,tag=1691,mtu=1"
+    } in puts
+    assert all("net0" not in payload for payload in puts)
+
+
+def test_nic_already_inheriting_the_bridge_mtu_is_not_drift(make_config, capsys):
+    data = _data()
+    data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1"
+    client = FakeClient(data)
+
+    backend = _reconcile_cp1(_jumbo_cfg(make_config), client)
+
+    assert "server testcluster-controlplane-01 exists" in capsys.readouterr().out
+    assert backend.restart_result == set()
+    assert not any(
+        "net0" in payload
+        for method, path, payload in client.mutations
+        if method == "PUT" and path == "nodes/pve001/qemu/800/config"
+    )
+
+
+def test_explicit_nic_mtu_override_is_replaced_with_bridge_inheritance(make_config):
+    data = _data()
+    data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1500"
+    client = FakeClient(data)
+
+    _reconcile_cp1(_jumbo_cfg(make_config), client)
+
+    assert (
+        "PUT",
+        "nodes/pve001/qemu/800/config",
+        {"net0": "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1,mtu=1"},
+    ) in client.mutations
 
 
 def test_bridge_change_is_refused_before_any_mutation(make_config):

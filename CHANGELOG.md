@@ -23,7 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Detect extension-only changes from the running schematic so adding or removing an extension reinstalls the node.
 - Refuse OpenStack flavor, disk and availability-zone changes with recreation guidance; update an existing subnet's DNS in place.
 - Warn that `network.dns` is not applied on DHCP-backed Proxmox networks.
-- Create Proxmox VM NICs inheriting the bridge MTU and warn when a node's bridge is below the cluster MTU.
+- Create and reconcile Proxmox VM NICs inheriting the bridge MTU, and warn when the cluster or external bridge is below it.
 - Refuse duplicate Proxmox VM names that involve a cluster-managed machine.
 - Refuse Proxmox SDN teardown or converge while the shared controller or the cluster's own zone, VNet or subnet has pending `deleted` or `changed` state, before any VM is deleted.
 - Report the firewall a new Proxmox VM would get during `plan`.

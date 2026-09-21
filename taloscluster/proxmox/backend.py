@@ -371,44 +371,54 @@ class ProxmoxBackend:
         )
 
     def _check_bridge_mtu(self) -> None:
-        """Warn when a target node's cluster bridge cannot carry the cluster MTU.
+        """Warn when a target node's bridges cannot carry their L2's MTU.
 
         A VM NIC inherits the MTU of the bridge it attaches to (the NIC is
         created with Proxmox `mtu=1`), so the bridge, not the machine
-        configuration, caps the guest link. The node network listing is the
-        persisted config the API offers: an interface without an explicit
-        `mtu` runs at the Proxmox default of 1500.
+        configuration, caps the guest link. Both the cluster and the external
+        bridge are checked, each against its own L2's MTU. The node network
+        listing is the persisted config the API offers: an interface without
+        an explicit `mtu` runs at the Proxmox default of 1500.
         """
-        wanted = self.cfg.network.cluster.mtu
-        low: list[str] = []
+        links: list[tuple[str, str, int]] = [
+            (self.cluster_link, "cluster", self.cfg.network.cluster.mtu)
+        ]
+        ext_facts = self.external_network
+        if ext_facts.get("bridge") and self.cfg.network.external is not None:
+            links.append(
+                (str(ext_facts["bridge"]), "external", self.cfg.network.external.mtu)
+            )
+        listings: dict[str, list[dict[str, Any]]] = {}
         for node in self._compute_nodes:
             interfaces = self.client.get(
                 f"nodes/{node}/network", params={"type": "any_bridge"}
             )
-            listing = interfaces if isinstance(interfaces, list) else []
-            bridge = next(
-                (
-                    item
-                    for item in listing
-                    if isinstance(item, dict)
-                    and str(item.get("iface")) == self.cluster_link
-                ),
-                None,
-            )
-            if bridge is None:
-                continue
-            try:
-                mtu = int(bridge.get("mtu") or DEFAULT_MTU)
-            except (TypeError, ValueError):
-                continue
-            if mtu < wanted:
-                low.append(f"{node} ({mtu})")
-        if low:
-            warn(
-                f"bridge {self.cluster_link} MTU is below the cluster MTU "
-                f"{wanted} on: {', '.join(low)}; VM NICs inherit the bridge "
-                "MTU, so raise it on those nodes"
-            )
+            listings[node] = [
+                item
+                for item in (interfaces if isinstance(interfaces, list) else [])
+                if isinstance(item, dict)
+            ]
+        for bridge, label, wanted in links:
+            low: list[str] = []
+            for node, listing in listings.items():
+                found = next(
+                    (item for item in listing if str(item.get("iface")) == bridge),
+                    None,
+                )
+                if found is None:
+                    continue
+                try:
+                    mtu = int(found.get("mtu") or DEFAULT_MTU)
+                except (TypeError, ValueError):
+                    continue
+                if mtu < wanted:
+                    low.append(f"{node} ({mtu})")
+            if low:
+                warn(
+                    f"bridge {bridge} MTU is below the {label} MTU {wanted} "
+                    f"on: {', '.join(low)}; VM NICs inherit the bridge MTU, "
+                    "so raise it on those nodes"
+                )
 
     # ---- managed SDN (EVPN zone + VNet + subnet) ----------------------------
 
@@ -1243,12 +1253,13 @@ class ProxmoxBackend:
     def _vm_drift(self, vm: ProxmoxVM, machine: Machine) -> dict[str, Any]:
         """Compare a VM's Proxmox config with cluster.yaml.
 
-        Returns the reconcilable drift: `cores`, `memory` (MiB) and `disk`
-        (GiB, grow only), plus `stale` when the *running* VM differs from the
-        desired sizing -- a change written on an earlier run that still waits
-        for a restart. Unsupported changes (a NIC moving bridge/VLAN, a disk
-        shrinking, a placement move, a storage change) are refused up front by
-        ``_assert_supported_changes``.
+        Returns the reconcilable drift: `cores`, `memory` (MiB), `disk`
+        (GiB, grow only), `mtu` (NICs that must inherit their bridge MTU,
+        mapped to the rewritten net strings), plus `stale` when the *running*
+        VM differs from the desired sizing -- a change written on an earlier
+        run that still waits for a restart. Unsupported changes (a NIC moving
+        bridge/VLAN, a disk shrinking, a placement move, a storage change) are
+        refused up front by ``_assert_supported_changes``.
         """
         config = self._assert_supported_changes(vm, machine)
         # what the VM actually runs with; `config` alone shows pending values
@@ -1269,6 +1280,24 @@ class ProxmoxBackend:
         if have_disk is not None and have_disk != machine.disk:
             # not a shrink: _assert_supported_changes refused that already
             drift["disk"] = (have_disk, machine.disk)
+        # A jumbo L2 needs its NIC on Proxmox `mtu=1` (inherit the bridge MTU);
+        # VMs created before the MTU was raised lack it and stay capped at
+        # 1500. Rewriting the NIC applies live, so this is reconcilable drift.
+        mtu_nics: dict[str, str] = {}
+        if stated_mtu(self.cfg.network.cluster.mtu) is not None:
+            net0 = _net_with_bridge_mtu(config.get("net0"))
+            if net0 is not None:
+                mtu_nics["net0"] = net0
+        if (
+            self.cfg.network.external is not None
+            and stated_mtu(self.cfg.network.external.mtu) is not None
+            and config.get("net1") is not None
+        ):
+            net1 = _net_with_bridge_mtu(config.get("net1"))
+            if net1 is not None:
+                mtu_nics["net1"] = net1
+        if mtu_nics:
+            drift["mtu"] = mtu_nics
         if (
             int(running.get("cores") or 1) != machine.cores
             or _memory_of(running.get("memory")) != _memory_mib(machine.memory)
@@ -1311,6 +1340,15 @@ class ProxmoxBackend:
                     f"nodes/{vm.node}/qemu/{vm.vmid}/resize",
                     data={"disk": "scsi0", "size": f"{want}G"},
                 )
+        if "mtu" in drift:
+            for nic, value in sorted(drift["mtu"].items()):
+                action(f"set mtu=1 on {vm.name} {nic} to inherit the bridge MTU")
+                if not dry_run():
+                    self.client.mutate(
+                        "PUT",
+                        f"nodes/{vm.node}/qemu/{vm.vmid}/config",
+                        data={nic: value},
+                    )
         return True
 
     def _set_vm_tags(self, vm: ProxmoxVM, tags: frozenset[str]) -> None:
@@ -1395,6 +1433,11 @@ class ProxmoxBackend:
                 )
                 if ext.get("vlan") is not None:
                     net1 += f",tag={int(ext['vlan'])}"
+                # the external link states its own L2's MTU, so its NIC inherits
+                # the external bridge's MTU for the same reason net0 does
+                ext_l2 = self.cfg.network.external
+                if ext_l2 is not None and stated_mtu(ext_l2.mtu) is not None:
+                    net1 += ",mtu=1"
                 data["net1"] = net1
             self.client.mutate("POST", f"nodes/{node}/qemu", data=data)
             created = True
@@ -2027,6 +2070,20 @@ def _kv(value: Any) -> dict[str, str]:
         if sep:
             out[key] = val
     return out
+
+
+def _net_with_bridge_mtu(value: Any) -> str | None:
+    """A net string rewritten to Proxmox `mtu=1` (inherit the bridge MTU).
+
+    None when the NIC already inherits. An explicit `mtu=` override is
+    replaced, so the NIC tracks the bridge instead of a stale value.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    parts = value.split(",")
+    if "mtu=1" in parts:
+        return None
+    return ",".join([part for part in parts if not part.startswith("mtu=")] + ["mtu=1"])
 
 
 def _link(bridge: str | None, tag: str | None) -> str:
