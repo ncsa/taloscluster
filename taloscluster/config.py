@@ -657,6 +657,10 @@ def _include_paths(d: dict[str, Any], root: Path, where: str) -> list[Path]:
             raise ConfigError(
                 f"{where}: {SECRETS_FILE} is always included; do not list it"
             )
+        if path.resolve() == (root / CLUSTER_FILE).resolve():
+            raise ConfigError(
+                f"{where}: {CLUSTER_FILE} is the cluster file itself; do not list it"
+            )
         if path.resolve() in seen:
             raise ConfigError(
                 f"{where}: include lists {entry} twice"

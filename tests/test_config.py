@@ -3136,3 +3136,8 @@ def test_include_may_not_list_secrets_yaml(make_config, tmp_path):
     _write_secrets(tmp_path, {"openstack": dict(OPENSTACK_CREDENTIALS)})
     with pytest.raises(ConfigError, match="secrets.yaml is always included"):
         make_config({"include": ["secrets.yaml"]})
+
+
+def test_include_may_not_list_cluster_yaml(make_config):
+    with pytest.raises(ConfigError, match="cluster.yaml is the cluster file itself"):
+        make_config({"include": ["cluster.yaml"]})
