@@ -58,7 +58,8 @@ def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
          tailscale=None):
     network: dict = {
         "cluster": {
-            "cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "kubeapi_vip": VIP,
+            "cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000,
+            "kubeapi_vip": VIP,
         },
         "dns": ["192.0.2.53"],
     }
@@ -537,8 +538,9 @@ def test_metal_cluster_link_only_carries_no_vlan(make_config):
     assert metal_talos.network_docs(server, cfg) == [
         {
             "apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "enp1s0f0",
+            "mtu": 9000,
             "addresses": [{"address": "172.29.21.5/24"}],
-            "routes": [{"gateway": "172.29.21.1"}],
+            "routes": [{"gateway": "172.29.21.1", "mtu": 1500}],
         },
         {
             "apiVersion": "v1alpha1", "kind": "ResolverConfig",

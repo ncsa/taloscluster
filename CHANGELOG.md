@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Add `metal` commands that inspect, boot, wait, apply, eject and join bare-metal machines, refusing an already-joined machine and skipping the BMC when redfish is disabled.
-- Accept a `metal` section defining bare-metal machine groups, requiring real BMC credentials for every machine in a `redfish` group, beside one required VM provider.
+- Accept a `metal` section defining bare-metal machine groups beside one required VM provider, requiring real BMC credentials for `redfish` groups and refusing networks and addresses that cannot join.
 - Add `--metal` to `init` to scaffold the bare-metal section and its BMC credentials beside a provider.
 - Add `link_name` and `vlan` overrides to metal interfaces for the generated external VLAN child link and its ingress return-path pod.
 - Add `talos.kubespan` (default false) enabling Talos KubeSpan, sized to the L2 MTU, advertising every node address except the external network's, and required for metal machines on another L2.

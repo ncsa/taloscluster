@@ -57,7 +57,7 @@ The device the machines install Talos onto, such as `/dev/sda`; a server may ove
 
 Optional · mapping · default [`network.cluster`](network.md#networkcluster)
 
-The layer-2 network this group's machines sit on, with the same keys as [`network.cluster`](network.md#networkcluster). A group on the same L2 as the VM provider's machines omits it, and a server may override it with an L2 of its own. A group — or a single server that overrides it — on a different L2 requires [`talos.kubespan`](general.md#taloskubespan) enabled: the overlay is what carries the group's pod traffic to the rest of the cluster.
+The layer-2 network this group's machines sit on, with the same keys as [`network.cluster`](network.md#networkcluster). A group on the same L2 as the VM provider's machines omits it, and a server may override it with an L2 of its own. A group — or a single server that overrides it — on a different L2 requires a `gateway`, the machine's only route to the rest of the cluster, and [`talos.kubespan`](general.md#taloskubespan) enabled: the overlay is what carries the group's pod traffic to the rest of the cluster. A network naming the cluster L2's `cidr` describes the same wire and must agree with it on `mtu` and `vlan`, which every host on one layer-2 network shares (see [MTU](network.md#mtu)).
 
 ### `metal.<group>.interfaces`
 
@@ -77,7 +77,7 @@ The roles decide what the generated machine configuration puts on the link. Ever
 
 Optional · IPv4 address with an optional `/prefix` · default none
 
-The static address of the link. Without a `/prefix` the link network's prefix length is used. On a link carrying both roles the address belongs to the `cluster` side; a dedicated `external` link's address rides its VLAN child.
+The static address of the link. Without a `/prefix` the link network's prefix length is used. On a link carrying both roles the address belongs to the `cluster` side; a dedicated `external` link's address rides its VLAN child. A `cluster` link's address must sit inside the machine's own L2 — carrying that L2's prefix length when one is written — and must not be the [`kubeapi_vip`](network.md#networkclusterkubeapi_vip) or another machine's address: the loader refuses either collision rather than letting two machines answer for one address.
 
 ### `metal.<group>.interfaces.<name>.dns`
 

@@ -1032,7 +1032,7 @@ def _metal_address(value: Any, where: str) -> str:
         raise ConfigError(f"{where} is invalid: {value!r}") from None
     if not isinstance(addr, ipaddress.IPv4Interface):
         raise ConfigError(f"{where} must be IPv4")
-    return value
+    return value.strip()
 
 
 def _metal_resolvers(value: Any, where: str) -> tuple[str, ...]:
@@ -1051,7 +1051,7 @@ def _metal_bmc(raw: dict[str, Any], where: str) -> MetalBmc:
     _reject_unknown_keys(raw, where, _METAL_BMC_KEYS)
     ip = raw.get("ip")
     if ip is not None:
-        _metal_address(ip, f"{where}.ip")
+        ip = _metal_address(ip, f"{where}.ip")
     fields: dict[str, str] = {}
     for key in ("username", "password"):
         value = raw.get(key)
@@ -1467,6 +1467,86 @@ def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:
             )
 
 
+def _validate_metal_l2(l2: L2Network, cluster: L2Network, where: str) -> None:
+    """One metal group's or server's L2 must be joinable against the cluster's.
+
+    An L2 of its own needs a `gateway`, the machine's only route to the cluster
+    (and its API VIP) without the overlay; one claiming the cluster L2's `cidr`
+    must agree with it on the `mtu` and `vlan` tag every host on the wire shares.
+    """
+    if l2.cidr == cluster.cidr:
+        if l2.mtu != cluster.mtu:
+            raise ConfigError(
+                f"cluster.yaml: {where}.network.mtu must be {cluster.mtu} to "
+                "agree with network.cluster: every host on one L2 shares the MTU"
+            )
+        if l2.vlan != cluster.vlan:
+            raise ConfigError(
+                f"cluster.yaml: {where}.network.vlan must agree with "
+                "network.cluster: every host on one L2 shares the VLAN tag"
+            )
+    elif not l2.gateway:
+        raise ConfigError(
+            f"cluster.yaml: {where}.network.gateway is required when the L2 "
+            "differs from network.cluster: the machine has no route to the "
+            "cluster without it"
+        )
+
+
+def _validate_metal(cfg: Config) -> None:
+    """The metal networks and addresses must describe machines that can join.
+
+    Every group and merged server L2 is checked against `network.cluster`
+    (:func:`_validate_metal_l2`), and each cluster link's static address must
+    sit inside the machine's own L2 with its prefix, never colliding with the
+    kubeapi VIP or another machine's address.
+    """
+    cluster = cfg.network.cluster
+    vip = cluster.kubeapi_vip or (
+        cfg.network.external.kubeapi_vip if cfg.network.external else ""
+    )
+    vip_addr = ipaddress.ip_address(vip) if vip else None
+    claimed: dict[ipaddress.IPv4Address, str] = {}
+    metal = cfg.metal
+    assert metal is not None  # the caller checks
+    for group in metal.groups.values():
+        gwhere = f"metal.{group.name}"
+        _validate_metal_l2(group.network, cluster, gwhere)
+        for server in group.servers.values():
+            swhere = f"{gwhere}.servers.{server.name}"
+            _validate_metal_l2(server.network, cluster, swhere)
+            net = ipaddress.ip_network(server.network.cidr, strict=True)
+            for ifname, iface in server.interfaces.items():
+                if "cluster" not in iface.role or not iface.ip:
+                    continue
+                iwhere = f"{swhere}.interfaces.{ifname}"
+                addr = ipaddress.ip_interface(iface.ip)
+                # _metal_address already refused anything but IPv4
+                assert isinstance(addr, ipaddress.IPv4Interface)
+                if addr.ip not in net:
+                    raise ConfigError(
+                        f"cluster.yaml: {iwhere}.ip {iface.ip} is not inside "
+                        f"the machine's L2 {server.network.cidr}"
+                    )
+                if "/" in iface.ip and addr.network.prefixlen != net.prefixlen:
+                    raise ConfigError(
+                        f"cluster.yaml: {iwhere}.ip {iface.ip} must carry the "
+                        f"L2's /{net.prefixlen} prefix"
+                    )
+                if vip_addr is not None and addr.ip == vip_addr:
+                    raise ConfigError(
+                        f"cluster.yaml: {iwhere}.ip {addr.ip} collides with "
+                        "the kubeapi_vip"
+                    )
+                other = claimed.get(addr.ip)
+                if other is not None:
+                    raise ConfigError(
+                        f"cluster.yaml: {iwhere}.ip {addr.ip} is also the "
+                        f"cluster address of {other}"
+                    )
+                claimed[addr.ip] = server.name
+
+
 def _validate(cfg: Config) -> None:
     """Reject invalid or ambiguous desired state before touching the cluster."""
     if cfg.provider is None:
@@ -1523,6 +1603,9 @@ def _validate(cfg: Config) -> None:
                 f"({', '.join(off_l2)}): "
                 "the KubeSpan overlay is what carries their traffic to the cluster"
             )
+
+    if cfg.metal is not None:
+        _validate_metal(cfg)
 
     if "controlplane" in cfg.workers:
         raise ConfigError("worker pool name 'controlplane' is reserved")

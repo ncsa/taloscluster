@@ -631,6 +631,125 @@ def test_metal_group_on_the_cluster_subnet_needs_no_kubespan_despite_the_vip(mak
     assert cfg.kubespan is False
 
 
+def test_metal_group_on_another_l2_requires_a_gateway(make_config):
+    """(a) An L2 of its own needs a gateway: without one the machine config
+    has no default route, so the node could never reach the API VIP."""
+    metal = {"role": "worker", "disk": "/dev/sda",
+             "network": {"cidr": "172.29.21.0/24"}}
+    with pytest.raises(
+        ConfigError, match=r"metal\.phoenix\.network\.gateway is required"
+    ):
+        make_config({"talos": {"kubespan": True}, "metal": {"phoenix": metal}})
+
+
+def test_metal_server_on_another_l2_requires_a_gateway(make_config):
+    """(a) A server overriding its L2 wholesale needs its own gateway too."""
+    with pytest.raises(
+        ConfigError, match=r"metal\.phoenix\.servers\.rp001\.network\.gateway"
+    ):
+        make_config({
+            "talos": {"kubespan": True},
+            "metal": {"phoenix": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+                "servers": {"rp001": {"network": {"cidr": "172.29.31.0/24"}}},
+            }},
+        })
+
+
+@pytest.mark.parametrize("ip", ["10.99.0.5/24", "192.168.0.5/24"])
+def test_metal_cluster_address_must_sit_on_the_server_l2(make_config, ip):
+    """(b) The cluster link's address must be inside the machine's L2, with
+    the L2's prefix length when one is written."""
+    with pytest.raises(ConfigError, match=r"interfaces\.enp2s0f0\.ip"):
+        make_config({
+            "metal": {"phoenix": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "interfaces": {"enp2s0f0": {"role": "cluster"}},
+                "servers": {"rp001": {
+                    "interfaces": {"enp2s0f0": {"ip": ip}},
+                }},
+            }},
+        })
+
+
+def test_metal_address_strips_surrounding_whitespace(make_config):
+    """A quoted address with surrounding whitespace loads as its stripped value."""
+    cfg = make_config({
+        "metal": {"phoenix": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "interfaces": {"enp2s0f0": {"role": "cluster"}},
+            "servers": {"rp001": {
+                "bmc": {"ip": " 172.28.50.5"},
+                "interfaces": {"enp2s0f0": {"ip": " 192.168.0.5 "}},
+            }},
+        }},
+    })
+    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    assert server.interfaces["enp2s0f0"].ip == "192.168.0.5"
+    assert server.bmc.ip == "172.28.50.5"
+
+
+@pytest.mark.parametrize(
+    ("ips", "message"),
+    [
+        (["172.29.21.5/24", "172.29.21.200/24"], "collides with the kubeapi_vip"),
+        (["172.29.21.5/24", "172.29.21.5"], "also the cluster address of rp001"),
+    ],
+)
+def test_metal_server_address_collisions_are_refused(make_config, ips, message):
+    """(c) A machine's cluster address is never the API VIP or another
+    machine's: the Proxmox path refuses the same collisions."""
+    with pytest.raises(ConfigError, match=message):
+        make_config({
+            "controlplane": {"count": 3, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0"}},
+            },
+            "network": {"cluster": {
+                "cidr": "172.29.21.0/24",
+                "gateway": "172.29.21.1",
+                "kubeapi_vip": "172.29.21.200",
+            }},
+            "metal": {"phoenix": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+                "interfaces": {"enp2s0f0": {"role": "cluster"}},
+                "servers": {
+                    name: {"interfaces": {"enp2s0f0": {"ip": ip}}}
+                    for name, ip in zip(("rp001", "rp002"), ips, strict=True)
+                },
+            }},
+        }, remove=("openstack",))
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("mtu", 9000, "network.mtu must be 1500 to agree with network.cluster"),
+        ("vlan", 21, "network.vlan must agree with network.cluster"),
+    ],
+)
+def test_metal_group_on_the_cluster_l2_must_agree_on_mtu_and_vlan(
+    make_config, key, value, message
+):
+    """(d) A network naming the cluster L2's cidr describes the same wire,
+    so its MTU and VLAN tag cannot differ from network.cluster's."""
+    with pytest.raises(ConfigError, match=message):
+        make_config({"metal": {"phoenix": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "network": {"cidr": "192.168.0.0/21", key: value},
+        }}})
+
+
 def test_metal_group_defaults_resolve_into_each_server(make_config):
     """Servers start from the group defaults; `bmc` and `interfaces` merge per key."""
     cfg = make_config({"talos": {"kubespan": True}, "metal": {"phoenix": {
