@@ -33,6 +33,7 @@ from pathlib import Path
 import requests
 
 from ..config import Config, ConfigError, MetalServer, load_config
+from ..converge import _config_kubernetes_version
 from ..errors import ReconcileError
 from ..naming import BASE_EXTENSIONS
 from ..output import action, info, report
@@ -196,12 +197,22 @@ def apply(root: Path, name: str) -> None:
     The generated config is kept at `.metal/<name>-<role>.yaml` in the cluster
     directory: it carries the cluster's credentials, so it is written mode 0600
     and the scaffold keeps `.metal/` out of git.
+
+    On a bootstrapped cluster the config bakes the RUNNING kubernetes version,
+    through the same helper converge's machine-config phase uses: applying the
+    target would start a kubelet newer than the API server and pull the target
+    kube-proxy before `talosctl upgrade-k8s` stepped the minors. A cluster with
+    no kubeconfig yet has no running version, so it gets the target.
     """
     cfg = load_config(root)
     server = _find_server(cfg, name)
     secrets = State(root).require_secrets()
+    kubeconfig = root / "kubeconfig"
+    # a non-empty kubeconfig is the bootstrap signal converge itself uses
+    bootstrapped = kubeconfig.is_file() and kubeconfig.stat().st_size > 0
     config_yaml = metal_talos.build_config(
         server, cfg, secrets, _installer_image(cfg),
+        kubernetes_version=_config_kubernetes_version(cfg, kubeconfig, bootstrapped),
     )
     out_dir = root / ".metal"
     out_dir.mkdir(parents=True, exist_ok=True)

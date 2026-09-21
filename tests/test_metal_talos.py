@@ -329,6 +329,48 @@ def test_metal_return_path_pod_matches_the_vlan_child(make_config):
     assert "0x00002000" in script
 
 
+def test_metal_config_bakes_the_running_version_when_one_is_passed(
+    make_config, monkeypatch, tmp_path
+):
+    """`metal apply` reads a bootstrapped cluster's running version through
+    converge's helper and passes it here: it must reach `talosctl gen config`
+    (the kubelet and control-plane images) and the return-path pod's kube-proxy
+    image, so a machine joined after a bump never joins newer than the API
+    server. Without the override the target is baked, as before."""
+    cfg = _cfg(make_config)
+    seen: dict = {}
+
+    def fake_gen_config(**kwargs):
+        seen["kubernetes_version"] = kwargs["kubernetes_version"]
+        seen["patches"] = [
+            list(yaml.safe_load_all(Path(p).read_text())) for p in kwargs["patches"]
+        ]
+        return _GEN_OUTPUT
+
+    monkeypatch.setattr(metal_talos.talosctl, "gen_config", fake_gen_config)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+    server = cfg.metal.groups["phoenix"].servers["rp001"]
+
+    metal_talos.build_config(
+        server, cfg, secrets_path, INSTALLER, kubernetes_version="v1.30.4"
+    )
+
+    assert seen["kubernetes_version"] == "v1.30.4"
+    pods = [
+        pod
+        for group in seen["patches"]
+        for doc in group
+        for pod in (doc.get("machine", {}).get("pods") or [])
+    ]
+    (pod,) = pods
+    assert pod["spec"]["containers"][0]["image"] == "registry.k8s.io/kube-proxy:v1.30.4"
+
+    seen.clear()
+    metal_talos.build_config(server, cfg, secrets_path, INSTALLER)
+    assert seen["kubernetes_version"] == cfg.kubernetes_version
+
+
 def test_metal_interface_overrides_name_and_tag_the_vlan_child(
     make_config, monkeypatch, tmp_path
 ):

@@ -13,8 +13,10 @@ import urllib.parse
 import pytest
 import requests
 
+from taloscluster import converge
 from taloscluster.config import MetalBmc
 from taloscluster.errors import ReconcileError
+from taloscluster.k8s import kubectl
 from taloscluster.metal import commands, redfish
 
 VIP = "172.29.21.200"
@@ -301,8 +303,10 @@ def test_apply_generates_and_pushes_the_config(
     (tmp_path / "talossecrets.yaml").write_text("dummy")
     seen = {}
 
-    def fake_build(server, cfg, secrets, installer):
-        seen.update(installer=installer, role=server.role)
+    def fake_build(server, cfg, secrets, installer, kubernetes_version=None):
+        seen.update(
+            installer=installer, role=server.role, kubernetes_version=kubernetes_version,
+        )
         return f"# config for {server.name}\n"
 
     monkeypatch.setattr(commands.metal_talos, "build_config", fake_build)
@@ -318,6 +322,84 @@ def test_apply_generates_and_pushes_the_config(
     assert seen["node"] == "172.29.21.5"
     assert seen["pushed"] == "# config for rp001\n"
     assert seen["installer"] == "factory.talos.dev/metal-installer/abc123:v1.13.9"
+    # no kubeconfig yet: the never-bootstrapped cluster gets the target
+    assert seen["kubernetes_version"] == "v1.31.0"
+
+
+def test_apply_bakes_the_running_version_of_a_bootstrapped_cluster(
+    make_config, tmp_path, monkeypatch, stub_factory
+):
+    """A non-empty kubeconfig from an earlier converge means the cluster is
+    running: the config is generated at the cluster's version, not cluster.yaml's
+    raised target, so a joined machine never starts newer than the API server."""
+    _cfg(make_config)
+    (tmp_path / "talossecrets.yaml").write_text("dummy")
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+    monkeypatch.setattr(kubectl, "server_version", lambda *_a: "v1.30.4")
+    seen = {}
+
+    def fake_build(server, cfg, secrets, installer, kubernetes_version=None):
+        seen["kubernetes_version"] = kubernetes_version
+        return "# config for rp001\n"
+
+    monkeypatch.setattr(commands.metal_talos, "build_config", fake_build)
+    monkeypatch.setattr(
+        commands.talosctl, "apply_config_insecure", lambda node, config: None
+    )
+
+    commands.apply(tmp_path, "rp001")
+
+    assert seen["kubernetes_version"] == "v1.30.4"
+
+
+@pytest.mark.parametrize("on_disk", [None, ""])
+def test_apply_bakes_the_target_before_the_cluster_is_bootstrapped(
+    make_config, tmp_path, monkeypatch, stub_factory, on_disk
+):
+    """No kubeconfig (or an empty one) reads as never bootstrapped: there is no
+    running version, so cluster.yaml's target is baked and the cluster is never
+    asked for one."""
+    _cfg(make_config)
+    (tmp_path / "talossecrets.yaml").write_text("dummy")
+    if on_disk is not None:
+        (tmp_path / "kubeconfig").write_text(on_disk)
+    monkeypatch.setattr(
+        kubectl, "server_version",
+        lambda *_a: pytest.fail("must not ask a cluster that never bootstrapped"),
+    )
+    seen = {}
+
+    def fake_build(server, cfg, secrets, installer, kubernetes_version=None):
+        seen["kubernetes_version"] = kubernetes_version
+        return "# config for rp001\n"
+
+    monkeypatch.setattr(commands.metal_talos, "build_config", fake_build)
+    monkeypatch.setattr(
+        commands.talosctl, "apply_config_insecure", lambda node, config: None
+    )
+
+    commands.apply(tmp_path, "rp001")
+
+    assert seen["kubernetes_version"] == "v1.31.0"
+
+
+def test_apply_refuses_to_guess_when_the_running_version_is_unreadable(
+    make_config, tmp_path, monkeypatch, stub_factory
+):
+    """A kubeconfig whose cluster no longer answers aborts the apply instead of
+    silently baking the target -- the same fail-closed stance as converge."""
+    _cfg(make_config)
+    (tmp_path / "talossecrets.yaml").write_text("dummy")
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+    monkeypatch.setattr(kubectl, "server_version", lambda *_a: "")
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        commands.metal_talos, "build_config",
+        lambda *_a, **_k: pytest.fail("no config must be generated"),
+    )
+
+    with pytest.raises(ReconcileError, match="could not determine the running"):
+        commands.apply(tmp_path, "rp001")
 
 
 def test_eject_reports_when_nothing_is_mounted(

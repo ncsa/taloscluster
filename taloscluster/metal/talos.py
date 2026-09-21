@@ -309,13 +309,16 @@ def _external_child_link(server: MetalServer, cfg: Config) -> str:
     return _external_child(server, cfg, external[0], server.interfaces[external[0]])[1]
 
 
-def return_path_pod(server: MetalServer, cfg: Config, child: str) -> dict:
+def return_path_pod(server: MetalServer, cfg: Config, child: str,
+                    kubernetes_version: str | None = None) -> dict:
     """The static pod marking the connections entering the machine's VLAN child.
 
     The same marking the Proxmox return-path pod installs, matched on the
     child link's stable name instead of a generated MAC: replies to
     externally initiated connections are marked so the fwmark routing rule
     sends them back through the external gateway, not the default route.
+    `kubernetes_version` retags the kube-proxy image to the cluster's RUNNING
+    version, the same override `build_configs` applies for the VM providers.
     """
     ext = cfg.network.external
     assert ext is not None  # an external link implies a network.external block
@@ -367,9 +370,12 @@ exit 1
                     # kube-proxy ships nft (it runs in nftables mode) and is
                     # already present on every node; Talos has no host nft
                     # visible to the kubelet, so hostPath mounts can't work.
-                    # A machine joining here is brand new, so the target
-                    # version is right -- there is no running version to keep.
-                    "image": f"registry.k8s.io/kube-proxy:{cfg.kubernetes_version}",
+                    # The version below is the TARGET; build_config passes the
+                    # cluster's RUNNING version once a kubeconfig exists, so a
+                    # machine joined after a version bump never pulls the
+                    # target kube-proxy before the minor-by-minor upgrade.
+                    "image": f"registry.k8s.io/kube-proxy:"
+                             f"{kubernetes_version or cfg.kubernetes_version}",
                     "imagePullPolicy": "IfNotPresent",
                     "command": ["/bin/sh", "-ec", script],
                     "securityContext": {
@@ -397,6 +403,7 @@ def build_config(
     cfg: Config,
     secrets_path: Path,
     installer_image: str,
+    kubernetes_version: str | None = None,
 ) -> str:
     """Return one metal machine's machine-config YAML string.
 
@@ -404,8 +411,14 @@ def build_config(
     assembled exactly as `build_configs` does for the VM providers -- the
     firewall keyed on the machine's own L2 -- then the cabling plan's network
     patches and the cluster's freeform patches; a Talos < 1.14 cluster gets the
-    classic hostname field and the 1.14-era keys stripped.
+    classic hostname field and the 1.14-era keys stripped. `kubernetes_version`
+    overrides `cfg.kubernetes_version` for the kubelet and control-plane images
+    and the return-path pod's kube-proxy image: `metal apply` passes the
+    running cluster's version so a machine joined after a `kubernetes.version`
+    bump never starts newer than the API server -- the target is only for a
+    cluster that has never been bootstrapped.
     """
+    kubernetes = kubernetes_version or cfg.kubernetes_version
     host = server.name
     vip = _vip(cfg)
     endpoint = Endpoint(vip=vip, advertised_address=vip)
@@ -457,7 +470,9 @@ def build_config(
             patches.append(
                 machineconfig._write(
                     workdir, f"{host}-return-path",
-                    {"machine": {"pods": [return_path_pod(server, cfg, child)]}},
+                    {"machine": {"pods": [
+                        return_path_pod(server, cfg, child, kubernetes)
+                    ]}},
                 )
             )
         for i, raw in enumerate(m.config_patches):
@@ -470,7 +485,7 @@ def build_config(
             output_type="controlplane" if server.role == "controlplane" else "worker",
             install_image=installer_image,
             install_disk=server.disk,
-            kubernetes_version=cfg.kubernetes_version,
+            kubernetes_version=kubernetes,
             talos_version=cfg.talos_version,
             patches=patches,
         )
