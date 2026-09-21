@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from taloscluster.config import ConfigError
@@ -109,6 +111,60 @@ def test_proxmox_backend_is_selected(make_config):
         remove=("openstack",),
     )
     assert backend_for(cfg).name == "proxmox"
+
+
+# ---- a metal section rides beside the provider, never replaces it -----------
+
+METAL_GROUP = {
+    "role": "worker",
+    "disk": "/dev/sda",
+    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
+    "servers": {"rp001": {}},
+}
+
+
+def _metal_cfg(make_config):
+    """A Proxmox cluster plus one bare-metal worker on the cluster L2."""
+    return make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "token_id": "user@pve!provider",
+                "token_secret": "secret",
+                "network": {
+                    "cluster": {"bridge": "vmbr0"},
+                },
+            },
+            "metal": {"site": METAL_GROUP},
+        },
+        remove=("openstack",),
+    )
+
+
+def test_backend_selection_ignores_a_metal_section(make_config):
+    """Bare-metal machines have no backend of their own: a `metal:` section
+    beside a provider leaves infrastructure selection untouched -- the
+    provider's backend still plans, converges and destroys the cluster's
+    infrastructure, while the metal machines ride the same phases."""
+    cfg = _metal_cfg(make_config)
+
+    assert cfg.metal_servers == {"rp001": "worker"}
+    assert backend_for(cfg).name == "proxmox"
+
+
+def test_backend_for_refuses_a_config_without_a_provider(make_config):
+    """A config whose provider vanished (the metal-only shape) must fail loudly
+    at backend selection: the loader refuses such configs up front, so this is
+    the backstop beneath that gate -- the TypeError traceback metal-only
+    clusters used to print from plan, converge, status and destroy."""
+    cfg = _metal_cfg(make_config)
+
+    with pytest.raises(TypeError, match="unsupported infrastructure provider: NoneType"):
+        backend_for(replace(cfg, provider=None))
 
 
 def test_backends_declare_a_talos_contribution_and_installer_platform():
