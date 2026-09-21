@@ -1,6 +1,6 @@
 # taloscluster
 
-`taloscluster` provisions and manages [Talos Linux](https://www.talos.dev/) Kubernetes clusters on OpenStack or Proxmox. It combines provider resource management, Talos configuration, and Kubernetes lifecycle operations in one command-line tool.
+`taloscluster` provisions and manages [Talos Linux](https://www.talos.dev/) Kubernetes clusters on OpenStack or Proxmox, optionally alongside bare metal. It combines provider resource management, Talos configuration, and Kubernetes lifecycle operations in one command-line tool.
 
 Describe the cluster you want in `cluster.yaml` and keep provider credentials and other secrets in `secrets.yaml`. Run `taloscluster plan` to review changes, then `taloscluster converge` to apply them. The same workflow creates a cluster, changes its size and access rules, and performs rolling Talos and Kubernetes upgrades.
 

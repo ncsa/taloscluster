@@ -15,6 +15,12 @@ These tests keep the surviving wording honest so the drift does not resurface:
   or imply the plugin validate hook only runs against a plugin's own section
   when its hooks run, and it covers nested fixed-schema blocks such as
   `proxmox.network` in the same breath as the top-level sections.
+- network.md describes the gateway's metal consumers instead of "the
+  statically addressed machines the bare-metal support will add", machines.md
+  describes the bare-metal machines by their `metal:` section, the Proxmox
+  token secret is refused when a command needs it rather than "at secrets
+  load time", and the one-line descriptions and the quickstart/usage pages
+  cover bare metal.
 """
 
 from __future__ import annotations
@@ -190,3 +196,42 @@ def test_configuration_overview_plugin_validate_runs_everywhere_up_front():
     assert "validate" in text
     assert "before any mutation" in text
     assert "every installed plugin" in text
+
+
+def test_gateway_and_machines_docs_do_not_describe_metal_as_future_work():
+    # network.md said the gateway is "accepted and validated for the statically
+    # addressed machines the bare-metal support will add"; metal support exists
+    # and its groups consume the value now. machines.md must likewise describe
+    # the bare-metal machines by their `metal:` section, not the pools.
+    network = (DOCS / "configuration" / "network.md").read_text()
+    assert "will add" not in network
+    gateway = network.split("### `network.cluster.gateway`", 1)[1].split("\n### ", 1)[0]
+    assert "Metal" in gateway
+    machines = (DOCS / "concepts" / "machines.md").read_text()
+    assert "the [pools](../configuration/pools.md) describe them" not in machines
+    assert "the [`metal`](../configuration/metal.md) section describes them" in machines
+
+
+def test_proxmox_token_secret_refusal_is_not_tied_to_a_secrets_load():
+    # There is no separate secrets load: secrets.yaml is merged into
+    # cluster.yaml, and the configuration overview states the real contract --
+    # the refusal happens when a command needs the credential.
+    text = (DOCS / "configuration" / "proxmox.md").read_text()
+    assert "secrets load time" not in text
+    assert "refused when a command needs the credential" in text
+
+
+def test_descriptions_cover_bare_metal():
+    # The one-line descriptions said OpenStack/Proxmox only; the tool also
+    # brings bare-metal machines alongside the VM provider, so they must cover
+    # bare metal, and the quickstart and usage pages must say how those
+    # machines are prepared and joined.
+    for path in (
+        ROOT / "README.md",
+        DOCS / "index.md",
+        ROOT / "mkdocs.yml",
+        ROOT / "pyproject.toml",
+    ):
+        assert "bare metal" in path.read_text(), path
+    assert "bare-metal machines" in (DOCS / "quickstart.md").read_text()
+    assert "`metal join`" in (DOCS / "usage.md").read_text()

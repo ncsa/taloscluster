@@ -40,7 +40,7 @@ The network the nodes' private addresses come from, written as a network address
 
 Optional · IPv4 address inside `cidr` · default none
 
-The default gateway on this network. A managed SDN uses the first host of `cidr` as its anycast gateway and OpenStack sets the subnet's gateway itself, so the value is read only on a DHCP-backed Proxmox bridge or VNet: with a jumbo [`network.cluster.mtu`](#networkclustermtu) it is the gateway of the default route the machine configuration restates with an MTU of 1500, and it must be the gateway the DHCP server actually hands out. It is accepted and validated for the statically addressed machines the bare-metal support will add.
+The default gateway on this network. A managed SDN uses the first host of `cidr` as its anycast gateway and OpenStack sets the subnet's gateway itself, so on the VM providers the value is read only on a DHCP-backed Proxmox bridge or VNet: with a jumbo [`network.cluster.mtu`](#networkclustermtu) it is the gateway of the default route the machine configuration restates with an MTU of 1500, and it must be the gateway the DHCP server actually hands out. [Metal](metal.md) machines read it too: their statically addressed cluster link restates the default route through it (clamped to 1500 on a jumbo network), and a group whose machines sit on a different L2 must name a gateway of its own under [`metal.<group>.network`](metal.md#metalgroupnetwork).
 
 ### `network.cluster.vlan`
 

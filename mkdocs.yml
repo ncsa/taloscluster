@@ -1,6 +1,6 @@
 site_name: taloscluster
 site_url: https://ncsa.github.io/taloscluster/
-site_description: Declarative Talos Linux clusters on OpenStack and Proxmox
+site_description: Declarative Talos Linux clusters on OpenStack or Proxmox, optionally alongside bare metal
 repo_url: https://github.com/ncsa/taloscluster
 edit_uri: edit/main/docs/
 docs_dir: docs

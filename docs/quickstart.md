@@ -9,6 +9,8 @@ Choose OpenStack or Proxmox. You need enough capacity for the configured node po
 - **OpenStack:** prepare an application credential, the identity endpoint, an external network, an availability zone, and the flavor names for your pools. See [OpenStack configuration](configuration/openstack.md) for the keys and [OpenStack setup](providers/openstack.md) for the tenant setup, required services and quotas.
 - **Proxmox:** prepare an API token, VM disk storage, ISO storage, node-local cloud-init storage, and an existing bridge or VNet. See [Proxmox setup](providers/proxmox.md) for token permissions and managed SDN alternatives.
 
+Either provider's cluster can also bring bare-metal machines alongside its VMs: describe them in a [`metal:`](configuration/metal.md) section (`taloscluster init --metal` scaffolds an example group beside the provider flag) and see [Metal setup](providers/metal.md) for the preparation the machines and their BMCs need.
+
 The templates enable Tailscale on the cluster nodes. Before running taloscluster, install and connect Tailscale on the management machine yourself so it is already on the same tailnet; taloscluster does not add that machine automatically. In the cluster configuration, set the login server and supply a pre-auth key that allows all nodes to register. If you omit Tailscale, the management machine must already have routes to the nodes’ real addresses. See [Machines and access](concepts/machines.md#reaching-the-nodes).
 
 ## Initialize a cluster directory

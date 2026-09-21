@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Refuse an `include` entry naming `cluster.yaml` itself.
 - Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.
+- Correct the stale docs wording around the cluster gateway, the placeholder-credential refusal and bare-metal support.
 
 ## [0.8.0] - 2026-09-20
 

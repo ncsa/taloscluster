@@ -1,6 +1,6 @@
 # taloscluster
 
-`taloscluster` provisions and manages [Talos Linux](https://www.talos.dev/) Kubernetes clusters on OpenStack or Proxmox. Describe the cluster in `cluster.yaml`, keep credentials in `secrets.yaml`, and run `taloscluster converge` to create, scale, or upgrade it.
+`taloscluster` provisions and manages [Talos Linux](https://www.talos.dev/) Kubernetes clusters on OpenStack or Proxmox, optionally alongside bare metal. Describe the cluster in `cluster.yaml`, keep credentials in `secrets.yaml`, and run `taloscluster converge` to create, scale, or upgrade it.
 
 Resources are discovered by name and ownership tags, without a separate infrastructure state file. Optional plugins register the cluster with Rancher or ArgoCD.
 
@@ -69,4 +69,4 @@ uv run pytest
 uv run mkdocs serve
 ```
 
-See [development installation](https://ncsa.github.io/taloscluster/installation/#development-installation) for running the working tree with plugins, [CHANGELOG.md](CHANGELOG.md) for release history, and [todo.md](todo.md) for outstanding work.
+See [development installation](https://ncsa.github.io/taloscluster/installation/#development-installation) for running the working tree with plugins and [CHANGELOG.md](CHANGELOG.md) for release history.

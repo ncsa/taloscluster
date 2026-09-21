@@ -25,6 +25,9 @@ tests so the drift they caught cannot come back silently:
   current ``mkdocs.yml`` nav publishes (and a fragment to that page's heading),
   and the established ``concepts/`` URLs must survive the documentation
   reorganization rather than silently moving and breaking old links.
+- Every relative ``.md`` link in ``README.md`` must point at a file that exists
+  in the repo -- ``todo.md`` is gitignored, so a link to it 404s on a fresh
+  clone.
 """
 
 from __future__ import annotations
@@ -351,3 +354,17 @@ def test_reorganized_docs_preserve_concepts_urls():
         + ", ".join(missing)
         + "; preserve the URL or add a redirect"
     )
+
+
+def test_readme_relative_links_point_at_existing_files():
+    # The README also links repo files by relative path (`CHANGELOG.md`); a
+    # link to a gitignored file such as todo.md does not exist on a fresh
+    # clone and 404s, so every relative .md link must resolve on disk.
+    broken: list[str] = []
+    for m in re.finditer(r"\]\(([^)#\s]+\.md)\)", README.read_text()):
+        target = m.group(1)
+        if target.startswith(("http://", "https://", "/")):
+            continue
+        if not (ROOT / target).is_file():
+            broken.append(target)
+    assert not broken, "README links to missing files: " + "; ".join(broken)
