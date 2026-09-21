@@ -278,6 +278,41 @@ def test_boot_skips_a_server_that_turns_redfish_off(
     assert "redfish disabled" in capsys.readouterr().out
 
 
+def test_boot_refuses_a_machine_that_is_already_configured(
+    make_config, tmp_path, fake_redfish, monkeypatch
+):
+    """boot force-restarts a running machine into the install media, so a
+    machine that already answers the cluster's apid is refused before the
+    BMC is touched."""
+    _cfg(make_config)
+    (tmp_path / "talosconfig").write_text("dummy")
+    monkeypatch.setattr(commands.talosctl, "maintenance_reachable", lambda ip: False)
+    monkeypatch.setattr(
+        commands.talosctl, "reachable", lambda tc, endpoint, node: True
+    )
+    with pytest.raises(ReconcileError, match="already answers apid"):
+        commands.boot(tmp_path, "rp001")
+    assert all(rf.calls == [] for rf in fake_redfish)
+
+
+def test_boot_allows_a_machine_in_maintenance_mode(
+    make_config, tmp_path, fake_redfish, monkeypatch, stub_factory
+):
+    """A machine booted from the media but not yet configured is exactly what
+    boot is for: the refusal must not fire on the maintenance-mode apid."""
+    _cfg(make_config)
+    (tmp_path / "talosconfig").write_text("dummy")
+    monkeypatch.setattr(commands.talosctl, "maintenance_reachable", lambda ip: True)
+    monkeypatch.setattr(
+        commands.talosctl, "reachable", lambda tc, endpoint, node: True
+    )
+    monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
+    commands.boot(tmp_path, "rp001")
+    assert fake_redfish[-1].calls == [
+        "eject", ("insert", ISO_URL), "boot-once", "power-on",
+    ]
+
+
 def test_wait_polls_the_maintenance_apid(make_config, tmp_path, monkeypatch):
     _cfg(make_config)
     answers = iter([False, False, True])
@@ -399,6 +434,26 @@ def test_apply_refuses_to_guess_when_the_running_version_is_unreadable(
     )
 
     with pytest.raises(ReconcileError, match="could not determine the running"):
+        commands.apply(tmp_path, "rp001")
+
+
+def test_apply_refuses_a_machine_that_is_already_configured(
+    make_config, tmp_path, monkeypatch
+):
+    """apply drives the maintenance-mode node, so a machine that already
+    answers the cluster's apid is refused before any config is generated."""
+    _cfg(make_config)
+    (tmp_path / "talosconfig").write_text("dummy")
+    monkeypatch.setattr(commands.talosctl, "maintenance_reachable", lambda ip: False)
+    monkeypatch.setattr(
+        commands.talosctl, "reachable", lambda tc, endpoint, node: True
+    )
+    monkeypatch.setattr(
+        commands.metal_talos, "build_config",
+        lambda *_a, **_k: pytest.fail("no config must be generated"),
+    )
+
+    with pytest.raises(ReconcileError, match="already answers apid"):
         commands.apply(tmp_path, "rp001")
 
 

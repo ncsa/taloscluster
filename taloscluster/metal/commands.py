@@ -136,6 +136,7 @@ def boot(root: Path, name: str, *, serve: bool = False, foreground: bool = True)
     rf = _bmc(server)
     if rf is None:
         return
+    _refuse_joined(root, cfg, server)
     iso_url = _iso_url(cfg)
     if rf.eject_media():
         info(f"ejected the media already mounted on {server.bmc.ip}")
@@ -193,6 +194,7 @@ def apply(root: Path, name: str) -> None:
     """
     cfg = load_config(root)
     server = _find_server(cfg, name)
+    _refuse_joined(root, cfg, server)
     secrets = State(root).require_secrets()
     kubeconfig = root / "kubeconfig"
     # a non-empty kubeconfig is the bootstrap signal converge itself uses
@@ -294,8 +296,8 @@ def join(root: Path, name: str, *, serve: bool = False) -> None:
 def _refuse_joined(root: Path, cfg: Config, server: MetalServer) -> None:
     """Refuse a machine that already runs this cluster's configuration.
 
-    join reinstalls the machine from the install media, which would wipe an
-    installed node -- a control plane's etcd with it.
+    boot, apply and join would drive it back through the install media,
+    which wipes an installed node -- a control plane's etcd with it.
     """
     talosconfig = root / "talosconfig"
     if not talosconfig.is_file():
@@ -306,9 +308,9 @@ def _refuse_joined(root: Path, cfg: Config, server: MetalServer) -> None:
     ):
         raise ReconcileError(
             f"metal server {server.name} already answers apid with this cluster's "
-            f"identity on {ip}; join would reinstall the machine -- run "
-            "`taloscluster converge` for a config change, or reset the machine "
-            "first if a re-join is really intended"
+            f"identity on {ip}; reinstalling it from the install media would wipe "
+            "the machine -- run `taloscluster converge` for a config change, or "
+            "reset the machine first if a re-join is really intended"
         )
 
 
