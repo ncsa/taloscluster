@@ -174,7 +174,9 @@ def _cabling(server: MetalServer, cfg: Config) -> tuple[list[dict], list[dict]]:
     The loader has checked the cabling plan
     (:func:`~taloscluster.config._check_metal_cabling`), so exactly one link
     carries the cluster role and an `external` link implies a
-    `network.external` block.
+    `network.external` block. A control plane whose kubeapi_vip rides
+    `network.external` but has no `external` link could never hold the VIP,
+    so that is refused here.
     """
     interfaces = server.interfaces
     ext = cfg.network.external
@@ -270,15 +272,19 @@ def _cabling(server: MetalServer, cfg: Config) -> tuple[list[dict], list[dict]]:
     if server.role == "controlplane":
         vip = _vip(cfg)
         on_external = bool(cfg.network.external and cfg.network.external.kubeapi_vip)
-        if not on_external or child_name:
-            docs.append(
-                {
-                    "apiVersion": "v1alpha1",
-                    "kind": "Layer2VIPConfig",
-                    "name": vip,
-                    "link": child_name if on_external else cluster_ifname,
-                }
+        if on_external and not child_name:
+            raise ConfigError(
+                f"metal server {server.name}: kubeapi_vip rides network.external, "
+                "but the server has no external link"
             )
+        docs.append(
+            {
+                "apiVersion": "v1alpha1",
+                "kind": "Layer2VIPConfig",
+                "name": vip,
+                "link": child_name if on_external else cluster_ifname,
+            }
+        )
     dns = next(
         (i.dns for i in (interfaces[n] for n in sorted(interfaces)) if i.dns), None
     ) or tuple(cfg.network.dns)

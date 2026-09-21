@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Refuse metal configurations whose cabling plan, BMC address or network settings could never join.
+- Refuse a metal control plane with no external link when the kubeapi VIP rides the external network.
 
 ## [0.8.0] - 2026-09-20
 

@@ -56,12 +56,14 @@ PHOENIX = {
 
 
 def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
-         tailscale=None):
+         tailscale=None, vip=VIP):
+    cluster: dict = {
+        "cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000,
+    }
+    if vip is not None:
+        cluster["kubeapi_vip"] = vip
     network: dict = {
-        "cluster": {
-            "cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000,
-            "kubeapi_vip": VIP,
-        },
+        "cluster": cluster,
         "dns": ["192.0.2.53"],
     }
     if external is not None:
@@ -593,6 +595,28 @@ def test_metal_control_plane_states_the_vip_on_its_link(
         "apiVersion": "v1alpha1", "kind": "Layer2VIPConfig",
         "name": VIP, "link": "enp1s0f0",
     }
+
+
+def test_metal_control_plane_with_external_vip_needs_an_external_link(
+    make_config, monkeypatch, tmp_path
+):
+    """A kubeapi_vip on network.external needs an external link to ride: a
+    control plane without one could never hold the VIP, so the machine
+    configuration refuses to build instead of quietly omitting it."""
+    with pytest.raises(ConfigError, match="no external link"):
+        _build(
+            make_config, monkeypatch, tmp_path,
+            metal={
+                "role": "controlplane",
+                "disk": "/dev/sda",
+                "interfaces": {"enp1s0f0": {"role": "cluster"}},
+                "servers": {"rp001": {"interfaces": {
+                    "enp1s0f0": {"ip": "172.29.21.5"},
+                }}},
+            },
+            external={**EXTERNAL, "kubeapi_vip": "203.0.113.79"},
+            vip=None,
+        )
 
 
 @pytest.mark.parametrize(
