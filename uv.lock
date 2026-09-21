@@ -2228,7 +2228,7 @@ wheels = [
 
 [[package]]
 name = "taloscluster"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "keystoneauth1", version = "5.14.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -2237,6 +2237,7 @@ dependencies = [
     { name = "openstacksdk", version = "4.20.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyyaml" },
     { name = "requests" },
+    { name = "urllib3" },
 ]
 
 [package.optional-dependencies]
@@ -2288,6 +2289,7 @@ requires-dist = [
     { name = "taloscluster-rancher", marker = "extra == 'rancher'", editable = "plugins/rancher" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "types-requests", marker = "extra == 'dev'" },
+    { name = "urllib3", specifier = ">=2.0" },
 ]
 provides-extras = ["openstack", "argocd", "rancher", "all", "dev"]
 

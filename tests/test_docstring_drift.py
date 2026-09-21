@@ -160,6 +160,27 @@ def test_keystoneauth1_is_a_declared_dependency():
     assert "keystoneauth1" in text
 
 
+def test_urllib3_is_a_declared_dependency():
+    text = (ROOT / "pyproject.toml").read_text()
+    # metal/redfish.py imports urllib3 directly to silence insecure-request
+    # warnings; it must be a declared dependency, not a transitive one, so the
+    # import does not silently break.
+    assert "urllib3" in text
+
+
+def test_changelog_latest_release_matches_pyproject_version():
+    # The released pyproject version must have a matching dated CHANGELOG
+    # heading; a Breaking entry under an unversioned heading with an old
+    # pyproject version means the release bump was forgotten.
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    match = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE)
+    assert match, "pyproject.toml has no version"
+    changelog = (ROOT / "CHANGELOG.md").read_text()
+    headings = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", changelog, re.MULTILINE)
+    assert headings, "CHANGELOG.md has no release headings"
+    assert headings[0] == match.group(1)
+
+
 def test_configuration_overview_plugin_validate_runs_everywhere_up_front():
     text = (DOCS / "configuration.md").read_text()
     # The plugin `validate` hook runs in converge's validate phase for every
