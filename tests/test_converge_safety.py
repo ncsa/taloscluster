@@ -1515,6 +1515,14 @@ def test_recorded_endpoint_reads_the_cluster_entry_of_the_kubeconfig(tmp_path):
     assert converge._recorded_endpoint(tmp_path / "missing", "phoenix") == ""
 
 
+def test_recorded_endpoint_treats_a_non_mapping_kubeconfig_as_unknown(tmp_path):
+    path = tmp_path / "kubeconfig"
+    path.write_text("truncated")  # a hand-edited file that parses to a scalar
+    assert converge._recorded_endpoint(path, "phoenix") == ""
+    path.write_text("- just\n- a\n- list\n")
+    assert converge._recorded_endpoint(path, "phoenix") == ""
+
+
 def test_kubeapi_endpoint_move_is_reported_with_the_old_address(tmp_path, capsys):
     path = _kubeconfig(tmp_path, "https://203.0.113.79:6443")
     assert converge._endpoint_move(path, "phoenix", "203.0.113.77") == "203.0.113.79"
@@ -1668,6 +1676,14 @@ def test_talos_endpoint_falls_back_to_the_recorded_talosconfig(tmp_path):
         "context: phoenix\ncontexts:\n  phoenix:\n    endpoints:\n    - 10.0.0.248\n"
     )
     assert converge._talos_endpoint(_no_tailscale_cfg(), talosconfig=path) == "10.0.0.248"
+
+
+def test_talosconfig_endpoint_treats_a_non_mapping_file_as_unknown(tmp_path):
+    path = tmp_path / "talosconfig"
+    path.write_text("truncated")  # a hand-edited file that parses to a scalar
+    assert converge._talosconfig_endpoint(path, "phoenix") == ""
+    path.write_text("- just\n- a\n- list\n")
+    assert converge._talosconfig_endpoint(path, "phoenix") == ""
 
 
 def test_talos_endpoint_without_any_address_is_an_error(tmp_path):

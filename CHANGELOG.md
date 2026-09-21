@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Make the Redfish transport https-only unless `bmc.scheme` opts into http, and trim the virtual-media insert body to the image URL.
 - Warn when applying a metal machine config into a cluster directory whose gitignore does not ignore the generated configs.
 
+### Fixed
+
+- Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.
+
 ## [0.8.0] - 2026-09-20
 
 ### Added

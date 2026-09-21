@@ -444,8 +444,10 @@ def _recorded_endpoint(kubeconfig: Path, cluster: str) -> str:
     and client is bound to.
     """
     try:
-        doc = yaml.safe_load(kubeconfig.read_text()) or {}
+        doc = yaml.safe_load(kubeconfig.read_text())
     except (OSError, yaml.YAMLError):
+        return ""
+    if not isinstance(doc, dict):
         return ""
     for entry in doc.get("clusters") or []:
         if not isinstance(entry, dict) or entry.get("name") != cluster:
@@ -748,8 +750,10 @@ def _talos_endpoint(
 def _talosconfig_endpoint(talosconfig: Path, cluster: str) -> str:
     """The context endpoint converge last wrote into the talosconfig, or ""."""
     try:
-        doc = yaml.safe_load(talosconfig.read_text()) or {}
+        doc = yaml.safe_load(talosconfig.read_text())
     except (OSError, yaml.YAMLError):
+        return ""
+    if not isinstance(doc, dict):
         return ""
     ctx = (doc.get("contexts") or {}).get(doc.get("context") or cluster) or {}
     endpoints = ctx.get("endpoints") or []
