@@ -92,14 +92,15 @@ def _hostname_patch(m: Machine) -> dict:
     }
 
 
-def _cluster_patch(cfg: Config, endpoint: Endpoint) -> dict:
+def _cluster_patch(cfg: Config, endpoint: Endpoint, node_cidr: str | None = None) -> dict:
     return {
         "cluster": {
             "allowSchedulingOnControlPlanes": False,
             "extraManifests": EXTRA_MANIFESTS,
             "apiServer": {"certSANs": [endpoint.advertised_address]},
-            # keep etcd peering on the private network, off tailscale
-            "etcd": {"advertisedSubnets": [cfg.network.cluster.cidr]},
+            # keep etcd peering on the private network, off tailscale; a node
+            # off the cluster network (a metal group) advertises its own L2
+            "etcd": {"advertisedSubnets": [node_cidr or cfg.network.cluster.cidr]},
         }
     }
 

@@ -94,6 +94,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Join metal nodes at the cluster's running Kubernetes version instead of the configured target.
 - Join metal nodes to the tailnet when the tailscale section and an auth key are set.
 - Reconfigure and upgrade joined metal nodes during converge, and warn that destroy leaves them running the destroyed cluster.
+- Advertise etcd on a metal control plane's own L2 instead of the cluster network.
 
 ## [0.7.0] - 2026-09-06
 

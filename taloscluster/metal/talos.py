@@ -438,9 +438,9 @@ def build_config(
 
     The shared patch stack (machine, hostname, cluster, firewall, kubespan,
     tailscale) is assembled exactly as `build_configs` does for the VM
-    providers -- the firewall keyed on the machine's own L2 -- then the
-    cabling plan's network patches and the cluster's freeform patches; a
-    Talos < 1.14 cluster gets the
+    providers -- the firewall and the control plane's etcd advertisement keyed
+    on the machine's own L2 -- then the cabling plan's network patches and the
+    cluster's freeform patches; a Talos < 1.14 cluster gets the
     classic hostname field and the 1.14-era keys stripped. `kubernetes_version`
     overrides `cfg.kubernetes_version` for the kubelet and control-plane images
     and the return-path pod's kube-proxy image: `metal apply` passes the
@@ -468,7 +468,9 @@ def build_config(
             patches.append(
                 machineconfig._write(
                     workdir, f"{host}-cluster",
-                    machineconfig._cluster_patch(cfg, endpoint),
+                    machineconfig._cluster_patch(
+                        cfg, endpoint, node_cidr=server.network.cidr
+                    ),
                 )
             )
         patches.append(

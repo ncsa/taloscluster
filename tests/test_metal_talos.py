@@ -28,6 +28,7 @@ import pytest
 import yaml
 
 from taloscluster.metal import talos as metal_talos
+from taloscluster.talos import machineconfig
 
 INSTALLER = "factory.talos.dev/metal-installer/abc123:v1.13.9"
 VIP = "172.29.21.200"
@@ -284,6 +285,43 @@ def test_metal_firewall_admits_the_cluster_l2_and_kubespan(
         assert {"subnet": "172.29.31.0/24"} in rules[name]["ingress"]
     assert rules["kubespan"]["portSelector"] == {"ports": [51820], "protocol": "udp"}
     assert rules["kubespan"]["ingress"] == [{"subnet": "172.29.21.0/24"}]
+
+
+def test_metal_control_plane_on_another_l2_matches_golden(
+    make_config, monkeypatch, tmp_path
+):
+    """A control plane whose group sits on another L2: the pod node IP and the
+    etcd advertisement are keyed on the group's L2 -- the only one the machine
+    owns an address on -- not on the cluster L2, where it has none."""
+    other_l2 = {
+        "role": "controlplane",
+        "disk": "/dev/sda",
+        "network": {"cidr": "172.29.31.0/24", "gateway": "172.29.31.1"},
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "172.29.31.5/24"}}}},
+    }
+    stack, _ = _build(make_config, monkeypatch, tmp_path, metal=other_l2, external=None)
+
+    assert stack[0][0] == {
+        "machine": {
+            "certSANs": [VIP],
+            "nodeLabels": {"ncsa/role": "controlplane", "ncsa/pool": "phoenix"},
+            "kubelet": {
+                "extraArgs": {"rotate-server-certificates": True},
+                "nodeIP": {"validSubnets": ["172.29.31.0/24"]},
+            },
+            "install": {"disk": "/dev/sda", "image": INSTALLER, "wipe": True},
+            "time": {"servers": ["ntp.example.com"]},
+        }
+    }
+    assert stack[2][0] == {
+        "cluster": {
+            "allowSchedulingOnControlPlanes": False,
+            "extraManifests": machineconfig.EXTRA_MANIFESTS,
+            "apiServer": {"certSANs": [VIP]},
+            "etcd": {"advertisedSubnets": ["172.29.31.0/24"]},
+        }
+    }
 
 
 TAILSCALE_PATCH = {
