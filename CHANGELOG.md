@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Document that DHCP links keep a single default route with the 1500 MTU clamp over the lease's route.
+
 ### Changed
 
 - Refuse metal configurations whose cabling plan, BMC address or network settings could never join.

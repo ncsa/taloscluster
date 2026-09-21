@@ -11,6 +11,7 @@ from taloscluster.infrastructure import (
     NetworkAttachment,
     NetworkResult,
     backend_for,
+    dhcp_link_documents,
     resolve_node_address,
 )
 
@@ -65,6 +66,28 @@ def test_node_address_ignores_an_unknown_discovered_address():
     )
 
     assert resolve_node_address("node-1", {"node-1": ""}, inventory) == "192.0.2.10"
+
+
+def test_dhcp_route_restatement_collides_with_the_lease_route():
+    """The restated default route must replace, never duplicate, the route the
+    DHCP lease provides. Talos identifies a route by table, destination,
+    gateway, metric and link, and keeps the higher configuration layer when two
+    routes collide, so the restated route carries only the gateway and the
+    1500 MTU: any table, destination or metric of its own would give the lease
+    route a different identity and leave two default routes in the kernel.
+    Verified against Talos v1.13 on a DHCP node; see docs/concepts/machines.md.
+    At the default MTU there is no clamp, so no route is restated at all even
+    when a gateway is known.
+    """
+    link = dhcp_link_documents("eth0", mtu=9000, gateway="192.0.2.1")[0]
+    assert link["mtu"] == 9000
+    assert link["routes"] == [{"gateway": "192.0.2.1", "mtu": 1500}]
+
+    assert dhcp_link_documents("eth0", mtu=1500, gateway="192.0.2.1")[0] == {
+        "apiVersion": "v1alpha1",
+        "kind": "LinkConfig",
+        "name": "eth0",
+    }
 
 
 def test_proxmox_backend_is_selected(make_config):
