@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Refuse metal configurations whose cabling plan, BMC address or network settings could never join.
 - Refuse a metal control plane with no external link when the kubeapi VIP rides the external network.
+- Make the Redfish transport https-only unless `bmc.scheme` opts into http, and trim the virtual-media insert body to the image URL.
 
 ## [0.8.0] - 2026-09-20
 

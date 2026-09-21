@@ -1,10 +1,12 @@
 """Minimal Redfish client for the BMC actions the metal join flow needs.
 
-Talks basic auth to a controller that answers on https (BMC certificates are
-self-signed, so verification is off) or, when the TLS handshake fails, plain
-http. Only what the commands use is implemented: the power state and reset
-actions, the one-time boot override, virtual media insert/eject, and the
-NIC/disk summaries `inspect` prints.
+Talks basic auth to a controller on the scheme its `bmc.scheme` names -- https
+by default, so the BMC password never rides an unencrypted link unless the
+configuration opts into plain http for a BMC that serves no TLS. Verification
+is off either way (BMC certificates are self-signed). Only what the commands
+use is implemented: the power state and reset actions, the one-time boot
+override, virtual media insert/eject, and the NIC/disk summaries `inspect`
+prints.
 
 Deliberately absent: BIOS attribute changes and persistent boot-order
 manipulation. The flow mounts media, one-time boots it and manages power;
@@ -46,26 +48,22 @@ class Redfish:
 
     @property
     def base(self) -> str:
-        """The controller's root URL, https first with an http fallback."""
+        """The controller's root URL, on the configured scheme."""
         if not self._base:
             self._base = self._discover_base()
         return self._base
 
     def _discover_base(self) -> str:
-        last: Exception | None = None
-        for scheme in ("https", "http"):
-            base = f"{scheme}://{self.bmc.ip}"
-            try:
-                # the service discovery endpoint proves the scheme and host
-                # answer; it needs no authentication
-                requests.get(f"{base}/redfish/", timeout=self.timeout, verify=False).close()
-            except requests.RequestException as e:
-                last = e
-                continue
-            return base
-        raise RedfishError(
-            f"could not reach a Redfish controller at {self.bmc.ip}: {last}"
-        )
+        base = f"{self.bmc.scheme}://{self.bmc.ip}"
+        try:
+            # the service discovery endpoint proves the scheme and host
+            # answer; it needs no authentication
+            requests.get(f"{base}/redfish/", timeout=self.timeout, verify=False).close()
+        except requests.RequestException as e:
+            raise RedfishError(
+                f"could not reach a Redfish controller at {self.bmc.ip}: {e}"
+            ) from e
+        return base
 
     def _request(self, method: str, path: str, body: dict | None = None) -> requests.Response:
         url = f"{self.base}{path}"
@@ -197,9 +195,12 @@ class Redfish:
     def insert_media(self, image_url: str) -> None:
         """Mount `image_url` as virtual media.
 
-        Controllers expose the InsertMedia action (Dell) or expect an Inserted
-        patch (HPE); use whichever the chosen device offers. The CD/DVD-shaped
-        device is preferred when a controller exposes more than one.
+        Controllers expose the InsertMedia action (Dell, HPE, Supermicro) or
+        expect an Inserted patch; use whichever the chosen device offers. The
+        action takes the image alone -- `Inserted` and `WriteProtected` are
+        resource properties, so only the patch fallback sends them. The
+        CD/DVD-shaped device is preferred when a controller exposes more
+        than one.
         """
         devices = self.virtual_media()
         if not devices:
@@ -212,11 +213,12 @@ class Redfish:
         ]
         path, doc = (cd or devices)[0]
         target = ((doc.get("Actions") or {}).get("#VirtualMedia.InsertMedia") or {}).get("target")
-        body = {"Image": image_url, "Inserted": True, "WriteProtected": True}
         if target:
-            resp = self._post(str(target), body)
+            resp = self._post(str(target), {"Image": image_url})
         else:
-            resp = self._patch(path, body)
+            resp = self._patch(
+                path, {"Image": image_url, "Inserted": True, "WriteProtected": True}
+            )
         self._checked(resp, f"mounting {image_url} on {self.bmc.ip}")
 
     def eject_media(self) -> bool:

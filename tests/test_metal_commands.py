@@ -754,7 +754,8 @@ def test_insert_media_uses_the_insert_action(client):
     assert (method, path) == (
         "POST", f"{SYSTEM_PATH}/VirtualMedia/CD/Actions/VirtualMedia.InsertMedia",
     )
-    assert body == {"Image": ISO_URL, "Inserted": True, "WriteProtected": True}
+    # the action takes the image alone; HPE and Supermicro reject the rest
+    assert body == {"Image": ISO_URL}
 
 
 def test_insert_media_falls_back_to_a_patch_without_an_action(client):
@@ -835,13 +836,39 @@ def test_failed_requests_raise_redfish_errors(client):
         rf.power_state()
 
 
-def test_base_falls_back_to_http_when_https_is_refused(monkeypatch):
-    rf = redfish.Redfish(MetalBmc(ip="198.51.100.10", username="u", password="p"))
+def test_base_uses_the_configured_scheme(monkeypatch):
+    """The BMC is talked to on `bmc.scheme` alone: no automatic plaintext
+    fallback, so the credentials never ride http unless it is asked for."""
+    seen = []
 
     def fake_get(url, **kw):
-        if url.startswith("https://"):
-            raise requests.exceptions.ConnectionError("refused")
+        seen.append(url)
         return StubResponse({"v1": "/redfish/v1/"})
 
     monkeypatch.setattr(requests, "get", fake_get)
+
+    rf = redfish.Redfish(MetalBmc(ip="198.51.100.10", username="u", password="p"))
+    assert rf.base == "https://198.51.100.10"
+    rf = redfish.Redfish(
+        MetalBmc(ip="198.51.100.10", username="u", password="p", scheme="http")
+    )
     assert rf.base == "http://198.51.100.10"
+    assert seen == [
+        "https://198.51.100.10/redfish/",
+        "http://198.51.100.10/redfish/",
+    ]
+
+
+def test_base_never_falls_back_to_http_when_https_fails(monkeypatch):
+    """Any https failure -- a timeout included -- raises instead of retrying
+    over http, where the session would send the BMC password in the clear."""
+
+    def fake_get(url, **kw):
+        raise requests.exceptions.ReadTimeout("timed out")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    rf = redfish.Redfish(MetalBmc(ip="198.51.100.10", username="u", password="p"))
+    with pytest.raises(
+        redfish.RedfishError, match="could not reach a Redfish controller"
+    ):
+        _ = rf.base

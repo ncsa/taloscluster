@@ -77,7 +77,10 @@ _METAL_SERVER_KEYS = _METAL_GROUP_KEYS - {"servers"}
 #: Direct keys one `metal.<group>.interfaces` entry accepts.
 _METAL_INTERFACE_KEYS = {"role", "ip", "dns", "link_name", "vlan"}
 #: Direct keys a `metal.<group>.bmc` block accepts.
-_METAL_BMC_KEYS = {"ip", "username", "password"}
+_METAL_BMC_KEYS = {"ip", "username", "password", "scheme"}
+#: Schemes a `metal.<group>.bmc.scheme` may name; anything else is refused so a
+#: typo cannot silently downgrade the Redfish transport to plaintext.
+_METAL_BMC_SCHEMES = ("https", "http")
 #: What an interface's `role` may say, as a bare value or a list of them.
 _METAL_INTERFACE_ROLES = ("cluster", "external", "pxe")
 #: Keys that moved into the `network` blocks, by the section they used to live
@@ -286,6 +289,7 @@ class MetalBmc:
     ip: str = ""
     username: str = field(default="", repr=False)
     password: str = field(default="", repr=False)
+    scheme: str = "https"             # https unless the BMC serves no TLS
 
 
 @dataclass(frozen=True)
@@ -1135,7 +1139,18 @@ def _metal_bmc(raw: dict[str, Any], where: str) -> MetalBmc:
         if value is not None and (not isinstance(value, str) or not value):
             raise ConfigError(f"{where}.{key} must be a non-empty string")
         fields[key] = value or ""
-    return MetalBmc(ip=ip or "", username=fields["username"], password=fields["password"])
+    scheme = raw.get("scheme")
+    if scheme is not None:
+        if not isinstance(scheme, str) or scheme not in _METAL_BMC_SCHEMES:
+            raise ConfigError(
+                f"{where}.scheme must be one of: {', '.join(_METAL_BMC_SCHEMES)}"
+            )
+    return MetalBmc(
+        ip=ip or "",
+        username=fields["username"],
+        password=fields["password"],
+        scheme=scheme or "https",
+    )
 
 
 def _provider_config(

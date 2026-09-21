@@ -991,6 +991,75 @@ def test_metal_redfish_credentials_resolve_from_group_default_or_server_override
     assert rp001.bmc == MetalBmc(ip="172.28.50.5", username="admin", password="s3cret")
 
 
+def test_metal_bmc_scheme_defaults_to_https_and_merges_like_the_credentials(make_config):
+    """The Redfish transport is https unless `bmc.scheme` says otherwise, and
+    the scheme merges key by key like the rest of the `bmc` block."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "redfish": True,
+        "disk": "/dev/sda",
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "bmc": {"username": "root", "password": "secret", "scheme": "http"},
+        "servers": {
+            "rp001": {
+                "bmc": {"ip": "172.28.50.5"},
+                "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
+            },
+            "rp002": {
+                "bmc": {"ip": "172.28.50.6", "scheme": "https"},
+                "interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}},
+            },
+        },
+    }}})
+    servers = cfg.metal.groups["phoenix"].servers
+    assert servers["rp001"].bmc == MetalBmc(
+        ip="172.28.50.5", username="root", password="secret", scheme="http"
+    )
+    # a server override puts its own machine back on https
+    assert servers["rp002"].bmc == MetalBmc(
+        ip="172.28.50.6", username="root", password="secret", scheme="https"
+    )
+
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "redfish": True,
+        "disk": "/dev/sda",
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "servers": {
+            "rp001": {
+                "bmc": {"ip": "172.28.50.5", "username": "root", "password": "secret"},
+                "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
+            },
+        },
+    }}})
+    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
+    assert rp001.bmc.scheme == "https"
+
+
+@pytest.mark.parametrize("scheme", ["ftp", "", True])
+def test_metal_bmc_scheme_is_checked_at_load(make_config, scheme):
+    """An unknown scheme is refused when the configuration loads, not at first
+    `metal boot` -- and never silently downgrades the Redfish transport."""
+    with pytest.raises(ConfigError, match=r"bmc\.scheme must be one of: https, http"):
+        make_config({"metal": {"phoenix": {
+            "role": "worker",
+            "redfish": True,
+            "disk": "/dev/sda",
+            "interfaces": {"enp1s0f0": {"role": "cluster"}},
+            "servers": {
+                "rp001": {
+                    "bmc": {
+                        "ip": "172.28.50.5",
+                        "username": "root",
+                        "password": "secret",
+                        "scheme": scheme,
+                    },
+                    "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
+                },
+            },
+        }}})
+
+
 @pytest.mark.parametrize("source", ["secrets.yaml", "an include", "cluster.yaml"])
 def test_metal_redfish_credentials_load_from_whichever_file_supplies_them(
     make_config, tmp_path, source
