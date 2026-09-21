@@ -436,10 +436,11 @@ def build_config(
 ) -> str:
     """Return one metal machine's machine-config YAML string.
 
-    The shared patch stack (machine, hostname, cluster, firewall, kubespan) is
-    assembled exactly as `build_configs` does for the VM providers -- the
-    firewall keyed on the machine's own L2 -- then the cabling plan's network
-    patches and the cluster's freeform patches; a Talos < 1.14 cluster gets the
+    The shared patch stack (machine, hostname, cluster, firewall, kubespan,
+    tailscale) is assembled exactly as `build_configs` does for the VM
+    providers -- the firewall keyed on the machine's own L2 -- then the
+    cabling plan's network patches and the cluster's freeform patches; a
+    Talos < 1.14 cluster gets the
     classic hostname field and the 1.14-era keys stripped. `kubernetes_version`
     overrides `cfg.kubernetes_version` for the kubelet and control-plane images
     and the return-path pod's kube-proxy image: `metal apply` passes the
@@ -483,6 +484,18 @@ def build_config(
                     # the WireGuard MTU follows the machine's own L2, which a
                     # group on another network carries with its own mtu
                     machineconfig._kubespan_patch(cfg, mtu=server.network.mtu),
+                )
+            )
+        # the metal installer bakes the tailscale extension whenever the
+        # cluster opts in, so the node is told how to join the tailnet exactly
+        # as `build_configs` tells the VM machines (a cluster.yaml-only
+        # `tailscale:` section; a secrets.yaml-only key is a leftover credential)
+        auth_key = cfg.tailscale_auth_key
+        if auth_key and cfg.tailscale_enabled:
+            patches.append(
+                machineconfig._write(
+                    workdir, f"{host}-tailscale",
+                    machineconfig._tailscale_patch(m, cfg, auth_key),
                 )
             )
         docs, entries = _cabling(server, cfg)

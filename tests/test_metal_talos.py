@@ -53,7 +53,8 @@ PHOENIX = {
 }
 
 
-def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None):
+def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
+         tailscale=None):
     network: dict = {
         "cluster": {
             "cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "kubeapi_vip": VIP,
@@ -76,6 +77,8 @@ def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None):
         },
         "metal": {"phoenix": PHOENIX if metal is None else metal},
     }
+    if tailscale is not None:
+        overrides["tailscale"] = tailscale
     # the golden stack carries the KubeSpan patch, so the config opts in
     talos: dict = {"kubespan": True}
     if talos_version is not None:
@@ -281,6 +284,91 @@ def test_metal_firewall_admits_the_cluster_l2_and_kubespan(
         assert {"subnet": "172.29.31.0/24"} in rules[name]["ingress"]
     assert rules["kubespan"]["portSelector"] == {"ports": [51820], "protocol": "udp"}
     assert rules["kubespan"]["ingress"] == [{"subnet": "172.29.21.0/24"}]
+
+
+TAILSCALE_PATCH = {
+    "apiVersion": "v1alpha1",
+    "kind": "ExtensionServiceConfig",
+    "name": "tailscale",
+    "environment": [
+        "TS_AUTHKEY=tskey-secret",
+        "TS_HOSTNAME=rp001",
+        "TS_EXTRA_ARGS=--login-server=https://headscale.example.com",
+    ],
+}
+
+
+def test_metal_tailscale_cluster_tells_the_node_to_join_the_tailnet(
+    make_config, monkeypatch, tmp_path
+):
+    """A tailscale cluster's metal node gets the ExtensionServiceConfig the VM
+    machines get: its installer bakes the extension, so without the patch the
+    node would carry a dormant tailscale service and never join the tailnet."""
+    cfg = _cfg(make_config, tailscale={
+        "login_server": "https://headscale.example.com",
+        "auth_key": "tskey-secret",
+    })
+    seen: dict = {}
+
+    def fake_gen_config(**kwargs):
+        seen["names"] = [Path(p).name for p in kwargs["patches"]]
+        seen["patches"] = [
+            list(yaml.safe_load_all(Path(p).read_text())) for p in kwargs["patches"]
+        ]
+        return _GEN_OUTPUT
+
+    monkeypatch.setattr(metal_talos.talosctl, "gen_config", fake_gen_config)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    metal_talos.build_config(server, cfg, secrets_path, INSTALLER)
+
+    # the tailscale document rides the shared stack between kubespan and the
+    # cabling plan, exactly where build_configs puts it for the VM machines
+    assert seen["names"] == [
+        "rp001-machine.yaml",
+        "rp001-hostname.yaml",
+        "rp001-firewall.yaml",
+        "rp001-kubespan.yaml",
+        "rp001-tailscale.yaml",
+        "rp001-network.yaml",
+        "rp001-interfaces.yaml",
+        "rp001-return-path.yaml",
+    ]
+    (tailscale,) = next(
+        docs for name, docs in zip(seen["names"], seen["patches"], strict=True)
+        if name == "rp001-tailscale.yaml"
+    )
+    assert tailscale == TAILSCALE_PATCH
+
+
+def test_metal_no_tailscale_patch_without_a_key(make_config, monkeypatch, tmp_path):
+    """No pre-auth key: the extension stays idle and no patch is emitted."""
+    stack, _ = _build(make_config, monkeypatch, tmp_path)
+
+    assert all(
+        doc.get("kind") != "ExtensionServiceConfig"
+        for group in stack
+        for doc in group
+    )
+
+
+def test_metal_secrets_only_tailscale_key_stays_idle(
+    make_config, monkeypatch, tmp_path
+):
+    """A secrets.yaml-only auth key is a leftover credential, not an opt-in:
+    cluster.yaml has no tailscale section, no extension is baked and no patch
+    is emitted -- the same rule build_configs applies to the VM machines."""
+    (tmp_path / "secrets.yaml").write_text(yaml.safe_dump(
+        {"tailscale": {"auth_key": "tskey-secret"}}
+    ))
+    stack, _ = _build(make_config, monkeypatch, tmp_path)
+
+    assert all(
+        doc.get("kind") != "ExtensionServiceConfig"
+        for group in stack
+        for doc in group
+    )
 
 
 def test_metal_config_strips_pre_1_14_output(make_config, monkeypatch, tmp_path):
