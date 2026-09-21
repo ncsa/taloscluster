@@ -37,6 +37,7 @@ from . import plugins, versions
 from .config import (
     Config,
     Machine,
+    MetalServer,
     load_config,
     validate_warnings,
 )
@@ -50,6 +51,7 @@ from .infrastructure import (
     resolve_node_address,
 )
 from .k8s import kubectl
+from .metal import talos as metal_talos
 from .output import action, dry_run, info, log, warn
 from .output import report as print_report
 from .state import State
@@ -89,6 +91,14 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         s: factory.installer_image(sid, cfg.talos_version, platform=installer_platform)
         for s, sid in installer_schematics.items()
     }
+    # metal machines share one installer ref of their own -- no VM pool's
+    # extension set -- resolved beside the pools' so a factory outage stops the
+    # run before any phase mutates
+    metal_servers = _metal_servers(cfg)
+    metal_schematic = ""
+    metal_installer = ""
+    if metal_servers:
+        metal_schematic, metal_installer = metal_talos.installer(cfg)
 
     # ---- 1. INVENTORY + SUPPORTED-CHANGE PREFLIGHT ------------------------
     # Load what exists before anything mutates so a provider change that cannot
@@ -210,6 +220,17 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             default_tags=default_tags,
             kubernetes_version=config_kubernetes_version,
         )
+        # a joined metal machine gets the same config push as the VM pools: its
+        # configuration is generated from its own cabling plan and the metal
+        # installer, at the same running kubernetes version the VMs bake
+        for server in metal_servers:
+            configs[server.name] = metal_talos.build_config(
+                server,
+                cfg,
+                secrets_path,
+                metal_installer,
+                kubernetes_version=config_kubernetes_version,
+            )
 
     # ---- 5. SCALE-DOWN ---------------------------------------------------
     if up:
@@ -246,6 +267,8 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             installer_schematics,
             talosconfig_path,
             kubeconfig_path,
+            metal_installer=metal_installer,
+            metal_schematic=metal_schematic,
         )
 
     # ---- 7. COMPUTE (create / scale up) ----------------------------------
@@ -352,6 +375,8 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             installer_schematics,
             talosconfig_path,
             kubeconfig_path,
+            metal_installer=metal_installer,
+            metal_schematic=metal_schematic,
         )
         log("status")
         print(kubectl.get_nodes_wide(kubeconfig_path))
@@ -428,6 +453,20 @@ def _recorded_endpoint(kubeconfig: Path, cluster: str) -> str:
         server = str((entry.get("cluster") or {}).get("server") or "")
         return urlparse(server).hostname or ""
     return ""
+
+
+def _metal_servers(cfg: Config) -> list[MetalServer]:
+    """Every configured metal server, control planes first.
+
+    A metal machine belongs to no VM provider: converge reconfigures and
+    upgrades a joined one at the static address on its cluster link like any
+    node, but never creates, restarts or deletes it.
+    """
+    metal = getattr(cfg, "metal", None)
+    if metal is None:
+        return []
+    servers = [s for group in metal.groups.values() for s in group.servers.values()]
+    return sorted(servers, key=lambda s: 0 if s.role == "controlplane" else 1)
 
 
 def _reboot_nodes(
@@ -1369,20 +1408,33 @@ def _apply_configs(
     discovered = talosctl.member_addresses(
         talosconfig, endpoint, exclude_vip=_cluster_vips(cfg, refs, kubeconfig)
     )
+    # (host, role, address) per node, control planes first: the VM pools are
+    # resolved through discovery and the provider, every joined metal machine
+    # at the static address of its cluster link -- one with no kube Node has
+    # never joined, so there is nothing on it to reconfigure yet
+    work: list[tuple[str, str, str]] = []
     ordered = sorted(machines.items(), key=lambda kv: 0 if kv[1].role == "controlplane" else 1)
-    applied = 0
-    for host, _m in ordered:
-        if _m.role not in roles or host not in inv.machines or host not in configs:
+    for host, m in ordered:
+        if m.role not in roles or host not in inv.machines or host not in configs:
             continue
         if not kubectl.node_exists(kubeconfig, host):
             warn(f"{host}: not visible through {kubeconfig.name}, config not applied")
             continue
         address = resolve_node_address(host, discovered, inv, refs)
-        if not address:
+        if address:
+            work.append((host, m.role, address))
+    for server in _metal_servers(cfg):
+        if server.role not in roles or server.name not in configs:
             continue
+        if not kubectl.node_exists(kubeconfig, server.name):
+            continue
+        work.append((server.name, server.role, metal_talos.cluster_ip(server, cfg)))
+    work.sort(key=lambda w: 0 if w[1] == "controlplane" else 1)
+    applied = 0
+    for host, role, address in work:
         reboot_pending = talosctl.apply_config(talosconfig, endpoint, address, configs[host])
         applied += 1
-        if settle and _m.role == "controlplane" and not dry_run():
+        if settle and role == "controlplane" and not dry_run():
             if not reboot_pending:
                 # a silent live/no-op apply never took the node down, so there
                 # is no restart to settle and no quorum risk -- move on
@@ -1446,6 +1498,8 @@ def _reconcile_talos(
     installer_schematics: dict[tuple[str, ...], str],
     talosconfig: Path,
     kubeconfig: Path,
+    metal_installer: str = "",
+    metal_schematic: str = "",
 ) -> None:
     """Bring every existing, talos-reachable node to the target talos version
     and schematic (extension set), control planes first, health-checked between.
@@ -1454,24 +1508,45 @@ def _reconcile_talos(
     the post-join reconcile: OpenStack first-boot and scaled-up nodes are created
     on the shared base image, so they finish converge a schematic short of the
     target unless they are reinstalled here after they join.
+
+    A joined metal machine is upgraded like any node: its installer ref is the
+    metal schematic resolved from the cluster-wide extensions, and it is reached
+    at the static address of its cluster link. One with no kube Node has never
+    joined, so there is nothing on it to upgrade yet.
     """
     log(f"talos version (want {cfg.talos_version})")
     endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
     discovered = talosctl.member_addresses(
         talosconfig, endpoint, exclude_vip=_cluster_vips(cfg, refs, kubeconfig)
     )
-    # controlplanes first
+    # (host, role, address, want image, want schematic) per node, control
+    # planes first: the VM pools resolved through discovery and the provider,
+    # every joined metal machine at the static address of its cluster link
+    targets: list[tuple[str, str, str, str, str]] = []
     ordered = sorted(machines.items(), key=lambda kv: 0 if kv[1].role == "controlplane" else 1)
     for host, m in ordered:
-        if host not in inv.machines:
-            continue
-        if not kubectl.node_exists(kubeconfig, host):
+        if host not in inv.machines or not kubectl.node_exists(kubeconfig, host):
             continue
         address = resolve_node_address(host, discovered, inv, refs)
-        if not address:
+        if address:
+            targets.append(
+                (
+                    host,
+                    m.role,
+                    address,
+                    installer_images[m.extensions],
+                    installer_schematics[m.extensions],
+                )
+            )
+    for server in _metal_servers(cfg):
+        if not kubectl.node_exists(kubeconfig, server.name):
             continue
-        want_image = installer_images[m.extensions]
-        want_schematic = installer_schematics[m.extensions]
+        targets.append(
+            (server.name, server.role, metal_talos.cluster_ip(server, cfg),
+             metal_installer, metal_schematic)
+        )
+    targets.sort(key=lambda t: 0 if t[1] == "controlplane" else 1)
+    for host, role, address, want_image, want_schematic in targets:
         cur_ver = talosctl.server_version(talosconfig, endpoint, address)
         # the RUNNING schematic, not the installer reference in the machine
         # config (the apply phase has already rewritten the config to the target
@@ -1487,7 +1562,7 @@ def _reconcile_talos(
             # time. Before touching the next control plane, re-establish the
             # health barrier promised at the end of an upgrade.
             _uncordon_stale(kubeconfig, host)
-            if m.role == "controlplane" and not _health_or_kube_fallback(
+            if role == "controlplane" and not _health_or_kube_fallback(
                 talosconfig,
                 endpoint,
                 refs.kubernetes.vip,
@@ -1509,7 +1584,7 @@ def _reconcile_talos(
             refs.kubernetes.vip,
             kubeconfig,
             timeout="10m",
-            fallback=m.role != "controlplane",
+            fallback=role != "controlplane",
         ):
             raise ReconcileError(f"cluster unhealthy after upgrading {host}; aborting rollout")
 
@@ -1523,6 +1598,8 @@ def _reconcile_joined(
     installer_schematics: dict[tuple[str, ...], str],
     talosconfig: Path,
     kubeconfig: Path,
+    metal_installer: str = "",
+    metal_schematic: str = "",
 ) -> InfrastructureInventory:
     """Refresh the inventory and reconcile every node's running schematic, then
     return the refreshed inventory.
@@ -1536,7 +1613,8 @@ def _reconcile_joined(
     """
     inv = backend.load_inventory()
     _reconcile_talos(
-        cfg, machines, inv, refs, installer_images, installer_schematics, talosconfig, kubeconfig
+        cfg, machines, inv, refs, installer_images, installer_schematics, talosconfig,
+        kubeconfig, metal_installer=metal_installer, metal_schematic=metal_schematic,
     )
     return inv
 
@@ -1550,6 +1628,8 @@ def _upgrade(
     installer_schematics: dict[tuple[str, ...], str],
     talosconfig: Path,
     kubeconfig: Path,
+    metal_installer: str = "",
+    metal_schematic: str = "",
 ) -> None:
     """Roll existing nodes to the target talos and kubernetes versions before new
     nodes are created, so a new node never joins newer than the rest (see the
@@ -1557,7 +1637,8 @@ def _upgrade(
     `_reconcile_talos` in the health phase once they join.
     """
     _reconcile_talos(
-        cfg, machines, inv, refs, installer_images, installer_schematics, talosconfig, kubeconfig
+        cfg, machines, inv, refs, installer_images, installer_schematics, talosconfig,
+        kubeconfig, metal_installer=metal_installer, metal_schematic=metal_schematic,
     )
     log(f"kubernetes version (want {cfg.kubernetes_version})")
     endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
@@ -2050,6 +2131,20 @@ def destroy(root: Path, assume_yes: bool = False) -> int:
         "-- the cluster identity -- along with the talosconfig/kubeconfig derived "
         "from it. The next converge will be a brand-new cluster."
     )
+    if getattr(cfg, "metal_servers", None):
+        # no provider manages the metal machines, so destroy cannot remove or
+        # reset them; once the identity is gone they can never join a new
+        # cluster and keep running the destroyed one until wiped
+        warn(
+            "the bare-metal machines "
+            + ", ".join(sorted(cfg.metal_servers))
+            + " are NOT deleted: no provider manages them, so they keep running "
+            "this destroyed cluster under the identity removed here. Reset each "
+            "one with `talosctl --talosconfig talosconfig -n <node> reset` from "
+            "the cluster directory while its talosconfig still exists -- or boot "
+            "the machine into maintenance mode and reset it there -- before its "
+            "hardware joins another cluster."
+        )
     if not assume_yes and not dry_run():
         resp = input("type the cluster name to confirm: ").strip()
         if resp != cfg.name:

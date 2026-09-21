@@ -92,6 +92,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Treat metal machines as desired nodes during scale-down and `check` instead of removing or missing them.
 - Admit every metal group's L2 and KubeSpan's UDP port in the provider and Talos firewalls, and apply the same firewall to metal nodes.
 - Join metal nodes at the cluster's running Kubernetes version instead of the configured target.
+- Reconfigure and upgrade joined metal nodes during converge, and warn that destroy leaves them running the destroyed cluster.
 
 ## [0.7.0] - 2026-09-06
 

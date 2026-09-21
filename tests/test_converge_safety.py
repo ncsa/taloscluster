@@ -1013,6 +1013,149 @@ def test_scale_down_counts_a_configured_metal_control_plane_toward_quorum(
     assert calls == ["drain", "reset", "delete", "compute"]
 
 
+# ---- converge reconfigures joined metal machines like the VM pools ----------
+
+# A `metal:` group on the cluster L2 (no network block -> network.cluster), so
+# no KubeSpan requirement, with the cabling plan the static address comes from.
+METAL_GROUP = {
+    "role": "worker",
+    "redfish": False,
+    "disk": "/dev/sda",
+    "servers": {},
+}
+
+
+def _metal_cfg(make_config, servers: dict):
+    return make_config(
+        {"metal": {"site": {**METAL_GROUP, "servers": servers}}}
+    )
+
+
+def test_apply_configs_reconfigures_a_joined_metal_node(monkeypatch, make_config):
+    """A joined metal machine gets the same config push as the VM pools, at the
+    static address of its cluster link; one with no kube Node has never joined
+    and is skipped, and an unreachable VM address still blocks nothing."""
+    cfg = _metal_cfg(
+        make_config,
+        {
+            "rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}},
+            "rp002": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.6/21"}}},
+        },
+    )
+    machines = {"testcluster-controlplane-01": SimpleNamespace(role="controlplane")}
+    inv = _cp_inventory("testcluster-controlplane-01")
+    configs = {
+        "testcluster-controlplane-01": "config:vm",
+        "rp001": "config:metal",
+        "rp002": "config:metal",
+    }
+    _no_op_reachable(monkeypatch)
+    monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_k: "ep")
+    applied: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config",
+        lambda _tc, _e, node, _c: applied.append((node, _c)) or False,
+    )
+    # rp001 has joined (a kube Node exists); rp002 never did
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, n: n != "rp002")
+
+    converge._apply_configs(
+        cfg, machines, inv, NetworkResult(), configs,
+        Path("talosconfig"), Path("kubeconfig"),
+    )
+
+    # the VM control plane through its discovered address, the metal worker at
+    # its static cluster address; rp002 never joined and is skipped
+    assert applied == [("192.0.2.1", "config:vm"), ("192.168.0.5", "config:metal")]
+
+
+def test_apply_configs_settles_a_joined_metal_control_plane(monkeypatch, make_config):
+    """A metal control plane's reboot-requiring apply is settled at its static
+    address -- waited down, back up and health-checked -- before the rollout
+    advances, under the same quorum safeguards as a VM control plane's."""
+    cfg = _metal_cfg(
+        make_config,
+        {
+            "rp001": {
+                "role": "controlplane",
+                "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
+            },
+        },
+    )
+    events: list[tuple] = []
+    _no_op_reachable(monkeypatch)
+    monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_k: "ep")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config",
+        lambda _tc, _e, node, _c: events.append(("apply", node, _c)) or True,
+    )
+    monkeypatch.setattr(
+        converge, "_wait_down",
+        lambda _tc, _e, node: events.append(("down", node)) or True,
+    )
+    monkeypatch.setattr(
+        converge, "_wait_reachable", lambda _tc, _e, node: events.append(("up", node))
+    )
+    monkeypatch.setattr(
+        converge, "_health_or_kube_fallback",
+        lambda *_a, **_k: events.append(("health", None)) or True,
+    )
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+
+    converge._apply_configs(
+        cfg, {}, InfrastructureInventory(), NetworkResult(), {"rp001": "config:metal"},
+        Path("talosconfig"), Path("kubeconfig"),
+    )
+
+    assert events == [
+        ("apply", "192.168.0.5", "config:metal"),
+        ("down", "192.168.0.5"),
+        ("up", "192.168.0.5"),
+        ("health", None),
+    ]
+
+
+def test_destroy_warns_that_joined_metal_machines_keep_running(
+    monkeypatch, tmp_path, capsys
+):
+    """Destroy deletes only the provider's resources: a joined metal machine
+    keeps running the destroyed cluster under the identity this removes, so the
+    summary must name every metal server and the reset its hardware needs."""
+    cfg = SimpleNamespace(
+        name="testcluster", metal_servers={"rp001": "worker", "rp002": "controlplane"}
+    )
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    backend = FakeBackend()
+    monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_kw: 0)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("--yes must not prompt")
+    )
+
+    assert converge.destroy(tmp_path, assume_yes=True) == 0
+
+    err = capsys.readouterr().err
+    assert "rp001" in err and "rp002" in err
+    assert "talosctl --talosconfig talosconfig -n <node> reset" in err
+    assert backend.mutations == ["destroy"]
+
+
+def test_destroy_without_metal_machines_makes_no_metal_claim(
+    monkeypatch, tmp_path, capsys
+):
+    """A VM-only cluster's destroy says nothing about bare metal."""
+    cfg = SimpleNamespace(name="testcluster", metal_servers={})
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "backend_for", lambda *_a: FakeBackend())
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_kw: 0)
+
+    converge.destroy(tmp_path, assume_yes=True)
+
+    assert "bare-metal" not in capsys.readouterr().err
+
+
 def test_destroy_decline_happens_before_plugin_teardown(monkeypatch, tmp_path):
     cfg = SimpleNamespace(name="testcluster")
     plugin_calls: list[str] = []
@@ -2308,3 +2451,105 @@ def test_converge_plugin_validation_aborts_before_any_mutation(monkeypatch, tmp_
         _stub_converge(monkeypatch, tmp_path, state, backend)
 
     assert backend.mutations == []
+
+
+# ---- converge wiring: the metal section's machines ride the same phases -----
+
+class _MetalConfigBackend(_ExistingDownBackend):
+    """Records the machine configs the compute phase is handed."""
+
+    def reconcile_machines(self, _machines, _inventory, _boot_image, _configs):
+        self.seen_configs = dict(_configs)
+        return super().reconcile_machines(_machines, _inventory, _boot_image, _configs)
+
+
+def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
+    monkeypatch, tmp_path
+):
+    """The metal section's machines ride the same converge phases as the VM
+    pools: their machine config is generated beside the VMs' from the metal
+    installer and the running kubernetes version, and the upgrade and post-join
+    phases carry the metal installer ref and schematic -- so a talos.version,
+    extension or patch edit reaches metal nodes too instead of stopping at the
+    VM pools and leaving them in permanent drift."""
+    inventory = _cp_inventory("phoenix-controlplane-01")
+    state = _FakeState(True, tmp_path / "talossecrets.yaml")
+    backend = _MetalConfigBackend(inventory)
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+    metal = SimpleNamespace(
+        groups={"site": SimpleNamespace(
+            servers={"rp001": SimpleNamespace(name="rp001", role="worker")}
+        )}
+    )
+    cfg = SimpleNamespace(
+        name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+        extension_sets=lambda: [()],
+        machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+        tailscale_enabled=True,
+        tailscale_auth_key=None,
+        metal_servers={"rp001": "worker"},
+        metal=metal,
+    )
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge.talosctl, "gen_talosconfig", lambda *a, **k: "talosconfig")
+    monkeypatch.setattr(
+        converge.machineconfig, "build_configs",
+        lambda *a, **k: {"phoenix-controlplane-01": "vm-config"},
+    )
+    monkeypatch.setattr(
+        converge.metal_talos, "installer",
+        lambda _cfg: ("m-sch", "factory.talos.dev/metal-installer/m-sch:v1.13.0"),
+    )
+    built: list[dict] = []
+
+    def fake_build(server, _cfg, _secrets, installer, kubernetes_version=None):
+        built.append({
+            "server": server.name,
+            "installer": installer,
+            "kubernetes_version": kubernetes_version,
+        })
+        return f"metal-config:{server.name}"
+
+    monkeypatch.setattr(converge.metal_talos, "build_config", fake_build)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.31.0")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
+    monkeypatch.setattr(converge, "_require_final_health", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_wait_nodes_ready", lambda *a, **k: None)
+    monkeypatch.setattr(converge.kubectl, "get_nodes_wide", lambda _kc: "")
+    joined: list[dict] = []
+
+    def fake_joined(*_args, metal_installer="", metal_schematic="", **_kw):
+        joined.append({"installer": metal_installer, "schematic": metal_schematic})
+        return inventory
+
+    monkeypatch.setattr(converge, "_reconcile_joined", fake_joined)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *a, **kw: 0)
+
+    assert converge.converge(tmp_path) == 0
+
+    # the metal config was generated beside the VMs', from the metal installer
+    # at the cluster's running kubernetes version, and reached the compute phase
+    assert built == [{
+        "server": "rp001",
+        "installer": "factory.talos.dev/metal-installer/m-sch:v1.13.0",
+        "kubernetes_version": "v1.31.0",
+    }]
+    assert backend.seen_configs == {
+        "phoenix-controlplane-01": "vm-config",
+        "rp001": "metal-config:rp001",
+    }
+    # the post-join reconcile carries the metal installer ref and schematic
+    assert joined == [{
+        "installer": "factory.talos.dev/metal-installer/m-sch:v1.13.0",
+        "schematic": "m-sch",
+    }]

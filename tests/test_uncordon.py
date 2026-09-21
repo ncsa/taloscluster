@@ -362,6 +362,113 @@ def test_reconcile_joined_reloads_inventory_to_see_created_nodes(monkeypatch):
     assert upgrade_calls == ["upgrade"]
 
 
+def test_reconcile_talos_upgrades_a_joined_metal_node(monkeypatch, make_config):
+    """A joined metal machine is upgraded like any node -- reached at the static
+    address of its cluster link and reinstalled onto the metal installer image
+    its schematic resolves to -- while a machine with no kube Node has never
+    joined and is skipped."""
+    cfg = make_config(
+        {
+            "metal": {
+                "site": {
+                    "role": "worker",
+                    "redfish": False,
+                    "disk": "/dev/sda",
+                    "servers": {
+                        "rp001": {
+                            "interfaces": {
+                                "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
+                            }
+                        },
+                        "rp002": {
+                            "interfaces": {
+                                "enp1s0f0": {"role": "cluster", "ip": "192.168.0.6/21"}
+                            }
+                        },
+                    },
+                }
+            }
+        }
+    )
+    upgrades: list[tuple[str, str]] = []
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_kw: "ep")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.8")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "old-sch")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "upgrade",
+        lambda _tc, _e, node, image: upgrades.append((node, image)),
+    )
+    monkeypatch.setattr(converge, "_wait_version", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_kw: True)
+    # rp001 has joined (a kube Node exists); rp002 never did
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, n: n == "rp001")
+
+    converge._reconcile_talos(
+        cfg, {}, InfrastructureInventory(), NetworkResult(), {}, {},
+        Path("talosconfig"), Path("kubeconfig"),
+        metal_installer="factory.talos.dev/metal-installer/m-sch:v1.13.9",
+        metal_schematic="m-sch",
+    )
+
+    assert upgrades == [
+        ("192.168.0.5", "factory.talos.dev/metal-installer/m-sch:v1.13.9")
+    ]
+
+
+def test_reconcile_talos_health_checks_a_metal_control_plane_at_target(
+    monkeypatch, make_config
+):
+    """A metal control plane already at the target is not upgraded, but the
+    resumed-rollout health barrier is still re-established before anything else
+    is touched -- its apid answering proves nothing about etcd."""
+    cfg = make_config(
+        {
+            "metal": {
+                "site": {
+                    "role": "controlplane",
+                    "redfish": False,
+                    "disk": "/dev/sda",
+                    "servers": {
+                        "rp001": {
+                            "interfaces": {
+                                "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
+                            }
+                        },
+                    },
+                }
+            }
+        }
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_kw: "ep")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "m-sch")
+    monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        converge, "_health_or_kube_fallback",
+        lambda *_a, **_kw: calls.append("barrier") or True,
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "upgrade",
+        lambda *_a, **_kw: pytest.fail("a node at the target must not be upgraded"),
+    )
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+
+    converge._reconcile_talos(
+        cfg, {}, InfrastructureInventory(), NetworkResult(), {}, {},
+        Path("talosconfig"), Path("kubeconfig"),
+        metal_installer="factory.talos.dev/metal-installer/m-sch:v1.13.9",
+        metal_schematic="m-sch",
+    )
+
+    assert calls == ["barrier"]
+
+
 # ---------------------------------------------------------------------------
 # _wait_version: the schematic is the barrier for an extension-only upgrade
 # ---------------------------------------------------------------------------

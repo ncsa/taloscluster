@@ -46,7 +46,7 @@ from ..proxmox.talos import (
     EXT_ROUTE_TABLE,
     anchor_address,
 )
-from ..talos import machineconfig, talosctl
+from ..talos import factory, machineconfig, talosctl
 
 # The Talos release that introduced machine.install.grubUseUKICmdline and the
 # HostnameConfig document. The client emits both regardless of --talos-version,
@@ -56,6 +56,35 @@ HOSTNAME_DOCUMENT_VERSION = "v1.14.0"
 
 def _pre_1_14(cfg: Config) -> bool:
     return versions.is_older(cfg.talos_version, HOSTNAME_DOCUMENT_VERSION)
+
+
+def cluster_ip(server: MetalServer, cfg: Config) -> str:
+    """The static address on the machine's cluster link, where apid answers.
+
+    A metal machine belongs to no provider inventory and reports no guest
+    agent, so this address is the only way to reach it -- converge pushes the
+    machine's configuration and its Talos upgrades here.
+    """
+    interfaces = _check_cabling(server, cfg)
+    ifname = next(n for n, i in interfaces.items() if "cluster" in i.role)
+    ip = interfaces[ifname].ip.split("/", 1)[0]
+    if not ip:
+        raise ConfigError(
+            f"metal server {server.name}: its cluster interface {ifname} has no "
+            "static address, so there is no known ip to reach it on"
+        )
+    return ip
+
+
+def installer(cfg: Config) -> tuple[str, str]:
+    """(schematic id, installer image ref) for the cluster's metal machines.
+
+    Metal machines belong to no VM pool, so the resolved extension set is the
+    base extensions (tailscale only when configured) plus the cluster-wide
+    ones, and the installer reference rides the metal platform.
+    """
+    schematic = factory.schematic_id(cfg._resolve_extensions({}))
+    return schematic, factory.installer_image(schematic, cfg.talos_version, platform="metal")
 
 
 def _vip(cfg: Config) -> str:

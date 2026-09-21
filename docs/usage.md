@@ -62,4 +62,4 @@ The Talos example uses controlplane-01’s Tailscale name as the endpoint and th
 taloscluster destroy
 ```
 
-Destroy runs the plugins first, while the cluster is still reachable, then deletes every managed resource and the local `talossecrets.yaml`, `talosconfig` and `kubeconfig`. The shared boot image stays for the next cluster. Remove the nodes from Headscale afterwards if you plan to reuse the name.
+Destroy runs the plugins first, while the cluster is still reachable, then deletes every managed resource and the local `talossecrets.yaml`, `talosconfig` and `kubeconfig`. The shared boot image stays for the next cluster. Remove the nodes from Headscale afterwards if you plan to reuse the name. The bare-metal machines of a [`metal`](configuration/metal.md) section are not deleted — no provider manages them — so destroy names each one and the `talosctl reset` its hardware needs before it can join another cluster.

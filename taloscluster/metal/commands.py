@@ -94,15 +94,7 @@ def _bmc(server: MetalServer) -> redfish.Redfish | None:
 
 def _cluster_ip(server: MetalServer, cfg: Config) -> str:
     """The static address on the machine's cluster link, where apid answers."""
-    interfaces = metal_talos._check_cabling(server, cfg)
-    ifname = next(n for n, i in interfaces.items() if "cluster" in i.role)
-    ip = interfaces[ifname].ip.split("/", 1)[0]
-    if not ip:
-        raise ConfigError(
-            f"metal server {server.name}: its cluster interface {ifname} has no "
-            "static address, so there is no known ip to reach it on"
-        )
-    return ip
+    return metal_talos.cluster_ip(server, cfg)
 
 
 def _iso_url(cfg: Config) -> str:
@@ -113,13 +105,8 @@ def _iso_url(cfg: Config) -> str:
 
 
 def _installer_image(cfg: Config) -> str:
-    """The metal installer ref for the machine's resolved extension set.
-
-    Metal machines belong to no VM pool, so the resolved set is the base
-    extensions (tailscale only when configured) plus the cluster-wide ones.
-    """
-    schematic = factory.schematic_id(cfg._resolve_extensions({}))
-    return factory.installer_image(schematic, cfg.talos_version, platform="metal")
+    """The metal installer ref for the machine's resolved extension set."""
+    return metal_talos.installer(cfg)[1]
 
 
 # -- the commands ---------------------------------------------------------------
@@ -319,8 +306,8 @@ def _refuse_joined(root: Path, cfg: Config, server: MetalServer) -> None:
     ):
         raise ReconcileError(
             f"metal server {server.name} already answers apid with this cluster's "
-            f"identity on {ip}; join would reinstall the machine -- use "
-            "`talosctl apply-config` for a config change, or reset the machine "
+            f"identity on {ip}; join would reinstall the machine -- run "
+            "`taloscluster converge` for a config change, or reset the machine "
             "first if a re-join is really intended"
         )
 
