@@ -1486,8 +1486,16 @@ def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:
         ):
             raise ConfigError(f"{where}.{field_name} must be 1-16777215")
     mtu = sdn_map.get("mtu")
-    if mtu is not None and _int(mtu, "mtu", where) <= 0:
-        raise ConfigError(f"{where}.mtu must be greater than zero")
+    if mtu is not None:
+        mtu = _int(mtu, "mtu", where)
+        if mtu <= 0:
+            raise ConfigError(f"{where}.mtu must be greater than zero")
+        if mtu < cfg.network.cluster.mtu:
+            raise ConfigError(
+                f"{where}.mtu must be {cfg.network.cluster.mtu} or higher to "
+                "agree with network.cluster.mtu: guest NICs inherit the VNet "
+                "MTU, so frames above the zone MTU are dropped"
+            )
     nodes = _string_list(sdn_map.get("nodes"), f"{where}.nodes")
     exit_nodes = _string_list(sdn_map.get("exit_nodes"), f"{where}.exit_nodes")
     primary = sdn_map.get("primary_exit_node")

@@ -171,9 +171,9 @@ Preferred exit node. Must be one of the exit nodes.
 
 ### `sdn.mtu`
 
-Optional · integer greater than zero · default unset
+Optional · integer, [`network.cluster.mtu`](network.md#networkclustermtu) or higher · default unset
 
-VNet MTU, typically the underlay MTU minus 50 bytes of VXLAN overhead. Changing it later needs a full stop and start of each VM. Removing it does not unset it on the zone.
+VNet MTU, typically the underlay MTU minus 50 bytes of VXLAN overhead. It cannot sit below [`network.cluster.mtu`](network.md#networkclustermtu): guest NICs inherit the VNet MTU, so frames above the zone MTU are dropped. Changing it later needs a full stop and start of each VM. Removing it does not unset it on the zone.
 
 ### `sdn.nodes`
 

@@ -1736,6 +1736,16 @@ def test_proxmox_provider_section_is_typed(make_config):
                 "url": "https://pve.example",
                 "storage": "vms",
                 "iso_storage": "isos",
+                "network": {"cluster": {"sdn": {"mtu": 1450}}},
+            },
+            {"cluster": {"kubeapi_vip": "192.168.0.9"}},
+            "must be 1500 or higher",
+        ),
+        (
+            {
+                "url": "https://pve.example",
+                "storage": "vms",
+                "iso_storage": "isos",
                 "network": {
                     "cluster": {
                         "sdn": {
@@ -2264,6 +2274,21 @@ def test_proxmox_sdn_vip_inside_a_worker_pool_block_is_rejected(make_config):
     overrides["network"]["cluster"]["kubeapi_vip"] = "192.168.0.65"
     with pytest.raises(ConfigError, match="sits inside the SDN static address layout"):
         make_config(overrides, remove=("openstack",))
+
+
+def test_proxmox_sdn_mtu_below_a_jumbo_cluster_mtu_is_refused(make_config):
+    """The zone MTU is the VNet bridge's, and every guest NIC inherits it."""
+    overrides = _proxmox_sdn_overrides({"mtu": 8950})
+    overrides["network"]["cluster"]["mtu"] = 9000
+    with pytest.raises(ConfigError, match="must be 9000 or higher"):
+        make_config(overrides, remove=("openstack",))
+
+
+def test_proxmox_sdn_mtu_matching_the_cluster_mtu_loads(make_config):
+    overrides = _proxmox_sdn_overrides({"mtu": 8950})
+    overrides["network"]["cluster"]["mtu"] = 8950
+    cfg = make_config(overrides, remove=("openstack",))
+    assert proxmox_sdn(cfg.name, cfg.provider).mtu == 8950
 
 
 # ---------------------------------------------------------------------------
