@@ -56,9 +56,9 @@ The MTU of this layer-2 network. Above 1500 it is written into the generated mac
 
 ### `network.cluster.kubeapi_vip`
 
-One of `network.cluster` / `network.external` on Proxmox · IPv4 inside `cidr` · default none
+Required with `proxmox` · one of `network.cluster` / `network.external` · IPv4 inside `cidr`
 
-The address control planes share as a Layer 2 VIP for the Kubernetes API. Set it in exactly one of `network.cluster` and `network.external`. Changing it later moves the API endpoint of the running cluster by re-applying it through the machine config; it is not guaranteed to avoid a restart. On a managed Proxmox SDN it may not collide with the anycast gateway, a node's static address, or any address the static layout reserves. It is refused with `openstack`, where converge reserves the API address as a port with a floating IP in front of it. Like `ingress_pool`, it must sit outside any DHCP range on that network; see [Addresses outside the DHCP range](#addresses-outside-the-dhcp-range).
+The address control planes share as a Layer 2 VIP for the Kubernetes API. With `proxmox` it is required: exactly one of `network.cluster` and `network.external` must set it, and the load refuses the cluster without it. Changing it later moves the API endpoint of the running cluster by re-applying it through the machine config; it is not guaranteed to avoid a restart. On a managed Proxmox SDN it may not collide with the anycast gateway, a node's static address, or any address the static layout reserves. It is refused with `openstack`, where converge reserves the API address as a port with a floating IP in front of it. Like `ingress_pool`, it must sit outside any DHCP range on that network; see [Addresses outside the DHCP range](#addresses-outside-the-dhcp-range).
 
 ## `network.external`
 
@@ -105,7 +105,7 @@ The MTU of the external network. Above 1500 it is stated explicitly on the exter
 
 ### `network.external.kubeapi_vip`
 
-One of `network.cluster` / `network.external` on Proxmox · IPv4 inside `cidr`, outside `ingress_pool` · default none
+Required with `proxmox` · one of `network.cluster` / `network.external` · IPv4 inside `cidr`, outside `ingress_pool`
 
 The API VIP on the external subnet. Set it here or under `network.cluster`, not both; see [`network.cluster.kubeapi_vip`](#networkclusterkubeapi_vip) for what moving it costs. Like `ingress_pool`, it must sit outside any DHCP range on that network; see [Addresses outside the DHCP range](#addresses-outside-the-dhcp-range).
 
