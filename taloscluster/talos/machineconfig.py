@@ -171,9 +171,12 @@ def _kubespan_patch(cfg: Config, mtu: int | None = None) -> dict:
 
     The WireGuard MTU is the node L2's MTU minus the WireGuard overhead (`mtu`
     overrides the cluster L2's, for a node sitting on a different one), and a
-    configured `network.external` is excluded from endpoint discovery so
-    KubeSpan never advertises or picks an address on the external network as a
-    peer endpoint.
+    configured `network.external` is excluded from endpoint discovery: Talos
+    applies `filters.endpoints` as an allow-list, where a positive CIDR
+    advertises a match and `!cidr` removes one, so the filter allows every
+    address a node owns (`0.0.0.0/0`) and removes the external network's
+    addresses -- KubeSpan never advertises or picks one as a peer endpoint,
+    while the cluster-L2 address stays advertised.
     """
     kubespan: dict = {
         "enabled": True,
@@ -181,9 +184,11 @@ def _kubespan_patch(cfg: Config, mtu: int | None = None) -> dict:
         - KUBESPAN_MTU_OVERHEAD,
     }
     if cfg.network.external is not None:
-        kubespan["filters"] = {
-            "endpoints": [cfg.network.external.anchor_cidr, cfg.network.external.cidr]
-        }
+        external = cfg.network.external
+        excluded = ["!" + external.cidr]
+        if external.anchor_cidr:
+            excluded.append("!" + external.anchor_cidr)
+        kubespan["filters"] = {"endpoints": ["0.0.0.0/0", *excluded]}
     return {"machine": {"network": {"kubespan": kubespan}}}
 
 

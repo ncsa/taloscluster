@@ -11,12 +11,13 @@ contribution is tested next to that backend.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml as _yaml
 
-from taloscluster.config import ConfigError
+from taloscluster.config import ConfigError, L2Network
 from taloscluster.infrastructure import Endpoint, TalosContribution, TalosPatch
 from taloscluster.talos import machineconfig
 
@@ -202,7 +203,9 @@ def test_kubespan_patch_defaults_to_the_l2_mtu_minus_overhead(cfg):
 
 def test_kubespan_patch_jumbo_mtu_and_external_filters(make_config):
     """On a jumbo L2 the KubeSpan MTU follows the L2 minus the WireGuard
-    overhead, and the external network is excluded from endpoint discovery."""
+    overhead, and the external network is excluded from endpoint discovery:
+    the filter allows every address and removes the external CIDRs, so a
+    node's cluster-L2 address stays advertised as a peer endpoint."""
     cfg = make_config(
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
@@ -232,9 +235,52 @@ def test_kubespan_patch_jumbo_mtu_and_external_filters(make_config):
         "machine": {"network": {"kubespan": {
             "enabled": True,
             "mtu": 8920,
-            "filters": {"endpoints": ["169.254.40.0/24", "203.0.113.0/24"]},
+            "filters": {"endpoints": [
+                "0.0.0.0/0", "!203.0.113.0/24", "!169.254.40.0/24",
+            ]},
         }}}
     }
+    # Talos reads `filters.endpoints` as an allow-list: the positive CIDR
+    # advertises, every other entry must remove with a `!` prefix
+    endpoints = patch["machine"]["network"]["kubespan"]["filters"]["endpoints"]
+    assert endpoints[0] == "0.0.0.0/0"
+    assert all(entry.startswith("!") for entry in endpoints[1:])
+
+
+def test_kubespan_patch_external_without_anchor_omits_the_anchor_filter(make_config):
+    """An external network without an anchor CIDR adds no anchor exclusion."""
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "kubeapi_vip": "203.0.113.10",
+                },
+            },
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"bridge": "vmbr0"},
+                    "external": {"bridge": "vmbr1"},
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+    # the loader requires anchor_cidr on an external block; replace it to
+    # reach the skip branch
+    cfg.network = replace(
+        cfg.network, external=L2Network(cidr="203.0.113.0/24", gateway="203.0.113.1")
+    )
+    patch = machineconfig._kubespan_patch(cfg)
+    assert patch["machine"]["network"]["kubespan"]["filters"]["endpoints"] == [
+        "0.0.0.0/0", "!203.0.113.0/24",
+    ]
 
 
 # ---------------------------------------------------------------------------

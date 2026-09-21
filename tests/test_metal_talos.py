@@ -133,7 +133,9 @@ KUBESPAN_PATCH = {
     "machine": {"network": {"kubespan": {
         "enabled": True,
         "mtu": 8920,
-        "filters": {"endpoints": ["169.254.32.0/20", "203.0.113.0/24"]},
+        "filters": {"endpoints": [
+            "0.0.0.0/0", "!203.0.113.0/24", "!169.254.32.0/20",
+        ]},
     }}}
 }
 
