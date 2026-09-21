@@ -850,7 +850,7 @@ def _security_rules(security: dict[str, Any], where: str) -> dict[str, SecurityR
 
 
 def _metal_config(
-    d: dict[str, Any], where: str, cluster: L2Network
+    d: dict[str, Any], where: str, network: NetworkConfig
 ) -> MetalConfig:
     """Parse the `metal:` section into typed groups, server merges applied."""
     raw = _mapping(d.get("metal"), f"{where}: metal")
@@ -862,7 +862,7 @@ def _metal_config(
         gwhere = f"{where}: metal.{name}"
         group = {k: v for k, v in _mapping(group, gwhere).items() if v is not None}
         _reject_unknown_keys(group, gwhere, _METAL_GROUP_KEYS)
-        groups[name] = _metal_group(name, group, gwhere, cluster)
+        groups[name] = _metal_group(name, group, gwhere, network)
         duplicate = names.intersection(groups[name].servers)
         if duplicate:
             raise ConfigError(
@@ -874,10 +874,10 @@ def _metal_config(
 
 
 def _metal_group(
-    name: str, group: dict[str, Any], where: str, cluster: L2Network
+    name: str, group: dict[str, Any], where: str, network: NetworkConfig
 ) -> MetalGroup:
     """One group: its parsed defaults plus every server merged over them."""
-    parsed = _metal_fields(group, where, cluster)
+    parsed = _metal_fields(group, where, network.cluster)
     servers: dict[str, MetalServer] = {}
     for server_name, server in _mapping(
         group.get("servers"), f"{where}.servers"
@@ -892,7 +892,7 @@ def _metal_group(
         server = {k: v for k, v in _mapping(server, swhere).items() if v is not None}
         _reject_unknown_keys(server, swhere, _METAL_SERVER_KEYS)
         servers[server_name] = _metal_server(
-            server_name, name, server, group, swhere, cluster
+            server_name, name, server, group, swhere, network
         )
     return MetalGroup(name=name, servers=servers, **parsed)
 
@@ -903,7 +903,7 @@ def _metal_server(
     server: dict[str, Any],
     group: dict[str, Any],
     where: str,
-    cluster: L2Network,
+    network: NetworkConfig,
 ) -> MetalServer:
     """One machine: the group defaults with the server's overrides merged in.
 
@@ -912,7 +912,10 @@ def _metal_server(
     merge, so the group carries the credentials and the cabling plan and each
     server adds only its own addresses. The merged `bmc` is where a machine's
     credentials have settled, whichever file wrote each key, so a machine on a
-    `redfish: true` group must end up with real ones here.
+    `redfish: true` group must end up with real ones here. The merged machine
+    is where its cabling plan and BMC address have settled too, so both are
+    checked here: a machine that could never be joined must refuse to load
+    rather than fail deep in a `metal` command.
     """
     interfaces = {
         ifname: dict(iface)
@@ -934,9 +937,57 @@ def _metal_server(
         "interfaces": interfaces,
     }
     if merged.get("redfish") is True:
+        if not merged["bmc"].get("ip"):
+            raise ConfigError(
+                f"{where}: redfish is enabled but the machine has no bmc.ip to talk to"
+            )
         for key in ("username", "password"):
             _secret(f"bmc.{key}", merged["bmc"].get(key), where)
-    return MetalServer(name=name, group=group_name, **_metal_fields(merged, where, cluster))
+    fields = _metal_fields(merged, where, network.cluster)
+    _check_metal_cabling(fields["interfaces"], network.external, where)
+    return MetalServer(name=name, group=group_name, **fields)
+
+
+def _check_metal_cabling(
+    interfaces: dict[str, MetalInterface], external: L2Network | None, where: str
+) -> None:
+    """The cabling plan every metal machine must load with.
+
+    Exactly one `cluster` link carries the machine's static address -- the only
+    known way to reach it, since it belongs to no provider inventory -- at most
+    one `external` link rides the external network, and an `external` link
+    needs a `network.external` block describing it. `link_name` and `vlan`
+    name an external link's VLAN child, so they are refused on any other link.
+    """
+    cluster = [n for n, i in interfaces.items() if "cluster" in i.role]
+    if len(cluster) != 1:
+        raise ConfigError(
+            f"{where}: exactly one interface with the cluster role is required "
+            f"(got {', '.join(sorted(cluster)) or 'none'})"
+        )
+    external_links = [n for n, i in interfaces.items() if "external" in i.role]
+    if len(external_links) > 1:
+        raise ConfigError(
+            f"{where}: at most one interface with the external role is supported "
+            f"(got {', '.join(sorted(external_links))})"
+        )
+    if external_links and external is None:
+        raise ConfigError(
+            f"{where}: interface {external_links[0]} has the external role but "
+            "cluster.yaml has no network.external block"
+        )
+    if not interfaces[cluster[0]].ip:
+        raise ConfigError(
+            f"{where}: interface {cluster[0]} has the cluster role but no static "
+            "address, so there is no known ip to reach the machine on"
+        )
+    for ifname, iface in interfaces.items():
+        stray = [k for k in ("link_name", "vlan") if getattr(iface, k)]
+        if "external" not in iface.role and stray:
+            raise ConfigError(
+                f"{where}: interface {ifname} sets {', '.join(stray)} but has no "
+                "external role; they name the external link's VLAN child"
+            )
 
 
 def _metal_fields(
@@ -978,6 +1029,13 @@ def _metal_l2(raw: dict[str, Any], where: str, cluster: L2Network) -> L2Network:
     if not raw:
         return cluster
     _reject_unknown_keys(raw, where, _L2_KEYS)
+    # the API VIP is a cluster-wide fact read from network.cluster or
+    # network.external; a metal L2 claiming its own would be silently ignored
+    if "kubeapi_vip" in raw:
+        raise ConfigError(
+            f"{where}: kubeapi_vip is read from network.cluster or "
+            "network.external; a metal network does not carry one"
+        )
     # _validate_l2 names cluster.yaml itself, so it takes the path without it
     return _l2_network(
         {k: v for k, v in raw.items() if v is not None},
@@ -1034,6 +1092,8 @@ def _metal_interface_role(value: Any, where: str) -> tuple[str, ...]:
         raise ConfigError(
             f"{where} must be 'cluster', 'external', 'pxe', or a list of those"
         )
+    if len(set(roles)) != len(roles):
+        raise ConfigError(f"{where} must not repeat a role")
     return roles
 
 
@@ -1079,7 +1139,7 @@ def _metal_bmc(raw: dict[str, Any], where: str) -> MetalBmc:
 
 
 def _provider_config(
-    d: dict[str, Any], where: str, cluster: L2Network
+    d: dict[str, Any], where: str, network: NetworkConfig
 ) -> tuple[ProviderConfig | None, MetalConfig | None]:
     """The selected VM provider plus the optional `metal` section.
 
@@ -1134,7 +1194,7 @@ def _provider_config(
                 token_id=provider_map.get("token_id") or "",
                 token_secret=provider_map.get("token_secret") or "",
             )
-    metal = _metal_config(d, where, cluster) if "metal" in d else None
+    metal = _metal_config(d, where, network) if "metal" in d else None
     return provider, metal
 
 
@@ -1324,7 +1384,7 @@ def load_config(root: Path) -> Config:
     network = _network_config(d, where)
     _reject_unknown_keys(_mapping(d.get("kubernetes"), f"{where}: kubernetes"),
                          f"{where}: kubernetes", _KUBERNETES_KEYS)
-    provider, metal = _provider_config(d, where, network.cluster)
+    provider, metal = _provider_config(d, where, network)
     cfg = Config(
         name=require(d, "name", where=where),
         talos_version=require(d, "talos", "version", where=where),

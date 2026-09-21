@@ -66,7 +66,9 @@ METAL = {
         "role": "worker",
         "disk": "/dev/sda",
         "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
-        "servers": {"rp001": {}},
+        "servers": {
+            "rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.22.5/24"}}},
+        },
     },
 }
 
@@ -107,7 +109,9 @@ def test_no_kubespan_rule_without_another_l2(make_config):
         "rack": {
             "role": "worker",
             "disk": "/dev/sda",
-            "servers": {"rp001": {}},
+            "servers": {
+                "rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}},
+            },
         },
     }})
     rules = _rules(machineconfig._firewall_docs(same_l2))

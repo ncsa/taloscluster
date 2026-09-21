@@ -232,7 +232,9 @@ METAL = {"metal": {
         "role": "worker",
         "disk": "/dev/sda",
         "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
-        "servers": {"rp001": {}},
+        "servers": {
+            "rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.22.5/24"}}},
+        },
     },
 }}
 

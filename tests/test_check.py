@@ -257,7 +257,13 @@ def test_missing_metal_node_is_incomplete(cluster_dir, upstream, nodes, capsys):
                     "worker": {
                         "role": "worker",
                         "disk": "/dev/sda",
-                        "servers": {"rp001-worker": {}},
+                        "servers": {
+                            "rp001-worker": {
+                                "interfaces": {
+                                    "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
+                                }
+                            },
+                        },
                     },
                 },
             }

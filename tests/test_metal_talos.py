@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from taloscluster.config import ConfigError
 from taloscluster.metal import talos as metal_talos
 from taloscluster.talos import machineconfig
 
@@ -627,16 +628,15 @@ def test_metal_control_plane_states_the_vip_on_its_link(
     ],
 )
 def test_metal_cabling_plan_is_checked(make_config, interfaces, external, message):
-    """Broken cabling plans refuse to generate a configuration."""
-    cfg = _cfg(make_config, metal={
-        "role": "worker",
-        "disk": "/dev/sda",
-        "interfaces": interfaces,
-        "servers": {"rp001": {}},
-    }, external=external)
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
-    with pytest.raises(Exception, match=message):
-        metal_talos.network_docs(server, cfg)
+    """Broken cabling plans refuse to load, so plan never passes a metal
+    section the machine configuration could never be generated for."""
+    with pytest.raises(ConfigError, match=message):
+        _cfg(make_config, metal={
+            "role": "worker",
+            "disk": "/dev/sda",
+            "interfaces": interfaces,
+            "servers": {"rp001": {}},
+        }, external=external)
 
 
 def test_metal_external_interface_needs_a_vlan(make_config):

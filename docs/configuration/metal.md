@@ -45,7 +45,7 @@ The Kubernetes role of every machine in the group; a server may override it.
 
 Optional · boolean · default `false`
 
-Whether taloscluster may talk to the machines' BMCs. Redfish is how the machines are powered and booted from their install media; `false` never touches the BMC, so the operator boots the machines into maintenance mode themselves (PXE, USB) and [`join`](../commands.md#metal) becomes wait, apply and verify, while `inspect`, `boot` and `eject` skip the BMC with a notice. Enabling it requires real BMC credentials for every machine in the group; see [`metal.<group>.bmc`](#metalgroupbmc).
+Whether taloscluster may talk to the machines' BMCs. Redfish is how the machines are powered and booted from their install media; `false` never touches the BMC, so the operator boots the machines into maintenance mode themselves (PXE, USB) and [`join`](../commands.md#metal) becomes wait, apply and verify, while `inspect`, `boot` and `eject` skip the BMC with a notice. Enabling it requires a BMC address and real BMC credentials for every machine in the group; see [`metal.<group>.bmc`](#metalgroupbmc).
 
 ### `metal.<group>.disk`
 
@@ -57,19 +57,19 @@ The device the machines install Talos onto, such as `/dev/sda`; a server may ove
 
 Optional · mapping · default [`network.cluster`](network.md#networkcluster)
 
-The layer-2 network this group's machines sit on, with the same keys as [`network.cluster`](network.md#networkcluster). A group on the same L2 as the VM provider's machines omits it, and a server may override it with an L2 of its own. A group — or a single server that overrides it — on a different L2 requires a `gateway`, the machine's only route to the rest of the cluster, and [`talos.kubespan`](general.md#taloskubespan) enabled: the overlay is what carries the group's pod traffic to the rest of the cluster. A network naming the cluster L2's `cidr` describes the same wire and must agree with it on `mtu` and `vlan`, which every host on one layer-2 network shares (see [MTU](network.md#mtu)).
+The layer-2 network this group's machines sit on, with the same keys as [`network.cluster`](network.md#networkcluster) except `kubeapi_vip`: the API VIP is a cluster-wide address read from [`network.cluster`](network.md#networkclusterkubeapi_vip) or [`network.external`](network.md#networkexternalkubeapi_vip), and a metal network naming its own is refused rather than silently ignored. A group on the same L2 as the VM provider's machines omits it, and a server may override it with an L2 of its own. A group — or a single server that overrides it — on a different L2 requires a `gateway`, the machine's only route to the rest of the cluster, and [`talos.kubespan`](general.md#taloskubespan) enabled: the overlay is what carries the group's pod traffic to the rest of the cluster. A network naming the cluster L2's `cidr` describes the same wire and must agree with it on `mtu` and `vlan`, which every host on one layer-2 network shares (see [MTU](network.md#mtu)).
 
 ### `metal.<group>.interfaces`
 
 Optional · mapping of interface name to interface
 
-Each key is a machine's interface name as the OS will see it, and each interface says what the link is for and, where it is statically addressed, with which address. A server may override an interface's settings by name and add interfaces of its own.
+Each key is a machine's interface name as the OS will see it, and each interface says what the link is for and, where it is statically addressed, with which address. A server may override an interface's settings by name and add interfaces of its own. The merged cabling plan of every machine is checked when the configuration loads, so a machine that could never be joined refuses to load instead of failing at first [`metal join`](../commands.md#metal): exactly one interface carries the `cluster` role and its static address, at most one carries the `external` role, and an `external` role requires a [`network.external`](network.md#networkexternal) block.
 
 ### `metal.<group>.interfaces.<name>.role`
 
 Required · `cluster`, `external`, `pxe`, or a list of those
 
-What the link is for: `pxe` is the boot/maintenance link, `cluster` carries the [`network.cluster`](network.md#networkcluster) node network and `external` the [`network.external`](network.md#networkexternal) one. One interface may carry several roles as a list — a NIC that sits on both the cluster and the external network is `[cluster, external]`.
+What the link is for: `pxe` is the boot/maintenance link, `cluster` carries the [`network.cluster`](network.md#networkcluster) node network and `external` the [`network.external`](network.md#networkexternal) one. One interface may carry several roles as a list — a NIC that sits on both the cluster and the external network is `[cluster, external]` — with each role named at most once.
 
 The roles decide what the generated machine configuration puts on the link. Every link states `dhcp: false`, so nothing picks up an unexpected lease. A `cluster` link carries its static address and the default route via the group network's gateway; a jumbo group network states the MTU on the link and clamps the route to 1500. An `external` link's configuration rides a VLAN child of the port, created on top of the parent: it carries the machine's anchor address from [`network.external.anchor_cidr`](network.md#networkexternalanchor_cidr) and the routes to the external network, and the machine runs the [return-path static pod](../providers/metal.md) that marks connections entering the child so replies return through the external gateway. A `pxe` link carries nothing else — it exists so the machine can boot and be reached in maintenance mode.
 
@@ -77,7 +77,7 @@ The roles decide what the generated machine configuration puts on the link. Ever
 
 Optional · IPv4 address with an optional `/prefix` · default none
 
-The static address of the link. Without a `/prefix` the link network's prefix length is used. On a link carrying both roles the address belongs to the `cluster` side; a dedicated `external` link's address rides its VLAN child. A `cluster` link's address must sit inside the machine's own L2 — carrying that L2's prefix length when one is written — and must not be the [`kubeapi_vip`](network.md#networkclusterkubeapi_vip) or another machine's address: the loader refuses either collision rather than letting two machines answer for one address.
+The static address of the link. Without a `/prefix` the link network's prefix length is used. On a link carrying both roles the address belongs to the `cluster` side; a dedicated `external` link's address rides its VLAN child. A `cluster` link must carry one — it is the only address the machine is known to answer on — and it must sit inside the machine's own L2, carrying that L2's prefix length when one is written, and must not be the [`kubeapi_vip`](network.md#networkclusterkubeapi_vip) or another machine's address: the loader refuses either collision rather than letting two machines answer for one address.
 
 ### `metal.<group>.interfaces.<name>.dns`
 
@@ -89,19 +89,19 @@ The resolvers written into the machine's generated configuration; the first inte
 
 Optional · non-empty string · default `<interface>.<vlan>`
 
-The name of the VLAN child link an `external` role creates, instead of the default `<interface>.<vlan>`.
+The name of the VLAN child link an `external` role creates, instead of the default `<interface>.<vlan>`. It describes that child and nothing else, so an interface without the `external` role is refused for setting it.
 
 ### `metal.<group>.interfaces.<name>.vlan`
 
 Optional · integer 1-4094 · default [`network.external.vlan`](network.md#networkexternalvlan)
 
-The VLAN id tagged on an `external` link's VLAN child, instead of the external network's own.
+The VLAN id tagged on an `external` link's VLAN child, instead of the external network's own. Like `link_name`, it is refused on an interface without the `external` role.
 
 ### `metal.<group>.bmc`
 
 Optional · mapping
 
-The Redfish settings every machine in the group starts from: `ip` (the BMC's IPv4 address), `username` and `password`. The credentials are ordinary cluster settings: like every other key they may live in `secrets.yaml` or any included file instead of `cluster.yaml` — where `init --metal` scaffolds them. A [`redfish`](#metalgroupredfish) group must end up with a real `username` and `password` for every machine once each server's overrides merge in — an empty or still-scaffolded `CHANGE-ME` value refuses to load.
+The Redfish settings every machine in the group starts from: `ip` (the BMC's IPv4 address), `username` and `password`. The credentials are ordinary cluster settings: like every other key they may live in `secrets.yaml` or any included file instead of `cluster.yaml` — where `init --metal` scaffolds them. A [`redfish`](#metalgroupredfish) group must end up with an `ip` and a real `username` and `password` for every machine once each server's overrides merge in — a machine without the address, or with an empty or still-scaffolded `CHANGE-ME` credential, refuses to load.
 
 ### `metal.<group>.servers`
 

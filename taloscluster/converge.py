@@ -1428,7 +1428,7 @@ def _apply_configs(
             continue
         if not kubectl.node_exists(kubeconfig, server.name):
             continue
-        work.append((server.name, server.role, metal_talos.cluster_ip(server, cfg)))
+        work.append((server.name, server.role, metal_talos.cluster_ip(server)))
     work.sort(key=lambda w: 0 if w[1] == "controlplane" else 1)
     applied = 0
     for host, role, address in work:
@@ -1542,7 +1542,7 @@ def _reconcile_talos(
         if not kubectl.node_exists(kubeconfig, server.name):
             continue
         targets.append(
-            (server.name, server.role, metal_talos.cluster_ip(server, cfg),
+            (server.name, server.role, metal_talos.cluster_ip(server),
              metal_installer, metal_schematic)
         )
     targets.sort(key=lambda t: 0 if t[1] == "controlplane" else 1)

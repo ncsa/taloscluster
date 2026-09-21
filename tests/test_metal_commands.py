@@ -14,7 +14,7 @@ import pytest
 import requests
 
 from taloscluster import converge
-from taloscluster.config import MetalBmc
+from taloscluster.config import ConfigError, MetalBmc
 from taloscluster.errors import ReconcileError
 from taloscluster.k8s import kubectl
 from taloscluster.metal import commands, redfish
@@ -122,7 +122,7 @@ def test_find_server_and_cluster_ip(make_config):
     cfg = _cfg(make_config)
     server = commands._find_server(cfg, "rp001")
     assert server.group == "phoenix"
-    assert commands._cluster_ip(server, cfg) == "172.29.21.5"
+    assert commands._cluster_ip(server) == "172.29.21.5"
 
 
 def test_find_server_rejects_unknown_names(make_config):
@@ -132,14 +132,16 @@ def test_find_server_rejects_unknown_names(make_config):
 
 
 def test_cluster_ip_requires_a_static_address(make_config):
+    """A cluster link without a static address can never be reached, so the
+    configuration is refused at load, not at first `metal wait`/`apply`."""
     metal = {
         **GROUP,
-        "servers": {"rp001": {"interfaces": {"enp2s0f0": {}}}},
+        "servers": {
+            "rp001": {"bmc": {"ip": "198.51.100.10"}, "interfaces": {"enp2s0f0": {}}}
+        },
     }
-    cfg = _cfg(make_config, metal)
-    server = commands._find_server(cfg, "rp001")
-    with pytest.raises(Exception, match="no static address"):
-        commands._cluster_ip(server, cfg)
+    with pytest.raises(ConfigError, match="no static address"):
+        _cfg(make_config, metal)
 
 
 def test_bmc_skips_a_redfish_disabled_server(make_config, capsys):
@@ -150,11 +152,12 @@ def test_bmc_skips_a_redfish_disabled_server(make_config, capsys):
     assert "redfish disabled" in capsys.readouterr().out
 
 
-def test_bmc_refuses_a_server_without_a_bmc_address(make_config):
+def test_bmc_address_is_required_at_load(make_config):
+    """A `redfish: true` machine without a bmc.ip has nothing to talk to, so
+    the configuration is refused at load, not at first `metal boot`."""
     metal = {**GROUP, "servers": {"rp001": {}}}
-    server = commands._find_server(_cfg(make_config, metal), "rp001")
-    with pytest.raises(ReconcileError, match="no bmc.ip"):
-        commands._bmc(server)
+    with pytest.raises(ConfigError, match="no bmc.ip"):
+        _cfg(make_config, metal)
 
 
 def test_iso_url_boots_the_base_extension_image(make_config, stub_factory):
@@ -270,7 +273,13 @@ def test_boot_skips_a_server_that_turns_redfish_off(
     """A server may opt out of its group's redfish; the merged flag decides."""
     metal = {
         **GROUP,
-        "servers": {"rp001": {"redfish": False, "bmc": {"ip": "198.51.100.10"}}},
+        "servers": {
+            "rp001": {
+                "redfish": False,
+                "bmc": {"ip": "198.51.100.10"},
+                "interfaces": {"enp2s0f0": {"ip": "172.29.21.5/24"}},
+            }
+        },
     }
     _cfg(make_config, metal)
     commands.boot(tmp_path, "rp001")

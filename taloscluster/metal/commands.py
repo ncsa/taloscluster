@@ -80,21 +80,19 @@ def _bmc(server: MetalServer) -> redfish.Redfish | None:
     """The Redfish client for one machine's controller.
 
     A machine whose redfish is off never touches its BMC: the caller gets
-    None after the notice, and skips whatever it needed the BMC for.
+    None after the notice, and skips whatever it needed the BMC for. The
+    loader refuses a `redfish: true` machine without a bmc.ip, so a client
+    is always constructible here.
     """
     if not server.redfish:
         _no_bmc(server)
         return None
-    if not server.bmc.ip:
-        raise ReconcileError(
-            f"metal server {server.name} has no bmc.ip to talk to"
-        )
     return redfish.Redfish(server.bmc)
 
 
-def _cluster_ip(server: MetalServer, cfg: Config) -> str:
+def _cluster_ip(server: MetalServer) -> str:
     """The static address on the machine's cluster link, where apid answers."""
-    return metal_talos.cluster_ip(server, cfg)
+    return metal_talos.cluster_ip(server)
 
 
 def _iso_url(cfg: Config) -> str:
@@ -136,7 +134,7 @@ def boot(root: Path, name: str, *, serve: bool = False, foreground: bool = True)
     rf = _bmc(server)
     if rf is None:
         return
-    _refuse_joined(root, cfg, server)
+    _refuse_joined(root, server)
     iso_url = _iso_url(cfg)
     if rf.eject_media():
         info(f"ejected the media already mounted on {server.bmc.ip}")
@@ -165,7 +163,7 @@ def wait(root: Path, name: str, *, timeout_s: int = WAIT_TIMEOUT_S,
     """Poll for the maintenance-mode apid on the machine's cluster address."""
     cfg = load_config(root)
     server = _find_server(cfg, name)
-    ip = _cluster_ip(server, cfg)
+    ip = _cluster_ip(server)
     info(f"waiting for the maintenance apid on {ip} (up to {timeout_s // 60}m)...")
     deadline = time.monotonic() + timeout_s
     while not talosctl.maintenance_reachable(ip):
@@ -194,7 +192,7 @@ def apply(root: Path, name: str) -> None:
     """
     cfg = load_config(root)
     server = _find_server(cfg, name)
-    _refuse_joined(root, cfg, server)
+    _refuse_joined(root, server)
     secrets = State(root).require_secrets()
     kubeconfig = root / "kubeconfig"
     # a non-empty kubeconfig is the bootstrap signal converge itself uses
@@ -210,7 +208,7 @@ def apply(root: Path, name: str) -> None:
     with os.fdopen(fd, "w") as fh:
         fh.write(config_yaml)
     info(f"machine config: {path}")
-    talosctl.apply_config_insecure(_cluster_ip(server, cfg), config_yaml)
+    talosctl.apply_config_insecure(_cluster_ip(server), config_yaml)
 
 
 def eject(root: Path, name: str) -> None:
@@ -232,7 +230,7 @@ def verify(root: Path, name: str, *, timeout_s: int = VERIFY_TIMEOUT_S,
     """Wait for the node to leave maintenance mode and answer as configured."""
     cfg = load_config(root)
     server = _find_server(cfg, name)
-    ip = _cluster_ip(server, cfg)
+    ip = _cluster_ip(server)
     talosconfig = root / "talosconfig"
     if not talosconfig.is_file():
         # no client config yet (a cluster's first node): derive a throwaway one
@@ -281,7 +279,7 @@ def join(root: Path, name: str, *, serve: bool = False) -> None:
     """
     cfg = load_config(root)
     server = _find_server(cfg, name)
-    _refuse_joined(root, cfg, server)
+    _refuse_joined(root, server)
     if server.redfish:
         boot(root, name, serve=serve, foreground=False)
     else:
@@ -293,7 +291,7 @@ def join(root: Path, name: str, *, serve: bool = False) -> None:
     verify(root, name)
 
 
-def _refuse_joined(root: Path, cfg: Config, server: MetalServer) -> None:
+def _refuse_joined(root: Path, server: MetalServer) -> None:
     """Refuse a machine that already runs this cluster's configuration.
 
     boot, apply and join would drive it back through the install media,
@@ -302,7 +300,7 @@ def _refuse_joined(root: Path, cfg: Config, server: MetalServer) -> None:
     talosconfig = root / "talosconfig"
     if not talosconfig.is_file():
         return
-    ip = _cluster_ip(server, cfg)
+    ip = _cluster_ip(server)
     if not talosctl.maintenance_reachable(ip) and talosctl.reachable(
         talosconfig, endpoint=ip, node=ip
     ):

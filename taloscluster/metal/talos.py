@@ -58,22 +58,16 @@ def _pre_1_14(cfg: Config) -> bool:
     return versions.is_older(cfg.talos_version, HOSTNAME_DOCUMENT_VERSION)
 
 
-def cluster_ip(server: MetalServer, cfg: Config) -> str:
+def cluster_ip(server: MetalServer) -> str:
     """The static address on the machine's cluster link, where apid answers.
 
     A metal machine belongs to no provider inventory and reports no guest
     agent, so this address is the only way to reach it -- converge pushes the
-    machine's configuration and its Talos upgrades here.
+    machine's configuration and its Talos upgrades here. The loader refuses a
+    machine whose cluster link has no static address.
     """
-    interfaces = _check_cabling(server, cfg)
-    ifname = next(n for n, i in interfaces.items() if "cluster" in i.role)
-    ip = interfaces[ifname].ip.split("/", 1)[0]
-    if not ip:
-        raise ConfigError(
-            f"metal server {server.name}: its cluster interface {ifname} has no "
-            "static address, so there is no known ip to reach it on"
-        )
-    return ip
+    ifname = next(n for n, i in server.interfaces.items() if "cluster" in i.role)
+    return server.interfaces[ifname].ip.split("/", 1)[0]
 
 
 def installer(cfg: Config) -> tuple[str, str]:
@@ -139,7 +133,7 @@ def _external_child(server: MetalServer, cfg: Config, ifname: str,
                     iface: MetalInterface) -> tuple[int, str]:
     """The VLAN id and link name of an external interface's VLAN child."""
     ext = cfg.network.external
-    assert ext is not None  # callers refuse the external role without a block
+    assert ext is not None  # the loader refuses the external role without a block
     vlan = iface.vlan if iface.vlan is not None else ext.vlan
     if vlan is None:
         raise ConfigError(
@@ -147,34 +141,6 @@ def _external_child(server: MetalServer, cfg: Config, ifname: str,
             "set network.external.vlan or the interface's vlan"
         )
     return vlan, iface.link_name or f"{ifname}.{vlan}"
-
-
-def _check_cabling(server: MetalServer, cfg: Config) -> dict[str, MetalInterface]:
-    """The cabling plan a machine's configuration is built from, checked.
-
-    Exactly one `cluster` link carries the node L2 (its static address and the
-    default route), at most one `external` link rides the external network, and
-    an `external` link needs a `network.external` block describing it.
-    """
-    interfaces = server.interfaces
-    cluster = [n for n, i in interfaces.items() if "cluster" in i.role]
-    if len(cluster) != 1:
-        raise ConfigError(
-            f"metal server {server.name}: exactly one interface with the "
-            f"cluster role is required (got {', '.join(sorted(cluster)) or 'none'})"
-        )
-    external = [n for n, i in interfaces.items() if "external" in i.role]
-    if len(external) > 1:
-        raise ConfigError(
-            f"metal server {server.name}: at most one interface with the "
-            f"external role is supported (got {', '.join(sorted(external))})"
-        )
-    if external and cfg.network.external is None:
-        raise ConfigError(
-            f"metal server {server.name}: interface {external[0]} has the "
-            "external role but cluster.yaml has no network.external block"
-        )
-    return interfaces
 
 
 def network_docs(server: MetalServer, cfg: Config) -> list[dict]:
@@ -203,8 +169,14 @@ def device_entries(server: MetalServer, cfg: Config) -> list[dict]:
 
 
 def _cabling(server: MetalServer, cfg: Config) -> tuple[list[dict], list[dict]]:
-    """(new-style link documents, classic device entries) for one machine."""
-    interfaces = _check_cabling(server, cfg)
+    """(new-style link documents, classic device entries) for one machine.
+
+    The loader has checked the cabling plan
+    (:func:`~taloscluster.config._check_metal_cabling`), so exactly one link
+    carries the cluster role and an `external` link implies a
+    `network.external` block.
+    """
+    interfaces = server.interfaces
     ext = cfg.network.external
     docs: list[dict] = []
     entries: list[dict] = []
