@@ -22,7 +22,7 @@ A BMC with no internet egress cannot fetch the factory ISO URL itself: run `meta
 taloscluster metal join rp001
 ```
 
-`join` runs the whole flow for one machine: boot, wait for the maintenance-mode apid on its cluster address, apply the generated machine configuration, eject the media, and verify that the node comes back with its configuration after installing Talos to `disk`. The generated configuration is kept at `.metal/<server>-<role>.yaml` in the cluster directory, mode 0600, because it carries the cluster's credentials. Every step can also be run on its own (`inspect`, `boot`, `wait`, `apply`, `eject`); see [`metal`](../commands.md#metal) for the syntax.
+`join` runs the whole flow for one machine: boot, wait for the maintenance-mode apid on its cluster address, apply the generated machine configuration, eject the media, and verify that the node comes back with its configuration after installing Talos to `disk`. The generated configuration is kept at `.metal/<server>-<role>.yaml` in the cluster directory, mode 0600, because it carries the cluster's credentials; `init` adds `.metal/` to the cluster's `.gitignore`, and `apply` warns when an older cluster directory does not ignore it yet. Every step can also be run on its own (`inspect`, `boot`, `wait`, `apply`, `eject`); see [`metal`](../commands.md#metal) for the syntax.
 
 ## Without Redfish
 

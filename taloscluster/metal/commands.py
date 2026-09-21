@@ -36,7 +36,7 @@ from ..config import Config, ConfigError, MetalServer, load_config
 from ..converge import _config_kubernetes_version
 from ..errors import ReconcileError
 from ..naming import BASE_EXTENSIONS
-from ..output import action, info, report
+from ..output import action, info, report, warn
 from ..state import State
 from ..talos import factory, talosctl
 from . import redfish
@@ -177,12 +177,32 @@ def wait(root: Path, name: str, *, timeout_s: int = WAIT_TIMEOUT_S,
     info(f"{name} is up in maintenance mode on {ip}")
 
 
+def _warn_unignored(root: Path) -> None:
+    """Warn when the cluster directory's .gitignore does not cover `.metal/`.
+
+    Clusters scaffolded before the entry was added to the scaffold lack it,
+    and the generated machine config carries the cluster's credentials.
+    """
+    gitignore = root / ".gitignore"
+    present = (
+        {line.strip() for line in gitignore.read_text().splitlines()}
+        if gitignore.is_file()
+        else set()
+    )
+    if ".metal/" not in present:
+        warn(
+            f"{gitignore} does not ignore .metal/: the generated machine config "
+            "carries the cluster's credentials -- add .metal/ to it"
+        )
+
+
 def apply(root: Path, name: str) -> None:
     """Generate the machine config and push it to the maintenance-mode node.
 
     The generated config is kept at `.metal/<name>-<role>.yaml` in the cluster
     directory: it carries the cluster's credentials, so it is written mode 0600
-    and the scaffold keeps `.metal/` out of git.
+    and the scaffold keeps `.metal/` out of git. A directory scaffolded before
+    the entry existed gets a warning until its .gitignore covers it.
 
     On a bootstrapped cluster the config bakes the RUNNING kubernetes version,
     through the same helper converge's machine-config phase uses: applying the
@@ -202,6 +222,7 @@ def apply(root: Path, name: str) -> None:
         kubernetes_version=_config_kubernetes_version(cfg, kubeconfig, bootstrapped),
     )
     out_dir = root / ".metal"
+    _warn_unignored(root)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{name}-{server.role}.yaml"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

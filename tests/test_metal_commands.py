@@ -370,6 +370,44 @@ def test_apply_generates_and_pushes_the_config(
     assert seen["kubernetes_version"] == "v1.31.0"
 
 
+def test_apply_warns_when_gitignore_does_not_cover_metal(
+    make_config, tmp_path, monkeypatch, stub_factory, capsys
+):
+    """Clusters scaffolded before the scaffold wrote the .metal/ entry have no
+    ignore entry: apply warns, since the generated config carries the cluster's
+    credentials."""
+    _cfg(make_config)
+    (tmp_path / "talossecrets.yaml").write_text("dummy")
+    monkeypatch.setattr(
+        commands.metal_talos, "build_config", lambda *_a, **_k: "# config\n"
+    )
+    monkeypatch.setattr(
+        commands.talosctl, "apply_config_insecure", lambda node, config: None
+    )
+
+    commands.apply(tmp_path, "rp001")
+
+    assert "does not ignore .metal/" in capsys.readouterr().err
+
+
+def test_apply_is_quiet_when_gitignore_covers_metal(
+    make_config, tmp_path, monkeypatch, stub_factory, capsys
+):
+    _cfg(make_config)
+    (tmp_path / "talossecrets.yaml").write_text("dummy")
+    (tmp_path / ".gitignore").write_text("secrets.yaml\n.metal/\n")
+    monkeypatch.setattr(
+        commands.metal_talos, "build_config", lambda *_a, **_k: "# config\n"
+    )
+    monkeypatch.setattr(
+        commands.talosctl, "apply_config_insecure", lambda node, config: None
+    )
+
+    commands.apply(tmp_path, "rp001")
+
+    assert capsys.readouterr().err == ""
+
+
 def test_apply_bakes_the_running_version_of_a_bootstrapped_cluster(
     make_config, tmp_path, monkeypatch, stub_factory
 ):

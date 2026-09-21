@@ -8,6 +8,7 @@ talossecrets.yaml
 secrets.yaml
 cluster.yaml
 infra.yaml
+.metal/
 *.swp
 
 /openstack/
