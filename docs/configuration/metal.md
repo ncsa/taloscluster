@@ -12,25 +12,33 @@ Each key names a group of bare-metal machines and maps to that group's settings,
 
 ```yaml
 metal:
-  phoenix:
+  rack1:
     role: worker
     redfish: true
     disk: /dev/sda
     network:                            # optional; defaults to network.cluster
-      cidr: 172.29.21.0/24
-      gateway: 172.29.21.1
+      cidr: 192.168.8.0/24
+      gateway: 192.168.8.1
       mtu: 9000
     interfaces:
       enp1s0f0: { role: pxe }
       enp2s0f0: { role: [cluster, external], dns: [192.0.2.53] }
+    servers:
+      srv01:
+        bmc: { ip: 192.168.8.51 }
+        interfaces:
+          enp2s0f0: { ip: 192.168.8.11/24 }
+```
+
+The group's BMC credentials are ordinary secrets: they live in `secrets.yaml` — or any file [`include`](general.md#include) names, the way `init --metal` scaffolds them — and merge into every machine in the group:
+
+```yaml
+# secrets.yaml
+metal:
+  rack1:
     bmc:
       username: root
       password: CHANGE-ME
-    servers:
-      rp001:
-        bmc: { ip: 172.28.50.5 }
-        interfaces:
-          enp2s0f0: { ip: 172.29.21.5/24 }
 ```
 
 A group states the defaults every machine in `servers` starts from, and each server overrides them for its own machine: plain settings (`role`, `redfish`, `disk`, `network`) are replaced when the server sets one, while `bmc` merges key by key and `interfaces` merge per interface, so the group can carry the credentials and the cabling plan and each server adds only its own addresses. The [`metal` commands](../commands.md#metal) then join the machines: they boot them from the Talos install ISO (through the BMC's virtual media, or served over the LAN with `--serve`), push the generated machine configuration to each machine in maintenance mode, and verify it came back with it.

@@ -105,7 +105,7 @@ taloscluster metal wait SERVER
 taloscluster metal apply SERVER
 taloscluster metal eject SERVER
 taloscluster metal join SERVER [--serve]
-taloscluster metal join rp001 --serve
+taloscluster metal join srv01 --serve
 ```
 
 Join the bare-metal machines of a [`metal`](configuration/metal.md) section. Every command names one machine — a `metal.<group>.servers` key. `inspect` prints a Redfish summary of the machine's power state, one-time boot setting, NICs and disks. `boot` mounts the Talos install ISO in the machine's virtual media, sets a one-time boot from it and powers the machine on; `--serve` downloads that ISO and serves it from the machine running the command over the LAN instead of handing the BMC a factory URL, for a controller with no internet egress — a standalone `boot --serve` keeps serving until Ctrl-C, and `join` keeps serving while it waits and applies. `wait` polls for the maintenance-mode apid on the machine's cluster address, `apply` generates the machine config (written to `.metal/` in the cluster directory, mode 0600, since it carries cluster credentials) and pushes it to the maintenance-mode node, and `eject` unmounts the virtual media. `join` runs boot, wait, apply, eject and verify in order, where verify waits for the node to come back with its configuration and reports the Talos version it runs. A machine with [`redfish: false`](configuration/metal.md#metalgroupredfish) is never touched through its BMC: its `join` becomes wait, apply and verify, and `inspect`, `boot` and `eject` skip the BMC with a notice, leaving the operator to boot the machine into maintenance mode themselves.

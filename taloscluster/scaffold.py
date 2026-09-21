@@ -162,7 +162,7 @@ METAL_CLUSTER_SECTION = """\
 # bare-metal machines, joined with `taloscluster metal join`; each group is the
 # defaults its servers start from, and each server overrides its own
 metal:
-  phoenix:
+  rack1:
     role: worker
     redfish: false # set true once the BMC credentials in secrets.yaml are real
     disk: /dev/sda
@@ -173,7 +173,7 @@ metal:
       enp1s0f0: { role: pxe }
       enp2s0f0: { role: cluster }
     servers:
-      rp001:
+      srv01:
         bmc: { ip: 192.168.8.51 }
         interfaces:
           enp2s0f0: { ip: 192.168.8.11/24 }
@@ -183,7 +183,7 @@ METAL_SECRETS_SECTION = """\
 # bare-metal BMC credentials, per group; real values are required before a
 # group's `redfish: true` will load
 metal:
-  phoenix:
+  rack1:
     bmc:
       username: "CHANGE-ME"
       password: "CHANGE-ME"

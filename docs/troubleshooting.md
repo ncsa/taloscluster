@@ -57,7 +57,7 @@ Recovery: clear the pending state on the shared controller — apply or revert t
 `metal join`'s boot step mounts the Talos install ISO in the machine's virtual media and one-time boots it, but some BMCs never fetch a mounted URL or refuse the media; the machine never reaches maintenance mode and `metal wait` times out:
 
 ```
-rp001 did not answer the maintenance apid on 172.29.21.5 within 10m; is the machine booted from the install media and reachable on the cluster network?
+srv01 did not answer the maintenance apid on 192.168.8.11 within 10m; is the machine booted from the install media and reachable on the cluster network?
 ```
 
 Diagnostics: `taloscluster metal inspect SERVER` shows the machine's power state, boot setting and NIC summary — a machine that is powered on but still answers nothing on its cluster address after several minutes is stuck at the boot, not at the network.

@@ -11,6 +11,11 @@ tests so the drift they caught cannot come back silently:
   ``docs/configuration.md`` must load through the real ``load_config`` /
   ``load_config`` once the ``CHANGE-ME`` scaffold placeholders are replaced with
   real credential strings.
+- The ``metal:`` example on the metal configuration page must load the same
+  way -- its cluster.yaml block and the matching ``secrets.yaml`` block for the
+  group's BMC credentials, dropped into a provider-managed cluster -- and the
+  metal pages plus the ``init --metal`` scaffold must name placeholder machines
+  and networks, never the real site's hostnames and addresses.
 - Every ``[text](path.md#anchor)`` / ``[text](path.md)`` / ``[text](#anchor)``
   link across ``docs/`` must point at an existing markdown file and, when an
   anchor is given, at a header whose MkDocs slug matches.
@@ -36,6 +41,8 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 COMMANDS = DOCS / "commands.md"
 CONFIGURATION = DOCS / "configuration.md"
+METAL = DOCS / "configuration" / "metal.md"
+SCAFFOLD = ROOT / "taloscluster" / "scaffold.py"
 CLI = ROOT / "taloscluster" / "cli.py"
 README = ROOT / "README.md"
 MKDOCS = ROOT / "mkdocs.yml"
@@ -126,6 +133,89 @@ def test_complete_documented_example_loads(tmp_path):
     assert cfg.name
     assert cfg.provider_name in ("openstack", "proxmox")
     assert all(cfg.provider.credentials())
+
+
+def test_metal_documented_example_loads(tmp_path):
+    # The `metal:` example on the metal configuration page must stay loadable:
+    # a cluster.yaml block carrying the group, its cabling plan and its servers,
+    # plus a matching secrets.yaml block carrying the group's BMC credentials
+    # (the loader refuses a `redfish` group whose credentials are still the
+    # `CHANGE-ME` scaffold placeholders, so substitute a real one first). The
+    # example group sits on another L2, which loads only with the KubeSpan
+    # opt-in, and cables an `external` link, which needs a `network.external`
+    # block -- so drop both blocks into a minimal provider-managed cluster that
+    # supplies those, then run the real loader.
+    blocks = _yaml_blocks(METAL.read_text())
+    cluster_blocks = [b for b in blocks if "servers:" in b]
+    secrets_blocks = [b for b in blocks if "password:" in b]
+
+    assert cluster_blocks, "configuration/metal.md must keep a metal cluster.yaml example"
+    assert secrets_blocks, "configuration/metal.md must keep a matching secrets.yaml example"
+
+    cluster = yaml.safe_load(cluster_blocks[0])
+    secrets = _replace_scaffold(yaml.safe_load(secrets_blocks[0]))
+    assert len(cluster["metal"]) == 1
+
+    cluster.update({
+        "name": "mycluster",
+        "talos": {"version": "v1.13.8", "kubespan": True},
+        "kubernetes": {"version": "v1.36.1"},
+        "controlplane": {"count": 3, "cores": 4, "memory": 8, "disk": 40},
+        "workers": {"worker": {"count": 3, "cores": 8, "memory": 16, "disk": 100}},
+        "proxmox": {
+            "url": "https://pve.example.edu:8006",
+            "storage": "local-lvm",
+            "iso_storage": "local",
+            "network": {
+                "cluster": {"bridge": "vmbr0"},
+                "external": {"bridge": "vmbr0"},
+            },
+        },
+        "network": {
+            "cluster": {"cidr": "10.0.0.0/24", "kubeapi_vip": "10.0.0.10"},
+            "external": {
+                "cidr": "192.0.2.0/24",
+                "gateway": "192.0.2.1",
+                "anchor_cidr": "169.254.100.0/24",
+            },
+            "dns": ["192.0.2.53"],
+            "ntp": ["ntp.example.edu"],
+        },
+    })
+
+    (tmp_path / CLUSTER_FILE).write_text(yaml.safe_dump(cluster))
+    (tmp_path / SECRETS_FILE).write_text(yaml.safe_dump(secrets))
+
+    cfg = load_config(tmp_path)
+    assert cfg.provider_name == "proxmox"
+    # the secrets block's BMC credentials merged into the cluster block's server
+    group_name, group_cfg = next(iter(cfg.metal.groups.items()))
+    server_name, server = next(iter(group_cfg.servers.items()))
+    assert server.bmc.username == "root"
+    assert server.bmc.password == "a-real-placeholder-credential"
+    assert server_name and group_name
+
+
+def test_metal_examples_use_placeholder_names():
+    # `rp001` and `phoenix` are real site hostnames, 172.29.21.0/24 the real
+    # site's node network and 172.28.50.0/24 its BMC network; the metal examples
+    # across the docs and the `init --metal` scaffold must name placeholder
+    # machines and networks instead (the placeholder rule on the configuration
+    # overview page), exactly as the managed-SDN example was policed before.
+    real = ("rp001", "phoenix", "172.29.21.", "172.28.50.")
+    offenders = [
+        f"{path.relative_to(ROOT)}: {token}"
+        for path in (
+            COMMANDS,
+            DOCS / "providers" / "metal.md",
+            METAL,
+            DOCS / "troubleshooting.md",
+            SCAFFOLD,
+        )
+        for token in real
+        if token in path.read_text()
+    ]
+    assert not offenders, "real site names in the metal examples: " + "; ".join(offenders)
 
 
 # --------------------------------------------------------------------------- #

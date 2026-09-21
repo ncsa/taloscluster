@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Make the Redfish transport https-only unless `bmc.scheme` opts into http, and trim the virtual-media insert body to the image URL.
 - Warn when applying a metal machine config into a cluster directory whose gitignore does not ignore the generated configs.
 - Leave Tailscale off when a `tailscale:` section appears only in `secrets.yaml`.
+- Use placeholder machine and network names in the bare-metal examples and the init scaffold.
 
 ### Fixed
 

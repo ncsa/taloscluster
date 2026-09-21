@@ -149,7 +149,7 @@ def test_metal_scaffold_produces_a_loadable_pair(tmp_path, provider):
     secrets = yaml.safe_load((tmp_path / "secrets.yaml").read_text())
 
     # one example group carrying the settings every group needs
-    group = cluster["metal"]["phoenix"]
+    group = cluster["metal"]["rack1"]
     assert group["role"] == "worker"
     # the example group sits on another L2, which only loads with the KubeSpan
     # opt-in the scaffold writes into the talos section
@@ -161,7 +161,7 @@ def test_metal_scaffold_produces_a_loadable_pair(tmp_path, provider):
     assert group["interfaces"]
     assert group["servers"]
     # the BMC credentials are scaffolded into secrets.yaml, not cluster.yaml
-    assert secrets["metal"]["phoenix"]["bmc"] == {
+    assert secrets["metal"]["rack1"]["bmc"] == {
         "username": "CHANGE-ME",
         "password": "CHANGE-ME",
     }
@@ -169,7 +169,7 @@ def test_metal_scaffold_produces_a_loadable_pair(tmp_path, provider):
 
     cfg = load_config(tmp_path)
     assert cfg.provider_name == provider
-    assert cfg.metal.groups["phoenix"].servers["rp001"].bmc.username == "CHANGE-ME"
+    assert cfg.metal.groups["rack1"].servers["srv01"].bmc.username == "CHANGE-ME"
 
 
 def test_metal_init_without_a_provider_is_refused(tmp_path):
