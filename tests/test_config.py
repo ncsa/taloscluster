@@ -102,7 +102,7 @@ def test_tailscale_extension_dropped_without_tailscale_section(make_config):
     # the boot ISO still bakes it, but the installed system (install.image
     # schematic) omits tailscale when no tailscale: section is configured
     cfg = make_config()
-    assert "tailscale" not in cfg.raw
+    assert not cfg.tailscale_enabled
     for m in cfg.machines.values():
         assert "siderolabs/tailscale" not in m.extensions
         assert "siderolabs/qemu-guest-agent" in m.extensions
@@ -1920,6 +1920,25 @@ def test_proxmox_vip_rejected_when_in_neither_section(make_config):
         )
 
 
+def test_proxmox_vip_outside_the_cluster_cidr_is_refused(make_config):
+    """The VIP must sit inside network.cluster.cidr; the check lives on the
+    L2 block, which the Proxmox branch of validation does not re-do."""
+    with pytest.raises(ConfigError, match="kubeapi_vip must be inside network.cluster.cidr"):
+        make_config(
+            {
+                "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+                "network": {"cluster": {"kubeapi_vip": "203.0.113.10"}},
+                "proxmox": {
+                    "url": "https://pve.example:8006",
+                    "storage": "vms",
+                    "iso_storage": "isos",
+                    "network": {"cluster": {"bridge": "vmbr0"}},
+                },
+            },
+            remove=("openstack",),
+        )
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
@@ -2305,11 +2324,11 @@ def test_unknown_top_level_cluster_key_lists_every_unknown(make_config):
         make_config({"anemia": 1, "mistkes": 2})
 
 
-def test_installed_plugin_sections_are_retained(make_config):
+def test_installed_plugin_sections_are_retained(make_config, tmp_path):
     """An `argocd:` / `rancher:` section is valid because the plugin owns it."""
-    cfg = make_config({"argocd": {"admins": [], "users": []},
-                       "rancher": {"admins": [], "users": []}})
-    assert cfg.raw["argocd"]["admins"] == []
+    make_config({"argocd": {"admins": [], "users": []}, "rancher": {"admins": [], "users": []}})
+    raw, _ = load_raw(tmp_path)
+    assert raw["argocd"]["admins"] == []
 
 
 def test_unknown_top_level_secrets_key_is_rejected(make_config, tmp_path):

@@ -51,9 +51,9 @@ def _provider(cfg: Config) -> ProxmoxConfig:
 def external_network(cfg: Config) -> dict[str, Any]:
     """The directly routed external NIC settings, or an empty mapping.
 
-    The L2 facts come from `cfg.network.external`, which merges the
-    `network.external` block with the same keys under `proxmox.network.external`;
-    the bridge is Proxmox plumbing and stays in the provider section.
+    The L2 facts come from `cfg.network.external`, i.e. the `network.external`
+    block, the only place they may live; the bridge is Proxmox plumbing and
+    comes from the provider section.
     """
     if cfg.network.external is None:
         return {}

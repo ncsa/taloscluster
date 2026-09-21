@@ -400,10 +400,6 @@ class Config:
     # true when a metal group sits on another L2
     kubespan: bool = False
 
-    # the merged cluster.yaml + secrets.yaml + include tree: it carries the
-    # credentials verbatim, so never print or serialize it
-    raw: dict[str, Any] = field(default_factory=dict, repr=False)
-
     # -- derived ------------------------------------------------------------
 
     @property
@@ -1422,7 +1418,6 @@ def load_config(root: Path) -> Config:
         tailscale_enabled="tailscale" in opted_in,
         # an explicit null is the same as an absent key, as everywhere else
         kubespan=False if kubespan is None else kubespan,
-        raw=d,
     )
     _validate(cfg)
     # Normalize the canonical `v` prefix on both component versions: an
@@ -1542,10 +1537,7 @@ def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:
         for m in cfg.machines.values()
     }
     if isinstance(cluster_vip, str):
-        try:
-            vip = ipaddress.ip_address(cluster_vip)
-        except ValueError:
-            return  # the main provider block reports invalid VIPs
+        vip = ipaddress.ip_address(cluster_vip)
         if vip == gateway:
             raise ConfigError(
                 "cluster.yaml: network.cluster.kubeapi_vip collides with the "
@@ -1753,9 +1745,6 @@ def _validate(cfg: Config) -> None:
         if len(f"{cfg.name}-{pool_name}-{count:02d}") > 63:
             raise ConfigError("cluster and pool names make a hostname longer than 63 characters")
 
-    # already validated as an IPv4 network when the block was parsed
-    network = ipaddress.ip_network(cfg.network.cluster.cidr, strict=True)
-
     provider_fields: tuple[tuple[str, str], ...] = ()
     if isinstance(cfg.provider, OpenStackConfig):
         provider_fields = (
@@ -1857,12 +1846,6 @@ def _validate(cfg: Config) -> None:
         if not cluster_vip and not external_vip:
             raise ConfigError(
                 "cluster.yaml: kubeapi_vip must be set in network.cluster or network.external"
-            )
-        if cluster_vip and _ipv4_address(
-            cluster_vip, "network.cluster.kubeapi_vip"
-        ) not in network:
-            raise ConfigError(
-                "cluster.yaml: network.cluster.kubeapi_vip must be inside network.cluster.cidr"
             )
     if cfg.login_server is not None and not isinstance(cfg.login_server, str):
         raise ConfigError("cluster.yaml: tailscale.login_server must be a string")

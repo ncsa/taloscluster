@@ -205,14 +205,13 @@ class OpenStackBackend:
     @_reconcile_errors
     def provider_status(self) -> dict[str, str]:
         return {
-            "url": self.cfg._openstack.url,
+            "url": self.cfg.openstack_url,
             "region": self.cfg.region,
             "project": project_name(self.conn),
         }
 
     def print_environment(self) -> None:
-        provider = self.cfg._openstack
-        print(f"export OS_AUTH_URL={shlex.quote(provider.url)}")
+        print(f"export OS_AUTH_URL={shlex.quote(self.cfg.openstack_url)}")
         print("export OS_AUTH_TYPE=v3applicationcredential")
         print(f"export OS_REGION_NAME={shlex.quote(self.cfg.region)}")
         credential_id, credential_secret = self.cfg.openstack_credentials

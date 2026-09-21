@@ -122,6 +122,27 @@ def test_backends_declare_a_talos_contribution_and_installer_platform():
         assert callable(backend.talos_contribution)
 
 
+def test_openstack_status_and_env_read_the_public_config(make_config, capsys, monkeypatch):
+    """`status` and `env` take the provider url, region and credentials from
+    the public Config accessors."""
+    cfg = make_config({"openstack": {"credential_id": "app-cred", "credential_secret": "sekrit"}})
+    from taloscluster.openstack.backend import OpenStackBackend
+
+    monkeypatch.setattr("taloscluster.openstack.backend.project_name", lambda _conn: "proj")
+    backend = object.__new__(OpenStackBackend)
+    backend.cfg = cfg
+    backend.conn = None
+    assert backend.provider_status() == {
+        "url": "https://example.com:5000/v3/",
+        "region": "RegionOne",
+        "project": "proj",
+    }
+    backend.print_environment()
+    out = capsys.readouterr().out
+    assert "export OS_AUTH_URL=https://example.com:5000/v3/" in out
+    assert "export OS_APPLICATION_CREDENTIAL_ID=app-cred" in out
+
+
 def test_proxmox_backend_contribution_rejects_anchor_collisions(make_config):
     from taloscluster.infrastructure import Endpoint
     from taloscluster.proxmox.backend import ProxmoxBackend
