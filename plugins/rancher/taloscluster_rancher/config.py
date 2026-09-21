@@ -1,4 +1,4 @@
-"""Load + validate the `rancher:` section of cluster.yaml and secrets.yaml.
+"""Load + validate the `rancher:` section of the merged configuration.
 
 cluster.yaml (committed) — members are NCSA netids/usernames (not emails):
     rancher:
@@ -9,14 +9,18 @@ secrets.yaml (gitignored):
     rancher:
       url:   https://rancher.example.edu
       token: token-xxxxx:yyyyyyyyyyyy
+
+The two files (plus any `include:`) are merged before the section is read, so a
+value may live in any of them; the split above is only the scaffolded default.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from taloscluster.config import CLUSTER_FILE, SECRETS_FILE, read_yaml, require
+from taloscluster.config import CLUSTER_FILE, load_raw, require
 from taloscluster.errors import ConfigError
 
 # Rancher roleTemplateId for each membership tier.
@@ -25,29 +29,29 @@ ROLE_BY_TIER = {
     "users": "cluster-member",
 }
 
-# Direct keys the `rancher:` section of each file accepts; anything else is a
-# typo or an unsupported option and is refused rather than silently dropped.
-_RANCHER_CLAN_KEYS = {"admins", "users"}
-_RANCHER_SECRETS_KEYS = {"url", "token"}
+# Direct keys the `rancher:` section accepts, wherever it lives; anything else
+# is a typo or an unsupported option and is refused rather than silently
+# dropped.
+_RANCHER_KEYS = {"admins", "users", "url", "token"}
 
 
 def rancher_configured(root: Path) -> bool:
-    """True only when a `rancher:` section exists in BOTH cluster.yaml and
-    secrets.yaml (the latter with url + token).
+    """True only when the cluster opts into Rancher management -- a `rancher:`
+    section in cluster.yaml or an included file -- and the merged configuration
+    carries url + token, wherever they were written.
 
-    A missing section in either file means this cluster is not managed by
-    Rancher and the tool should do nothing."""
+    A section that only secrets.yaml carries supplies credentials but does not
+    switch the feature on, matching how core treats credentials-only sections;
+    without the opt-in or the credentials this cluster is not managed by Rancher
+    and the tool should do nothing."""
     try:
-        dc = read_yaml(root / CLUSTER_FILE)
-        ds = read_yaml(root / SECRETS_FILE)
+        raw, opted_in = load_raw(root)
     except ConfigError:
         return False
-    if "rancher" not in dc or not isinstance(dc.get("rancher"), dict):
+    if "rancher" not in opted_in:
         return False
-    rancher_s = ds.get("rancher")
-    if not isinstance(rancher_s, dict):
-        return False
-    return "url" in rancher_s and "token" in rancher_s
+    rancher = raw.get("rancher")
+    return isinstance(rancher, dict) and "url" in rancher and "token" in rancher
 
 
 def validate_rancher(root: Path) -> None:
@@ -60,40 +64,31 @@ def validate_rancher(root: Path) -> None:
     still untouched instead of failing the late reconcile hooks. The hook runs
     whether or not the plugin is active, so a supplied-but-malformed `rancher:`
     section is rejected even though activation would otherwise discard it; an
-    entirely absent section passes. A missing config file is treated as absent
-    configuration (nothing supplied to validate), matching how activation
-    already tolerates a missing file; core enforces that the files exist for a
-    real converge. Raises ConfigError on the first problem.
+    entirely absent section passes. The section is read from the merged
+    configuration, so it may live in cluster.yaml, secrets.yaml or any included
+    file, and a problem is reported against cluster.yaml whichever file supplied
+    it. Raises ConfigError on the first problem.
     """
-    dc = read_yaml(root / CLUSTER_FILE) if (root / CLUSTER_FILE).is_file() else {}
-    ds = read_yaml(root / SECRETS_FILE) if (root / SECRETS_FILE).is_file() else {}
-    clan_raw = dc.get("rancher")
-    sec_raw = ds.get("rancher")
-    if clan_raw is not None and not isinstance(clan_raw, dict):
+    raw, _opted_in = load_raw(root)
+    rancher_raw: Any = raw.get("rancher")
+    if rancher_raw is not None and not isinstance(rancher_raw, dict):
         raise ConfigError(f"{CLUSTER_FILE}: rancher must be a YAML mapping")
-    if sec_raw is not None and not isinstance(sec_raw, dict):
-        raise ConfigError(f"{SECRETS_FILE}: rancher must be a YAML mapping")
-    clan = clan_raw if isinstance(clan_raw, dict) else {}
-    sec = sec_raw if isinstance(sec_raw, dict) else {}
+    rancher = rancher_raw if isinstance(rancher_raw, dict) else {}
 
     # a miscapped or unsupported key inside the `rancher:` section is refused
     # rather than silently ignored (the top-level core allowlist only sees the
     # `rancher:` key itself, which the plugin owns).
-    for source, section, known in (
-        (CLUSTER_FILE, clan, _RANCHER_CLAN_KEYS),
-        (SECRETS_FILE, sec, _RANCHER_SECRETS_KEYS),
-    ):
-        unknown = sorted(set(section) - known)
-        if unknown:
-            raise ConfigError(
-                f"{source} (rancher): unsupported option(s): {', '.join(unknown)}; "
-                "the plugin does not use them"
-            )
+    unknown = sorted(set(rancher) - _RANCHER_KEYS)
+    if unknown:
+        raise ConfigError(
+            f"{CLUSTER_FILE} (rancher): unsupported option(s): {', '.join(unknown)}; "
+            "the plugin does not use them"
+        )
 
     # member role lists must be lists of usernames. A bare string would iterate
     # character by character when the reconciler flattens a tier.
     for role in ("admins", "users"):
-        members = clan.get(role)
+        members = rancher.get(role)
         if members is not None and (
             not isinstance(members, list)
             or any(not isinstance(m, str) or not m.strip() for m in members)
@@ -102,8 +97,8 @@ def validate_rancher(root: Path) -> None:
                 f"{CLUSTER_FILE} (rancher.{role}) must be a list of usernames"
             )
 
-    admins = tuple(clan.get("admins", []) or [])
-    users = tuple(clan.get("users", []) or [])
+    admins = tuple(rancher.get("admins", []) or [])
+    users = tuple(rancher.get("users", []) or [])
     overlap = sorted(set(admins) & set(users))
     if overlap:
         raise ConfigError(
@@ -118,12 +113,12 @@ def validate_rancher(root: Path) -> None:
     # core _secret precedent of refusing null credentials up front. Only a key
     # that is present is checked, so an absent key (an inactive section) passes.
     for key in ("url", "token"):
-        if key not in sec:
+        if key not in rancher:
             continue
-        value = sec.get(key)
+        value = rancher.get(key)
         if not isinstance(value, str) or not value:
             raise ConfigError(
-                f"{SECRETS_FILE} (rancher.{key}) must be a non-empty string"
+                f"{CLUSTER_FILE} (rancher.{key}) must be a non-empty string"
             )
 
 
@@ -151,9 +146,9 @@ class Config:
 
     @classmethod
     def load(cls, root: Path) -> Config:
-        d = read_yaml(root / CLUSTER_FILE)
+        raw, _opted_in = load_raw(root)
         where = CLUSTER_FILE
-        rancher = d.get("rancher", {}) or {}
+        rancher = raw.get("rancher", {}) or {}
         admins = tuple(rancher.get("admins", []) or [])
         users = tuple(rancher.get("users", []) or [])
         overlap = sorted(set(admins) & set(users))
@@ -168,16 +163,17 @@ class Config:
             users=users,
         )
         return cls(
-            name=require(d, "name", where=where),
+            name=require(raw, "name", where=where),
             members=members,
         )
 
     @classmethod
     def load_secrets(cls, root: Path) -> Secrets:
-        d = read_yaml(root / SECRETS_FILE)
-        where = SECRETS_FILE
-        rancher = d.get("rancher", {}) or {}
+        """The Rancher credentials, from wherever in the merged configuration
+        they were written (secrets.yaml, cluster.yaml or an included file)."""
+        raw, _opted_in = load_raw(root)
+        rancher = raw.get("rancher", {}) or {}
         return Secrets(
-            rancher_url=require(rancher, "url", where=f"{where} (rancher)"),
-            rancher_token=require(rancher, "token", where=f"{where} (rancher)"),
+            rancher_url=require(rancher, "url", where=f"{CLUSTER_FILE} (rancher)"),
+            rancher_token=require(rancher, "token", where=f"{CLUSTER_FILE} (rancher)"),
         )

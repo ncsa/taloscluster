@@ -22,6 +22,7 @@ from taloscluster.config import (
     ProxmoxConfig,
     SecurityRule,
     load_config,
+    load_raw,
     proxmox_sdn,
     validate_warnings,
 )
@@ -2706,6 +2707,50 @@ def test_include_treats_an_explicit_null_section_as_absent(make_config, tmp_path
     cfg = make_config({"include": ["ts.yaml"], "tailscale": None})
 
     assert cfg.login_server == "https://hs.example"
+
+
+def test_load_raw_merges_secrets_and_includes(tmp_path):
+    """`load_raw` is the merged tree a plugin reads its own section from: a
+    value is found wherever the include contract lets it live, without the rest
+    of the cluster.yaml schema having to be valid."""
+    (tmp_path / "creds.yaml").write_text(
+        yaml.safe_dump({"rancher": {"url": "https://rancher.example.edu"}})
+    )
+    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({
+        "name": "testcluster", "include": ["creds.yaml"], "rancher": {"admins": ["alice"]},
+    }))
+    _write_secrets(tmp_path, {"rancher": {"token": "token-x:y"}})
+
+    raw, opted_in = load_raw(tmp_path)
+
+    assert raw["rancher"] == {
+        "admins": ["alice"],
+        "url": "https://rancher.example.edu",
+        "token": "token-x:y",
+    }
+    assert "rancher" in opted_in
+
+
+def test_load_raw_does_not_opt_in_a_secrets_only_section(tmp_path):
+    """A section only secrets.yaml carries is credentials, not the decision to
+    use a feature -- the set core uses to keep it from switching one on."""
+    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({"name": "testcluster"}))
+    _write_secrets(tmp_path, {"rancher": {"url": "https://rancher.example.edu",
+                                          "token": "token-x:y"}})
+
+    raw, opted_in = load_raw(tmp_path)
+
+    assert raw["rancher"] == {"url": "https://rancher.example.edu", "token": "token-x:y"}
+    assert "rancher" not in opted_in
+
+
+def test_load_raw_tolerates_a_missing_cluster_yaml(tmp_path):
+    _write_secrets(tmp_path, {"rancher": {"url": "https://rancher.example.edu"}})
+
+    raw, opted_in = load_raw(tmp_path)
+
+    assert raw == {"rancher": {"url": "https://rancher.example.edu"}}
+    assert opted_in == set()
 
 
 def test_credentials_stay_out_of_the_config_repr(make_config, tmp_path):

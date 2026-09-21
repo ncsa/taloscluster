@@ -66,9 +66,10 @@ def init(root: Path) -> None:
 
 
 def configured(ctx: Context) -> bool:
-    """True when secrets.yaml carries an `argocd:` kubectl apply target (a
-    kubeconfig or a context). A `url`/`token` pair alone does not activate the
-    plugin: the plugin cannot apply through the ArgoCD API."""
+    """True when the merged configuration carries an `argocd:` kubectl apply
+    target (a kubeconfig or a context), wherever it was written. A `url`/`token`
+    pair alone does not activate the plugin: the plugin cannot apply through the
+    ArgoCD API."""
     return argocd_configured(ctx.root)
 
 

@@ -41,7 +41,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Merge `secrets.yaml` into the cluster configuration as an implicit first include, so credentials can live in any included file.
+- Merge `secrets.yaml` into the cluster configuration as an implicit first include, so credentials — plugin ones included — can live in any included file.
 - **Breaking:** the network settings, including a new `mtu` applied to links and the default route, move into `network.cluster` and `network.external`; the old address keys are refused.
 - Delete the legacy `talos-<version>-tailscale` image on `image remove`, refusing while a managed VM still boots it, and converge detaches the boot ISO cdrom once a node boots from disk.
 - Name the timed-out kubectl command in timeout errors and allow manifest apply, diff and delete more time than a probe.

@@ -709,6 +709,23 @@ def _apply_includes(
     return d, opted_in
 
 
+def load_raw(root: Path) -> tuple[dict[str, Any], set[str]]:
+    """The merged cluster.yaml + secrets.yaml + include tree, unvalidated, plus
+    the top-level sections the cluster opted into outside secrets.yaml.
+
+    Merges the files exactly as :func:`load_config` does, but without the
+    schema checks, so a caller that only needs one section -- a plugin reading
+    the credentials it owns -- finds a value wherever the include contract lets
+    it live. The opted-in set is what keeps a section that only secrets.yaml
+    carries (leftover credentials, not a decision to use a feature) from
+    switching anything on. A missing cluster.yaml reads as an empty tree;
+    a listed include that is missing, or an unparsable file, raises ConfigError
+    like core.
+    """
+    d = read_yaml(root / CLUSTER_FILE) if (root / CLUSTER_FILE).is_file() else {}
+    return _apply_includes(d, root, _CLUSTER_KEYS | _plugin_config_sections())
+
+
 def _plugin_config_sections() -> set[str]:
     """Top-level keys owned by installed plugins (e.g. a plugin's `argocd:`).
 

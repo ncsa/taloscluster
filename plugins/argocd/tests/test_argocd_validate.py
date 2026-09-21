@@ -195,8 +195,7 @@ def test_openstack_credential_must_be_a_string(tmp_path, key):
 
 
 def test_non_mapping_secret_git_section_rejected(tmp_path):
-    _write(tmp_path, argocd_cluster={"git": {"url": "https://git.example.com/a"},
-                                     "infra": {"url": "https://git.example.com/b"}},
+    _write(tmp_path, argocd_cluster={"infra": {"url": "https://git.example.com/b"}},
             argocd_secrets={"git": "deploy"})
     with pytest.raises(ConfigError, match="argocd\\.git.*YAML mapping"):
         validate_argocd(tmp_path)
@@ -261,7 +260,7 @@ def test_unknown_secrets_git_credential_key_rejected(tmp_path):
     _write(tmp_path, argocd_cluster={"git": {"url": "https://git.example.com/cluster.git"},
                                      "infra": {"url": "https://git.example.com/infra.git"}},
             argocd_secrets={"git": {"username": "deploy", "tokn": "x"}})
-    with pytest.raises(ConfigError, match=r"argocd\.git\): unsupported option\(s\): tokn"):
+    with pytest.raises(ConfigError, match=r"argocd\.git\): unsupported key\(s\): tokn"):
         validate_argocd(tmp_path)
 
 

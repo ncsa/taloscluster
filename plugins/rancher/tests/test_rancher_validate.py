@@ -166,10 +166,12 @@ def test_core_preflight_refuses_null_credentials(tmp_path):
 
     `rancher_configured` sees url/token present (even though null), so the
     plugin validates; the null must be caught here rather than surfacing as
-    `NoneType` has no attribute `rstrip` in the late Rancher `Client`.
+    `NoneType` has no attribute `rstrip` in the late Rancher `Client`. The null
+    is written in cluster.yaml because that file is the merge base: a null in
+    secrets.yaml is dropped by the merge, so there the key simply counts as
+    never supplied and the plugin stays inactive.
     """
-    _write(tmp_path, rancher_cluster={"admins": ["alice"]},
-            rancher_secrets={"url": None, "token": None})
+    _write(tmp_path, rancher_cluster={"admins": ["alice"], "url": None, "token": None})
     with pytest.raises(ConfigError, match=r"rancher\.(url|token)\) must be a non-empty string"):
         preflight_validate(Context(root=tmp_path, cfg=None))
 

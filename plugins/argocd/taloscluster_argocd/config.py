@@ -1,4 +1,4 @@
-"""Load + validate the `argocd:` section of cluster.yaml and secrets.yaml.
+"""Load + validate the `argocd:` section of the merged configuration.
 
 cluster.yaml (committed) -- role members are full email addresses:
     argocd:
@@ -17,6 +17,9 @@ kubectl context (uses the default kubeconfig, e.g. ~/.kube/config):
       # or --
       context: argocd                   # kubectl --context (default kubeconfig)
 
+The two files (plus any `include:`) are merged before the section is read, so a
+value may live in any of them; the split above is only the scaffolded default.
+
 A `url` / `token` pair alone is not a supported apply target: the plugin does not
 speak the ArgoCD API, so it does not activate the plugin. See `argocd_configured`.
 """
@@ -27,12 +30,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from taloscluster.config import CLUSTER_FILE, SECRETS_FILE, read_yaml, require
+from taloscluster.config import CLUSTER_FILE, load_raw, require
 from taloscluster.errors import ConfigError
 
 
 def _load_openstack(d: dict[str, Any]) -> Openstack | None:
-    """Non-secret OpenStack identity from cluster.yaml's `openstack:` section."""
+    """Non-secret OpenStack identity from the merged configuration's `openstack:`
+    section."""
     ost = _section(d, "openstack")
     if not ost:
         return None
@@ -108,48 +112,48 @@ class Config:
 
     @classmethod
     def load(cls, root: Path) -> Config:
-        d = read_yaml(root / CLUSTER_FILE)
+        raw, _opted_in = load_raw(root)
         where = CLUSTER_FILE
-        name = require(d, "name", where=where)
-        clan = _section(d, "argocd")
-        rancher = _section(d, "rancher")
-        git = clan.get("git") or {}
+        name = require(raw, "name", where=where)
+        argocd = _section(raw, "argocd")
+        rancher = _section(raw, "rancher")
+        git = argocd.get("git") or {}
         if not isinstance(git, dict):
             git = {}
-        infra = clan.get("infra") or {}
+        infra = argocd.get("infra") or {}
         if not isinstance(infra, dict):
             infra = {}
-        metallb = clan.get("metallb") or {}
+        metallb = argocd.get("metallb") or {}
         if not isinstance(metallb, dict):
             metallb = {}
-        ingress = clan.get("ingress") or {}
+        ingress = argocd.get("ingress") or {}
         if not isinstance(ingress, dict):
             ingress = {}
-        sealedsecrets = clan.get("sealedsecrets") or {}
+        sealedsecrets = argocd.get("sealedsecrets") or {}
         if not isinstance(sealedsecrets, dict):
             sealedsecrets = {}
-        certmanager = clan.get("certmanager") or {}
+        certmanager = argocd.get("certmanager") or {}
         if not isinstance(certmanager, dict):
             certmanager = {}
-        cinder = clan.get("cinder") or {}
+        cinder = argocd.get("cinder") or {}
         if not isinstance(cinder, dict):
             cinder = {}
-        nfs = clan.get("nfs") or {}
+        nfs = argocd.get("nfs") or {}
         if not isinstance(nfs, dict):
             nfs = {}
-        monitoring = clan.get("monitoring") or {}
+        monitoring = argocd.get("monitoring") or {}
         if not isinstance(monitoring, dict):
             monitoring = {}
 
         # project roles = rancher members (if present) merged with argocd members
-        admins = _uniq(*clan.get("admins") or [], *rancher.get("admins") or [])
-        users = _uniq(*clan.get("users") or [], *rancher.get("users") or [])
+        admins = _uniq(*argocd.get("admins") or [], *rancher.get("admins") or [])
+        users = _uniq(*argocd.get("users") or [], *rancher.get("users") or [])
         return cls(
             name=name,
             members=Members(admins=admins, users=users),
             git_url=git.get("url"),
             infra_url=infra.get("url"),
-            openstack=_load_openstack(d),
+            openstack=_load_openstack(raw),
             metallb=metallb,
             ingress=ingress,
             sealedsecrets=sealedsecrets,
@@ -157,17 +161,20 @@ class Config:
             cinder=cinder,
             nfs=nfs,
             monitoring=monitoring,
-            sync=bool(clan.get("sync")),
-            automated=clan.get("automated", True),
+            sync=bool(argocd.get("sync")),
+            automated=argocd.get("automated", True),
         )
 
     @classmethod
     def load_secrets(cls, root: Path) -> ApplyTarget:
-        d = read_yaml(root / SECRETS_FILE)
-        argocd = _section(d, "argocd")
+        """The apply target and credentials, from wherever in the merged
+        configuration they were written (secrets.yaml, cluster.yaml or an
+        included file)."""
+        raw, _opted_in = load_raw(root)
+        argocd = _section(raw, "argocd")
         git = argocd.get("git") or {}
         git = git if isinstance(git, dict) else {}
-        ost = _section(d, "openstack")
+        ost = _section(raw, "openstack")
         return ApplyTarget(
             kubeconfig=argocd.get("kubeconfig"),
             context=argocd.get("context"),
@@ -190,14 +197,6 @@ def enabled(section: dict[str, Any]) -> bool:
     return bool(section.get("enabled"))
 
 
-def _read_cluster(root: Path) -> dict[str, Any]:
-    return read_yaml(root / CLUSTER_FILE) if (root / CLUSTER_FILE).is_file() else {}
-
-
-def _read_secrets(root: Path) -> dict[str, Any]:
-    return read_yaml(root / SECRETS_FILE) if (root / SECRETS_FILE).is_file() else {}
-
-
 def _uniq(*values: str) -> tuple[str, ...]:
     seen: set[str] = set()
     out: list[str] = []
@@ -209,10 +208,12 @@ def _uniq(*values: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-#: Top-level keys the `argocd:` section of cluster.yaml understands.
+#: Top-level keys the `argocd:` section understands, wherever it lives
+#: (cluster.yaml, secrets.yaml or an included file).
 _KNOWN_KEYS = {
     "admins", "users", "git", "infra", "metallb", "ingress", "sealedsecrets",
     "certmanager", "cinder", "nfs", "monitoring", "sync", "automated",
+    "kubeconfig", "context", "url", "token",
 }
 #: `argocd:` sub-sections that must be YAML mappings (the per-app sections and
 #: the git/infra repository blocks).
@@ -232,13 +233,9 @@ _PER_APP_KEYS = {
     "nfs": {"enabled", "servers", "version"},
     "monitoring": {"enabled", "version"},
 }
-#: Keys the `argocd:` secrets.yaml section accepts. Anything outside this set is
-#: a miscapped or unsupported option and is refused rather than silently dropped.
-_ARGOCD_SECRETS_KEYS = {"kubeconfig", "context", "url", "token", "git"}
-#: Keys each `argocd.git` / `argocd.infra` repository block accepts.
-_REPO_KEYS = {"url"}
-#: Keys the secrets `argocd.git` credentials block accepts.
-_GIT_CRED_KEYS = {"username", "token"}
+#: Keys each `argocd.git` / `argocd.infra` repository block accepts; the git
+#: block also carries the repository credentials, wherever they live.
+_REPO_KEYS = {"git": {"url", "username", "token"}, "infra": {"url"}}
 #: Apps whose `version:` is forwarded to the rendered chart. Setting `version`
 #: on any other app (`ingress`, `nfs`, `monitoring`) is silently ignored by the
 #: renderer today, so it is refused here instead; Traefik's pin lives at
@@ -251,15 +248,16 @@ def validate_argocd(root: Path) -> None:
 
     Called by core in converge's validate phase, before any cluster mutation, so
     a broken plugin section stops the run while the cluster is still untouched.
-    Catches:
+    The section is read from the merged configuration, so it may live in
+    cluster.yaml, secrets.yaml or any included file, and a problem is reported
+    against cluster.yaml whichever file supplied it. Catches:
       - a non-mapping `argocd:` or sub-section (malformed settings),
       - a top-level `argocd:` key the plugin does not understand (unsupported
         options),
       - an unsupported key inside a per-app section (a typo or a `version`
         override the renderer would silently ignore),
       - only one of `git.url` / `infra.url` set (missing paired repository URLs),
-      - git credentials in secrets.yaml without `git.url` (credentials without a
-        Git URL),
+      - git credentials without `git.url` (credentials without a Git URL),
       - a `url`/`token` apply target without a `kubeconfig`/`context` (an
         unsupported mode the plugin would otherwise silently discard).
     Raises ConfigError on the first problem. A missing config file is treated as
@@ -267,24 +265,19 @@ def validate_argocd(root: Path) -> None:
     how activation already tolerates a missing file; core enforces that the files
     exist for a real converge.
     """
-    dc = _read_cluster(root)
-    ds = _read_secrets(root)
+    raw, _opted_in = load_raw(root)
     where = CLUSTER_FILE
-    clan_raw = dc.get("argocd")
-    sec_raw = ds.get("argocd")
-    clan: dict[str, Any] = clan_raw if isinstance(clan_raw, dict) else {}
-    sec: dict[str, Any] = sec_raw if isinstance(sec_raw, dict) else {}
-    if clan_raw is not None and not isinstance(clan_raw, dict):
-        raise ConfigError(f"{where}: argocd must be a YAML mapping")
+    sec_raw = raw.get("argocd")
     if sec_raw is not None and not isinstance(sec_raw, dict):
-        raise ConfigError(f"{SECRETS_FILE}: argocd must be a YAML mapping")
+        raise ConfigError(f"{where}: argocd must be a YAML mapping")
+    sec: dict[str, Any] = sec_raw if isinstance(sec_raw, dict) else {}
 
-    # a miscapped or unsupported key inside the `argocd:` secrets section is
-    # refused rather than silently discarded by activation.
-    unknown = sorted(set(sec) - _ARGOCD_SECRETS_KEYS)
+    # a miscapped or unsupported key inside the `argocd:` section is refused
+    # rather than silently discarded by activation.
+    unknown = sorted(set(sec) - _KNOWN_KEYS)
     if unknown:
         raise ConfigError(
-            f"{SECRETS_FILE} (argocd): unsupported option(s): {', '.join(unknown)}; "
+            f"{where} (argocd): unsupported option(s): {', '.join(unknown)}; "
             "the plugin does not use them"
         )
 
@@ -294,7 +287,7 @@ def validate_argocd(root: Path) -> None:
         value = sec.get(key)
         if value is not None and not isinstance(value, str):
             raise ConfigError(
-                f"{SECRETS_FILE} (argocd.{key}) must be a string"
+                f"{where} (argocd.{key}) must be a string"
             )
     # A supplied `url`/`token` pair names the ArgoCD API, but the plugin applies
     # via kubectl only, so without a kubeconfig/context it is an unsupported
@@ -305,51 +298,40 @@ def validate_argocd(root: Path) -> None:
         sec.get("kubeconfig") or sec.get("context")
     ):
         raise ConfigError(
-            f"{SECRETS_FILE} (argocd): url/token is not a supported apply target; "
+            f"{where} (argocd): url/token is not a supported apply target; "
             "the plugin applies manifests via kubectl only, so set "
             "argocd.kubeconfig or argocd.context instead of a url/token pair"
         )
-    sgit = sec.get("git")
-    if sgit is not None and not isinstance(sgit, dict):
-        raise ConfigError(f"{SECRETS_FILE} (argocd.git) must be a YAML mapping")
-    if isinstance(sgit, dict):
-        cred_unknown = sorted(set(sgit) - _GIT_CRED_KEYS)
-        if cred_unknown:
-            raise ConfigError(
-                f"{SECRETS_FILE} (argocd.git): unsupported option(s): "
-                f"{', '.join(cred_unknown)}; the plugin does not use them"
-            )
-        for key in ("username", "token"):
-            if key in sgit and not isinstance(sgit[key], str):
-                raise ConfigError(
-                    f"{SECRETS_FILE} (argocd.git.{key}) must be a string"
-                )
 
-    unknown = sorted(set(clan) - _KNOWN_KEYS)
-    if unknown:
-        raise ConfigError(
-            f"{where} (argocd): unsupported option(s): {', '.join(unknown)}; "
-            "the plugin does not use them"
-        )
-    for key in sorted(_MAPPING_KEYS & set(clan)):
-        if not isinstance(clan[key], dict):
+    # each sub-section the plugin reads must be a YAML mapping; a string or list
+    # would fail the per-key checks below with a confusing shape error.
+    for key in sorted(_MAPPING_KEYS & set(sec)):
+        if not isinstance(sec[key], dict):
             raise ConfigError(f"{where} (argocd.{key}) must be a YAML mapping")
 
-    # each git/infra repository block accepts only `url`; a misspelled or
-    # unsupported key inside one is refused rather than silently dropped.
-    for repo in ("git", "infra"):
-        section = clan.get(repo)
+    # each git/infra repository block accepts only its own keys -- the git block
+    # also carries the repository credentials -- and a misspelled or unsupported
+    # key inside one is refused rather than silently dropped.
+    for repo, allowed in _REPO_KEYS.items():
+        section = sec.get(repo)
         if isinstance(section, dict):
-            repo_unknown = sorted(set(section) - _REPO_KEYS)
+            repo_unknown = sorted(set(section) - allowed)
             if repo_unknown:
                 raise ConfigError(
                     f"{where} (argocd.{repo}): unsupported key(s): {', '.join(repo_unknown)}"
                 )
+    git_raw = sec.get("git")
+    git = git_raw if isinstance(git_raw, dict) else {}
+    for key in ("username", "token"):
+        if key in git and not isinstance(git[key], str):
+            raise ConfigError(
+                f"{where} (argocd.git.{key}) must be a string"
+            )
 
     # member role lists must be lists of full email addresses. A bare string
     # would iterate character by character when the renderer flattens it.
     for role in ("admins", "users"):
-        members = clan.get(role)
+        members = sec.get(role)
         if members is not None and (
             not isinstance(members, list)
             or any(not isinstance(m, str) or not m.strip() for m in members)
@@ -361,7 +343,7 @@ def validate_argocd(root: Path) -> None:
     # the two toggles are YAML booleans; a quoted "false" is a nonempty string
     # and must be refused rather than treated as truthy when rendering.
     for key, _default in (("sync", False), ("automated", True)):
-        value = clan.get(key)
+        value = sec.get(key)
         if value is not None and not isinstance(value, bool):
             raise ConfigError(
                 f"{where} (argocd.{key}) must be a boolean (true or false)"
@@ -369,7 +351,7 @@ def validate_argocd(root: Path) -> None:
 
     # repository URLs are non-empty strings.
     for repo in ("git", "infra"):
-        section = clan.get(repo)
+        section = sec.get(repo)
         if isinstance(section, dict) and "url" in section:
             url = section["url"]
             if not isinstance(url, str) or not url.strip():
@@ -381,7 +363,7 @@ def validate_argocd(root: Path) -> None:
     # `version` override the renderer would silently ignore, and require a
     # forwarded version to be a non-empty string.
     for app, allowed in _PER_APP_KEYS.items():
-        section = clan.get(app)
+        section = sec.get(app)
         if not isinstance(section, dict):
             continue
         unknown = sorted(set(section) - allowed)
@@ -407,7 +389,7 @@ def validate_argocd(root: Path) -> None:
                     f"{where} (argocd.{app}.version) must be a non-empty string"
                 )
 
-    ingress = clan.get("ingress")
+    ingress = sec.get("ingress")
     if isinstance(ingress, dict):
         traefik = ingress.get("traefik")
         if traefik is not None:
@@ -428,7 +410,7 @@ def validate_argocd(root: Path) -> None:
                     f"{where} (argocd.ingress.traefik.version) must be a non-empty string"
                 )
 
-    nfs = clan.get("nfs")
+    nfs = sec.get("nfs")
     if isinstance(nfs, dict):
         servers = nfs.get("servers")
         if servers is not None:
@@ -439,10 +421,9 @@ def validate_argocd(root: Path) -> None:
                     f"{where} (argocd.nfs.servers) must map server names to mappings"
                 )
 
-    git = clan.get("git") or {}
-    infra = clan.get("infra") or {}
     git_url = git.get("url")
-    infra_url = infra.get("url")
+    infra = sec.get("infra")
+    infra_url = infra.get("url") if isinstance(infra, dict) else None
     if bool(git_url) != bool(infra_url):
         missing = "infra.url" if git_url else "git.url"
         raise ConfigError(
@@ -451,38 +432,35 @@ def validate_argocd(root: Path) -> None:
             "Application are only rendered together"
         )
 
-    sgit = sec.get("git")
-    if not isinstance(sgit, dict):
-        sgit = {}
-    if not git_url and (sgit.get("username") or sgit.get("token")):
+    if not git_url and (git.get("username") or git.get("token")):
         raise ConfigError(
-            f"{SECRETS_FILE} (argocd.git): git credentials are set but "
-            f"argocd.git.url in {where} is not, so no repository Secret can be "
-            "rendered; set argocd.git.url or remove the credentials"
+            f"{where} (argocd.git): git credentials are set but argocd.git.url "
+            "is not, so no repository Secret can be rendered; set argocd.git.url "
+            "or remove the credentials"
         )
 
-    s_openstack = ds.get("openstack")
+    s_openstack = raw.get("openstack")
     if isinstance(s_openstack, dict):
         for key in ("credential_id", "credential_secret"):
             if key in s_openstack and not isinstance(s_openstack[key], str):
                 raise ConfigError(
-                    f"{SECRETS_FILE} (openstack.{key}) must be a string"
+                    f"{where} (openstack.{key}) must be a string"
                 )
 
 
 def argocd_configured(root: Path) -> bool:
-    """True when secrets.yaml names a supported ArgoCD apply target.
+    """True when the merged configuration names a supported ArgoCD apply target.
 
-    Only a kubectl mode (kubeconfig or context) activates the plugin. A
-    `url`/`token` pair alone names an ArgoCD API endpoint, which the plugin does
-    not speak; refusing to report configured here keeps the plugin from showing
-    as active and then failing in every hook.
+    Only a kubectl mode (kubeconfig or context) activates the plugin, wherever
+    the target is written. A `url`/`token` pair alone names an ArgoCD API
+    endpoint, which the plugin does not speak; refusing to report configured
+    here keeps the plugin from showing as active and then failing in every hook.
     """
     try:
-        d = read_yaml(root / SECRETS_FILE)
+        raw, _opted_in = load_raw(root)
     except ConfigError:
         return False
-    argocd = _section(d, "argocd")
+    argocd = _section(raw, "argocd")
     if not argocd:
         return False
     return bool(argocd.get("kubeconfig") or argocd.get("context"))
