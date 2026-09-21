@@ -1098,7 +1098,11 @@ def _scale_down(
     # talosctl endpoint: cp-01's tailscale name (or its real address without
     # tailscale); the node is always a numeric private ip apid can route to.
     endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
-    desired = set(machines)
+    # The desired set is every machine the config expects to be running: the
+    # VM pools plus every metal server. A joined metal node is a live
+    # Kubernetes Node no backend manages, so without it in the desired set it
+    # would read as a removal and be drained, reset and deleted.
+    desired = set(machines) | set(cfg.metal_servers)
     if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
         # a dry run with no non-empty kubeconfig on disk reads no live node
         # list (a real run writes it, or recovers it from the restored
@@ -1129,10 +1133,40 @@ def _scale_down(
         return
 
     # Validate every removal before prompting so confirmation means the whole
-    # displayed operation is safe to start.
-    desired_cp = int(cfg.controlplane["count"])
+    # displayed operation is safe to start. Metal control planes count toward
+    # the desired quorum math like the VM pools' controlplanes do.
+    desired_cp = int(cfg.controlplane["count"]) + sum(
+        1 for role in cfg.metal_servers.values() if role == "controlplane"
+    )
+    # A removal is by definition absent from the config, so its role cannot be
+    # read off the desired view -- and a metal server's name never carries the
+    # VM `-controlplane-` pattern. Role evidence therefore falls back to the
+    # surviving control plane's AUTHORITATIVE live etcd membership (an etcd
+    # member is a control plane whatever it is called) and, only when that
+    # evidence is unavailable, to the VM naming convention. The query is
+    # best-effort so a worker-only scale-down survives an unreachable apid the
+    # way it always has; every control-plane path below keeps failing closed.
+    in_etcd: dict[str, str] | None = None
+    if talosconfig.is_file():
+        try:
+            in_etcd = talosctl.etcd_members(talosconfig, endpoint)
+        except ReconcileError:
+            warn(
+                "could not read etcd membership; classifying removals by the "
+                "config's role view and node names only"
+            )
+    roles = {host: machine.role for host, machine in machines.items()} | cfg.metal_servers
+
+    def is_controlplane(node: str) -> bool:
+        role = roles.get(node)
+        if role is not None:
+            return role == "controlplane"
+        if in_etcd is not None:
+            return node in in_etcd
+        return "-controlplane-" in node
+
     for node in removals:
-        if "-controlplane-" in node and (desired_cp % 2 == 0 or desired_cp < 1):
+        if is_controlplane(node) and (desired_cp % 2 == 0 or desired_cp < 1):
             raise ReconcileError(
                 f"refusing to remove controlplane {node}: desired controlplane "
                 f"count {desired_cp} would break etcd quorum"
@@ -1154,9 +1188,9 @@ def _scale_down(
     )
     # how many control planes still have to go, so we health-check (etcd quorum
     # must survive) after each one before removing the next
-    remaining_cp = sum(1 for n in removals if "-controlplane-" in n)
+    remaining_cp = sum(1 for n in removals if is_controlplane(n))
     for node in removals:
-        is_cp = "-controlplane-" in node
+        is_cp = is_controlplane(node)
         # A removal that came only from the provider inventory has no Kubernetes
         # Node (it never joined, or a prior run deleted the Node before its VM
         # delete failed), so there is nothing to drain or to delete via kubectl.
@@ -1766,7 +1800,7 @@ def _incomplete_reasons(report: dict[str, Any], root: Path, cfg: Config) -> list
     # reports the pinned versions only, so missing machines are expected there
     # and are not called out.
     if setup_happened and not never_answered:
-        expected = set(cfg.machines)
+        expected = set(cfg.machines) | set(cfg.metal_servers)
         observed = {n["name"] for n in report["nodes"]}
         for host in sorted(expected - observed):
             reasons.append(f"node {host} is missing from both Talos discovery and Kubernetes")

@@ -474,6 +474,35 @@ def test_metal_alone_loads_without_a_vm_provider(make_config):
     assert cfg.machines["testcluster-worker-02"].disk == 100
 
 
+def test_metal_servers_flat_map_carries_every_server_role(make_config):
+    """`metal_servers` is the desired-node view of the metal section: every
+    server of every group, keyed by hostname with its role."""
+    cfg = make_config({"metal": {
+        "cp": {
+            "role": "controlplane",
+            "disk": "/dev/sda",
+            "servers": {"rp001-cp": {}},
+        },
+        "worker": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "servers": {"rp001-worker": {}, "rp002-worker": {}},
+        },
+    }})
+
+    assert cfg.metal_servers == {
+        "rp001-cp": "controlplane",
+        "rp001-worker": "worker",
+        "rp002-worker": "worker",
+    }
+
+
+def test_metal_servers_empty_without_a_metal_section(make_config):
+    cfg = make_config()
+
+    assert cfg.metal_servers == {}
+
+
 @pytest.mark.parametrize(
     ("metal", "message"),
     [

@@ -89,6 +89,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Fix Rancher API error messages that were joined character by character.
 - Pass the Proxmox `ingress_pool` to ArgoCD so MetalLB address pools render for both providers.
 - Give the ArgoCD AppProject `user` role the read access its name implies.
+- Treat metal machines as desired nodes during scale-down and `check` instead of removing or missing them.
 
 ## [0.7.0] - 2026-09-06
 

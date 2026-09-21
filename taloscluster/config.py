@@ -512,6 +512,22 @@ class Config:
                 )
         return out
 
+    @cached_property
+    def metal_servers(self) -> dict[str, str]:
+        """Flat hostname -> role map of every `metal.<group>.servers` entry.
+
+        The metal counterpart of `machines`: nodes the cluster must expect to
+        be running -- scale-down must never treat one as a removal and check
+        must verify it -- although no VM provider manages them.
+        """
+        if self.metal is None:
+            return {}
+        return {
+            server.name: server.role
+            for group in self.metal.groups.values()
+            for server in group.servers.values()
+        }
+
     def extension_sets(self) -> set[tuple[str, ...]]:
         """The distinct resolved extension sets in use -> one image per set."""
         return {m.extensions for m in self.machines.values()}

@@ -243,6 +243,40 @@ def test_missing_configured_nodes_are_incomplete(cluster_dir, upstream, nodes, c
     assert rc == 1
 
 
+def test_missing_metal_node_is_incomplete(cluster_dir, upstream, nodes, capsys):
+    """A metal server of a `metal:` section is a configured machine like any VM:
+    once the cluster exists, check must report a joined-cluster metal node that
+    answers in neither Talos discovery nor Kubernetes as missing."""
+    upstream["talos"] = ["v1.13.8"]
+    upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
+    (cluster_dir / "cluster.yaml").write_text(
+        yaml.safe_dump(
+            {
+                **CLUSTER,
+                "metal": {
+                    "worker": {
+                        "role": "worker",
+                        "disk": "/dev/sda",
+                        "servers": {"rp001-worker": {}},
+                    },
+                },
+            }
+        )
+    )
+    (cluster_dir / "talosconfig").write_text("dummy")
+    nodes["nodes"] = [
+        {"name": "testcluster-controlplane-01", "talos": "v1.13.8", "kubernetes": "v1.35.2"}
+    ]
+    rc = converge.check(cluster_dir, output="yaml")
+    report = _report(capsys)
+    assert report["incomplete"] is True
+    assert report["incomplete_reasons"] == [
+        "node rp001-worker is missing from both Talos discovery and Kubernetes"
+    ]
+    assert report["up_to_date"] is False
+    assert rc == 1
+
+
 def test_missing_machines_not_reported_before_creation(cluster_dir, upstream, nodes, capsys):
     """Before a cluster exists there is no talosconfig/kubeconfig, so check
     reports the pinned versions only and a node that never answered is expected
