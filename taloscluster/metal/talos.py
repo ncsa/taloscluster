@@ -400,10 +400,11 @@ def build_config(
 ) -> str:
     """Return one metal machine's machine-config YAML string.
 
-    The shared patch stack (machine, hostname, cluster, kubespan) is assembled
-    exactly as `build_configs` does for the VM providers, then the cabling
-    plan's network patches and the cluster's freeform patches; a Talos < 1.14
-    cluster gets the classic hostname field and the 1.14-era keys stripped.
+    The shared patch stack (machine, hostname, cluster, firewall, kubespan) is
+    assembled exactly as `build_configs` does for the VM providers -- the
+    firewall keyed on the machine's own L2 -- then the cabling plan's network
+    patches and the cluster's freeform patches; a Talos < 1.14 cluster gets the
+    classic hostname field and the 1.14-era keys stripped.
     """
     host = server.name
     vip = _vip(cfg)
@@ -427,6 +428,12 @@ def build_config(
                     machineconfig._cluster_patch(cfg, endpoint),
                 )
             )
+        patches.append(
+            machineconfig._write(
+                workdir, f"{host}-firewall",
+                machineconfig._firewall_docs(cfg, node_cidr=server.network.cidr),
+            )
+        )
         if cfg.kubespan:
             patches.append(
                 machineconfig._write(

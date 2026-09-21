@@ -224,6 +224,44 @@ def test_desired_rules_updating_a_host_replaces_its_rule(make_config):
 
 
 # ---------------------------------------------------------------------------
+# metal groups on another L2
+# ---------------------------------------------------------------------------
+
+METAL = {"metal": {
+    "rack": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
+        "servers": {"rp001": {}},
+    },
+}}
+
+
+def test_desired_rules_admit_a_metal_group_on_another_l2(make_config):
+    """The group's nodes sit outside the SG, so they are admitted by CIDR:
+    tcp+udp for apid, kubelet and etcd, plus the KubeSpan WireGuard port."""
+    cfg = make_config(METAL)
+    rules = _desired_rules(cfg)
+
+    assert ("tcp", None, None, "172.29.22.0/24", None) in rules
+    assert ("udp", None, None, "172.29.22.0/24", None) in rules
+    assert ("udp", 51820, 51820, "172.29.22.0/24", None) in rules
+    # the intra-SG rules stay as they are
+    assert ("tcp", None, None, None, SELF) in rules
+    assert ("udp", None, None, None, SELF) in rules
+
+
+def test_desired_rules_no_metal_cidr_rules_without_another_l2(make_config):
+    """A single-L2 cluster gets no CIDR-scoped all-port or KubeSpan rules, so
+    the next converge of an existing security group reconciles to no change."""
+    cfg = make_config()
+    rules = _desired_rules(cfg)
+
+    assert not [key for key in rules if key[1] is None and key[3] is not None]
+    assert not [key for key in rules if key[1] == 51820]
+
+
+# ---------------------------------------------------------------------------
 # reconcile against a pre-populated rule set
 # ---------------------------------------------------------------------------
 

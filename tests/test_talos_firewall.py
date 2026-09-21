@@ -1,4 +1,9 @@
-"""The security allowlists are rendered as a Talos ingress firewall on every node."""
+"""The security allowlists are rendered as a Talos ingress firewall on every node.
+
+Metal nodes get the same firewall, keyed on their group's own L2: the
+intra-cluster rules admit every L2 the cluster's nodes sit on, and KubeSpan's
+WireGuard port is opened from the L2s a node does not sit on itself.
+"""
 
 from __future__ import annotations
 
@@ -54,6 +59,60 @@ def test_firewall_documents_mirror_the_security_rules(make_config):
 def test_no_tailscale_rule_without_a_tailscale_section(make_config):
     cfg = make_config(remove=("tailscale",))
     assert "tailscale" not in _rules(machineconfig._firewall_docs(cfg))
+
+
+METAL = {
+    "rack": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
+        "servers": {"rp001": {}},
+    },
+}
+
+
+def test_firewall_documents_admit_a_metal_group_on_another_l2(make_config):
+    """A metal group's L2 joins the intra-cluster allow-all rules, and the
+    KubeSpan WireGuard port is opened from that L2 explicitly."""
+    cfg = make_config({"metal": METAL})
+    rules = _rules(machineconfig._firewall_docs(cfg))
+
+    for name in ("cluster-tcp", "cluster-udp"):
+        assert {"subnet": "172.29.22.0/24"} in rules[name]["ingress"]
+    assert rules["kubespan"]["portSelector"] == {"ports": [51820], "protocol": "udp"}
+    assert rules["kubespan"]["ingress"] == [{"subnet": "172.29.22.0/24"}]
+
+
+def test_metal_node_firewall_is_keyed_on_its_own_l2(make_config):
+    """A metal node's own stack, keyed on its group L2, still admits the
+    cluster L2: apid, kubelet and etcd arrive from the VM nodes' addresses."""
+    cfg = make_config({"metal": METAL})
+    rules = _rules(machineconfig._firewall_docs(cfg, node_cidr="172.29.22.0/24"))
+
+    for name in ("cluster-tcp", "cluster-udp"):
+        assert {"subnet": cfg.network.cluster.cidr} in rules[name]["ingress"]
+        assert {"subnet": "172.29.22.0/24"} in rules[name]["ingress"]
+    # the group L2's own UDP already rides the allow-all rule; the KubeSpan
+    # port is opened for the peers off it
+    assert rules["kubespan"]["ingress"] == [{"subnet": cfg.network.cluster.cidr}]
+
+
+def test_no_kubespan_rule_without_another_l2(make_config):
+    """A single-L2 cluster gets no KubeSpan document, with or without a metal
+    group on the cluster network itself."""
+    plain = _rules(machineconfig._firewall_docs(make_config()))
+    assert "kubespan" not in plain
+
+    same_l2 = make_config({"metal": {
+        "rack": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "servers": {"rp001": {}},
+        },
+    }})
+    rules = _rules(machineconfig._firewall_docs(same_l2))
+    assert "kubespan" not in rules
+    assert rules["cluster-tcp"]["ingress"] == [{"subnet": same_l2.network.cluster.cidr}]
 
 
 def test_build_configs_stacks_the_firewall_patch_on_every_node(

@@ -1158,25 +1158,35 @@ def test_firewall_enabled_without_external_section(proxmox_cfg, monkeypatch):
 # Stage 4: firewall reconciliation against the named security schema
 # ---------------------------------------------------------------------------
 
-def _firewall_cfg(make_config, security):
-    return make_config(
-        {
-            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
-            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
-            "proxmox": {
-                "url": "https://pve.example:8006",
-                "storage": "vms",
-                "iso_storage": "isos",
-                "cidata_storage": "local",
-                "nodes": ["pve001", "pve002"],
-                "network": {
-                    "cluster": {"bridge": "vmbr0"},
-                },
+def _firewall_cfg(make_config, security, metal=None):
+    overrides = {
+        "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+        "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
+        "proxmox": {
+            "url": "https://pve.example:8006",
+            "storage": "vms",
+            "iso_storage": "isos",
+            "cidata_storage": "local",
+            "nodes": ["pve001", "pve002"],
+            "network": {
+                "cluster": {"bridge": "vmbr0"},
             },
-            "security": security,
         },
-        remove=("openstack",),
-    )
+        "security": security,
+    }
+    if metal is not None:
+        overrides["metal"] = metal
+    return make_config(overrides, remove=("openstack",))
+
+
+METAL_GROUP = {
+    "rack": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
+        "servers": {"rp001": {}},
+    },
+}
 
 
 def _owned(**rule):
@@ -3022,3 +3032,52 @@ def test_new_shape_network_blocks_reach_the_provider_status(make_config):
 
     assert backend.provider_status()["ingress_pool"] == "203.0.113.20-203.0.113.40"
     assert backend.current_network(backend.load_inventory()).kubernetes.vip == "203.0.113.10"
+
+
+def test_firewall_rules_admit_a_metal_group_on_another_l2(make_config):
+    """The group's nodes reach the VMs from their own L2: tcp+udp for apid,
+    kubelet and etcd, plus the KubeSpan WireGuard port for the handshakes."""
+    cfg = _firewall_cfg(make_config, {}, metal=METAL_GROUP)
+
+    desired = _backend(cfg, FakeClient(_data()))._desired_firewall_rules()
+
+    assert ("tcp", None, "172.29.22.0/24") in desired
+    assert ("udp", None, "172.29.22.0/24") in desired
+    assert ("udp", 51820, "172.29.22.0/24") in desired
+    assert ("tcp", None, cfg.network.cluster.cidr) in desired
+    assert ("udp", None, cfg.network.cluster.cidr) in desired
+
+
+def test_firewall_reconcile_with_a_metal_group_is_idempotent(make_config):
+    cfg = _firewall_cfg(make_config, {}, metal=METAL_GROUP)
+    desired = _backend(cfg, FakeClient(_data()))._desired_firewall_rules()
+    existing = []
+    for pos, (proto, dport, source) in enumerate(desired):
+        rule = _owned(pos=pos, proto=proto)
+        if dport is not None:
+            rule["dport"] = dport
+        if source is not None:
+            rule["source"] = source
+        existing.append(rule)
+
+    created, deleted = _reconcile_existing(cfg, existing)
+
+    assert created == []
+    assert deleted == []
+
+
+def test_firewall_reconcile_claims_an_unmarked_kubespan_rule(make_config):
+    """A rule without our marker that already allows what we want is claimed
+    by shape, so reconcile neither duplicates nor deletes it."""
+    cfg = _firewall_cfg(make_config, {}, metal=METAL_GROUP)
+    existing = [
+        {"type": "in", "action": "ACCEPT", "enable": 1,
+         "proto": "udp", "dport": 51820, "source": "172.29.22.0/24"},
+    ]
+
+    created, deleted = _reconcile_existing(cfg, existing)
+
+    assert ("udp", 51820, "172.29.22.0/24") not in {
+        (r["proto"], r.get("dport"), r.get("source")) for r in created
+    }
+    assert deleted == []

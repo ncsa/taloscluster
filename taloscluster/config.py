@@ -137,6 +137,10 @@ class Machine:
 
 # Named security rules default to their well-known port; anything else must say.
 DEFAULT_SECURITY_PORTS = {"kubernetes": 6443, "talos": 50000, "http": 80, "https": 443}
+# The WireGuard port Talos KubeSpan peers exchange handshakes on. The firewalls
+# open it explicitly from the node L2s the all-port intra-cluster rules already
+# admit, so the allowance survives those rules being narrowed.
+KUBESPAN_PORT = 51820
 # Ports left wide open unless the matching named rule appears in `security:`.
 OPEN_BY_DEFAULT = ("http", "https")
 
@@ -461,6 +465,20 @@ class Config:
             for port in (DEFAULT_SECURITY_PORTS[name] for name in OPEN_BY_DEFAULT)
             if port not in claimed
         )
+
+    def intra_cluster_cidrs(self, node_cidr: str | None = None) -> list[str]:
+        """Every L2 the cluster's nodes sit on, for the firewalls' intra-cluster
+        rules: `network.cluster.cidr` plus each `metal` group's own. `node_cidr`
+        adds the L2 of a node sitting off the cluster network (a metal server),
+        so a stack keyed on it still admits the group alongside the rest.
+        Deduplicated, the cluster L2 first.
+        """
+        subnets = [self.network.cluster.cidr]
+        if self.metal is not None:
+            subnets.extend(group.network.cidr for group in self.metal.groups.values())
+        if node_cidr:
+            subnets.append(node_cidr)
+        return list(dict.fromkeys(subnets))
 
     @property
     def _openstack(self) -> OpenStackConfig:

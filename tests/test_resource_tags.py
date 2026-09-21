@@ -80,6 +80,7 @@ def test_all_neutron_creates_include_ownership_tags():
         ),
         security={},
         open_ports=lambda: (80, 443),
+        intra_cluster_cidrs=lambda node_cidr=None: ["192.0.2.0/24"],
     )
     net = network._ensure_network(conn, cfg.name, inv, tags)
     network._ensure_subnet(conn, cfg, net, inv, tags)
@@ -122,7 +123,11 @@ def test_security_group_tags_after_create_when_post_rejects_them():
     proxy = LegacyProxy()
     conn = SimpleNamespace(network=proxy)
     cfg = SimpleNamespace(
-        name="testcluster", security={}, open_ports=lambda: (80, 443)
+        name="testcluster",
+        network=SimpleNamespace(cluster=SimpleNamespace(cidr="192.0.2.0/24")),
+        security={},
+        open_ports=lambda: (80, 443),
+        intra_cluster_cidrs=lambda node_cidr=None: ["192.0.2.0/24"],
     )
 
     sg = security.reconcile(conn, cfg, EmptyInventory())
@@ -171,7 +176,11 @@ def test_failed_fallback_tagging_deletes_the_untagged_resource():
     proxy = FailingProxy()
     conn = SimpleNamespace(network=proxy)
     cfg = SimpleNamespace(
-        name="testcluster", security={}, open_ports=lambda: (80, 443)
+        name="testcluster",
+        network=SimpleNamespace(cluster=SimpleNamespace(cidr="192.0.2.0/24")),
+        security={},
+        open_ports=lambda: (80, 443),
+        intra_cluster_cidrs=lambda node_cidr=None: ["192.0.2.0/24"],
     )
 
     with pytest.raises(RuntimeError, match="tagging failed"):

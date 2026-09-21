@@ -2,8 +2,9 @@
 
 Rules: ICMP, one rule per host CIDR of every named `security:` entry (on that
 entry's port), tcp/80 and tcp/443 open to all unless an `http` or `https` entry
-restricts them, and intra-SG allow-all tcp+udp. Editing an allowlist in
-cluster.yaml converges here.
+restricts them, intra-SG allow-all tcp+udp, and -- when a `metal` group sits on
+another L2 -- tcp+udp plus KubeSpan's UDP/51820 from that group's CIDR. Editing
+an allowlist in cluster.yaml converges here.
 
 This is the one place true diffing matters: we compute the desired ingress rule
 set as comparable tuples, then add the missing ones and delete the extra ones.
@@ -18,7 +19,7 @@ from typing import Any
 from openstack.connection import Connection
 
 from .. import naming
-from ..config import Config
+from ..config import KUBESPAN_PORT, Config
 from ..output import action, dry_run, info
 from .session import Inventory
 from .tags import create_tagged
@@ -48,6 +49,17 @@ def _desired_rules(cfg: Config) -> dict[tuple, str]:
             )
     rules[("tcp", None, None, None, SELF)] = "intra-sg tcp"
     rules[("udp", None, None, None, SELF)] = "intra-sg udp"
+    # the members sit inside the SG (SELF); a metal group on another L2 is not,
+    # so its nodes are admitted by CIDR -- apid, kubelet and etcd over tcp+udp,
+    # their WireGuard handshakes on the explicit KubeSpan port
+    peers = [
+        subnet for subnet in cfg.intra_cluster_cidrs()
+        if subnet != cfg.network.cluster.cidr
+    ]
+    for subnet in peers:
+        rules[("tcp", None, None, subnet, None)] = "intra-cluster tcp"
+        rules[("udp", None, None, subnet, None)] = "intra-cluster udp"
+        rules[("udp", KUBESPAN_PORT, KUBESPAN_PORT, subnet, None)] = "kubespan udp"
     return rules
 
 

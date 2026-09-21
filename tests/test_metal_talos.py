@@ -6,7 +6,8 @@ bare-metal worker whose cabling plan is a PXE boot link plus one NIC carrying
 both the cluster and the external role -- the csfarm shape. On a jumbo group
 L2 the cluster link states its MTU and clamps the default route to 1500, and
 the external VLAN child states its own (default) MTU so it never inherits the
-parent's. The KubeSpan patch rides along with its endpoint filters, and the
+parent's. The stack carries the shared ingress firewall keyed on the group's
+L2, and the KubeSpan patch rides along with its endpoint filters; the
 external child brings the return-path static pod that marks ingress
 connections for the policy-routing rule.
 
@@ -172,6 +173,37 @@ DEVICES_PATCH = {
     ]}}
 }
 
+# the group sits on the cluster L2, so the firewall is the standard stack with
+# no KubeSpan rule; the mixed-L2 shape is pinned by the test below
+FIREWALL_DOCS = [
+    {"apiVersion": "v1alpha1", "kind": "NetworkDefaultActionConfig", "ingress": "block"},
+    {
+        "apiVersion": "v1alpha1", "kind": "NetworkRuleConfig", "name": "cluster-tcp",
+        "portSelector": {"ports": ["1-65535"], "protocol": "tcp"},
+        "ingress": [{"subnet": "172.29.21.0/24"}],
+    },
+    {
+        "apiVersion": "v1alpha1", "kind": "NetworkRuleConfig", "name": "cluster-udp",
+        "portSelector": {"ports": ["1-65535"], "protocol": "udp"},
+        "ingress": [{"subnet": "172.29.21.0/24"}],
+    },
+    {
+        "apiVersion": "v1alpha1", "kind": "NetworkRuleConfig", "name": "dhcp-client",
+        "portSelector": {"ports": [68], "protocol": "udp"},
+        "ingress": [{"subnet": "0.0.0.0/0"}],
+    },
+    {
+        "apiVersion": "v1alpha1", "kind": "NetworkRuleConfig", "name": "open-tcp-80",
+        "portSelector": {"ports": [80], "protocol": "tcp"},
+        "ingress": [{"subnet": "0.0.0.0/0"}],
+    },
+    {
+        "apiVersion": "v1alpha1", "kind": "NetworkRuleConfig", "name": "open-tcp-443",
+        "portSelector": {"ports": [443], "protocol": "tcp"},
+        "ingress": [{"subnet": "0.0.0.0/0"}],
+    },
+]
+
 # what `talosctl gen config` (a 1.14 client) emits for a v1.13 target: the
 # machine document carries grubUseUKICmdline and a HostnameConfig document
 # follows; the classic machine.network.hostname arrives via the patches
@@ -208,20 +240,44 @@ def test_metal_patch_stack_matches_golden(make_config, monkeypatch, tmp_path):
     """The csfarm shape: pxe boot link, one [cluster, external] NIC, jumbo L2."""
     stack, _ = _build(make_config, monkeypatch, tmp_path)
 
-    assert stack[:5] == [
+    assert stack[:6] == [
         [MACHINE_PATCH],
         [HOSTNAME_FIELD_PATCH],
+        FIREWALL_DOCS,
         [KUBESPAN_PATCH],
         NETWORK_DOCS,
         [DEVICES_PATCH],
     ]
     # the external child's return-path pod closes the stack
-    (pod_patch,) = stack[5]
+    (pod_patch,) = stack[6]
     (pod,) = pod_patch["machine"]["pods"]
     assert pod_patch == {"machine": {"pods": [pod]}}
     assert pod["metadata"]["name"] == "taloscluster-metal-return-path"
     script = pod["spec"]["containers"][0]["command"][2]
     assert 'iifname "enp2s0f0.1691" ip daddr 203.0.113.0/24' in script
+
+
+def test_metal_firewall_admits_the_cluster_l2_and_kubespan(
+    make_config, monkeypatch, tmp_path
+):
+    """A group on another L2: the firewall admits the cluster L2 beside its
+    own and opens KubeSpan's UDP/51820 for the VM nodes' WireGuard handshakes."""
+    other_l2 = {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "network": {"cidr": "172.29.31.0/24", "gateway": "172.29.31.1"},
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "172.29.31.5/24"}}}},
+    }
+    stack, _ = _build(make_config, monkeypatch, tmp_path, metal=other_l2, external=None)
+
+    firewall = stack[2]
+    rules = {d["name"]: d for d in firewall if d["kind"] == "NetworkRuleConfig"}
+    for name in ("cluster-tcp", "cluster-udp"):
+        assert {"subnet": "172.29.21.0/24"} in rules[name]["ingress"]
+        assert {"subnet": "172.29.31.0/24"} in rules[name]["ingress"]
+    assert rules["kubespan"]["portSelector"] == {"ports": [51820], "protocol": "udp"}
+    assert rules["kubespan"]["ingress"] == [{"subnet": "172.29.21.0/24"}]
 
 
 def test_metal_config_strips_pre_1_14_output(make_config, monkeypatch, tmp_path):
@@ -290,7 +346,7 @@ def test_metal_interface_overrides_name_and_tag_the_vlan_child(
     }
     stack, _ = _build(make_config, monkeypatch, tmp_path, metal=metal)
 
-    docs, devices = stack[3], stack[4][0]
+    docs, devices = stack[4], stack[5][0]
     assert [d["name"] for d in docs if d["kind"] == "LinkConfig"] == [
         "enp2s0f0", "ext0",
     ]
@@ -358,7 +414,7 @@ def test_metal_control_plane_states_the_vip_on_its_link(
         for group in stack
         for patch in ([group] if isinstance(group, dict) else group)
     )
-    vip = next(doc for doc in stack[4] if doc["kind"] == "Layer2VIPConfig")
+    vip = next(doc for doc in stack[5] if doc.get("kind") == "Layer2VIPConfig")
     assert vip == {
         "apiVersion": "v1alpha1", "kind": "Layer2VIPConfig",
         "name": VIP, "link": "enp1s0f0",

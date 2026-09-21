@@ -27,7 +27,7 @@ from pathlib import Path
 
 import yaml
 
-from ..config import Config, ConfigError, Machine
+from ..config import KUBESPAN_PORT, Config, ConfigError, Machine
 from ..infrastructure import Endpoint, TalosContribution
 from . import talosctl
 
@@ -119,25 +119,32 @@ def _network_rule(name: str, protocol: str, ports: list, subnets: list[str]) -> 
     }
 
 
-def _firewall_docs(cfg: Config) -> list[dict]:
+def _firewall_docs(cfg: Config, node_cidr: str | None = None) -> list[dict]:
     """The Talos ingress firewall, mirroring the provider security rules.
 
     Same policy as the OpenStack security group and the Proxmox VM firewall:
-    everything from the cluster network, the open-by-default ports from anywhere,
-    each `security:` rule's port from its hosts, and nothing else. Talos allows
-    loopback, established/related, rate-limited ICMP and pod/service traffic on
-    its own; DHCP replies and tailscale's direct-connection port are opened here
-    because a node must keep its lease and its tailnet reachability while the
-    default action is block.
+    everything from every L2 the cluster's nodes sit on, the open-by-default
+    ports from anywhere, each `security:` rule's port from its hosts, and
+    nothing else. Talos allows loopback, established/related, rate-limited ICMP
+    and pod/service traffic on its own; DHCP replies and tailscale's
+    direct-connection port are opened here because a node must keep its lease
+    and its tailnet reachability while the default action is block. When nodes
+    sit on more than one L2 (a `metal` group), KubeSpan's WireGuard port is
+    also opened from the other L2s explicitly. `node_cidr` keys the stack on a
+    node sitting off the cluster network -- a metal server's own L2.
     """
+    subnets = cfg.intra_cluster_cidrs(node_cidr)
+    peers = [subnet for subnet in subnets if subnet != (node_cidr or cfg.network.cluster.cidr)]
     docs: list[dict] = [
         {"apiVersion": "v1alpha1", "kind": "NetworkDefaultActionConfig", "ingress": "block"},
-        _network_rule("cluster-tcp", "tcp", ["1-65535"], [cfg.network.cluster.cidr]),
-        _network_rule("cluster-udp", "udp", ["1-65535"], [cfg.network.cluster.cidr]),
+        _network_rule("cluster-tcp", "tcp", ["1-65535"], subnets),
+        _network_rule("cluster-udp", "udp", ["1-65535"], subnets),
         _network_rule("dhcp-client", "udp", [DHCP_CLIENT_PORT], ["0.0.0.0/0"]),
     ]
     if cfg.tailscale_enabled:
         docs.append(_network_rule("tailscale", "udp", [TAILSCALE_PORT], ["0.0.0.0/0"]))
+    if peers:
+        docs.append(_network_rule("kubespan", "udp", [KUBESPAN_PORT], peers))
     for port in cfg.open_ports():
         docs.append(_network_rule(f"open-tcp-{port}", "tcp", [port], ["0.0.0.0/0"]))
     for rule in cfg.security.values():

@@ -44,7 +44,8 @@ The [`security`](../configuration/security.md) rules become the OpenStack securi
 | tcp/50000, Talos API | the `talos` rule's hosts | you |
 | tcp/80 and tcp/443, ingress | everyone, until any rule claims the port | you, optional |
 | any other port, such as node exporters | hosts of a named rule with an explicit `port` | you, optional |
-| everything between nodes on `network.cluster.cidr` (etcd, kubelet, CNI, trustd) | the nodes | taloscluster |
+| everything between nodes on any node L2 — [`network.cluster.cidr`](../configuration/network.md#networkclustercidr) and each [`metal`](../configuration/metal.md) group's own (etcd, kubelet, CNI, trustd) | the nodes | taloscluster |
+| udp/51820 KubeSpan, the WireGuard overlay | the node L2s a node does not sit on itself, when the cluster spans L2s | taloscluster |
 | udp/68 DHCP replies | anyone | taloscluster |
 | udp/41641 Tailscale | anyone when the `tailscale` section is present | taloscluster |
 | ICMP, loopback, established connections, pod/service traffic | Talos built-in exceptions | Talos |

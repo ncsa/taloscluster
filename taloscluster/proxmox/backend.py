@@ -18,6 +18,7 @@ from urllib.parse import quote
 from .. import naming
 from ..config import (
     DEFAULT_MTU,
+    KUBESPAN_PORT,
     Config,
     Machine,
     ProxmoxConfig,
@@ -1418,16 +1419,23 @@ class ProxmoxBackend:
 
         Mirrors the OpenStack security group: ICMP, the ports left open by
         `security:`, one rule per named-rule host CIDR, and intra-cluster
-        tcp+udp from the private CIDR (Neutron's remote-group equivalent).
+        tcp+udp from every L2 the cluster's nodes sit on (Neutron's
+        remote-group equivalent), plus KubeSpan's UDP/51820 from the L2s off
+        the cluster network when a metal group sits on one.
         """
+        subnets = self.cfg.intra_cluster_cidrs()
+        peers = [s for s in subnets if s != self.cfg.network.cluster.cidr]
         rules: dict[_FirewallKey, str] = {("icmp", None, None): "icmp"}
         for port in self.cfg.open_ports():
             rules[("tcp", port, None)] = f"tcp/{port} open"
         for rule in self.cfg.security.values():
             for name, cidr in rule.hosts.items():
                 rules[("tcp", rule.port, cidr)] = f"{rule.name} from {name}"
-        rules[("tcp", None, self.cfg.network.cluster.cidr)] = "intra-cluster tcp"
-        rules[("udp", None, self.cfg.network.cluster.cidr)] = "intra-cluster udp"
+        for subnet in subnets:
+            rules[("tcp", None, subnet)] = "intra-cluster tcp"
+            rules[("udp", None, subnet)] = "intra-cluster udp"
+        for subnet in peers:
+            rules[("udp", KUBESPAN_PORT, subnet)] = "kubespan udp"
         return rules
 
     @staticmethod
@@ -1464,7 +1472,8 @@ class ProxmoxBackend:
 
         * the comment marker, written by every rule we create; and
         * the rule's shape falling inside the policy `security:` decides -- ICMP,
-          intra-cluster traffic, or a tcp port some rule in `security:` governs.
+          intra-cluster traffic from any node L2, KubeSpan's port from those L2s,
+          or a tcp port some rule in `security:` governs.
 
         The marker alone is not enough, because 0.4.0 wrote its rules without one
         and dropping a CIDR from an allowlist has to actually close it on those
@@ -1479,9 +1488,12 @@ class ProxmoxBackend:
         if key is None:
             return False
         proto, port, source = key
+        subnets = self.cfg.intra_cluster_cidrs()
         if proto == "icmp" and port is None and source is None:
             return True
-        if proto in ("tcp", "udp") and port is None and source == self.cfg.network.cluster.cidr:
+        if proto in ("tcp", "udp") and port is None and source in subnets:
+            return True
+        if proto == "udp" and port == KUBESPAN_PORT and source in subnets:
             return True
         return proto == "tcp" and port in self._managed_firewall_ports()
 
