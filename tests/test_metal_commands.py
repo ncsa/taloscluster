@@ -42,13 +42,19 @@ GROUP = {
 def _cfg(make_config, metal=None):
     return make_config(
         {
-            "controlplane": {"count": 1, "disk": 40},
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
             "network": {
                 "cluster": {
                     "cidr": "172.29.21.0/24", "gateway": "172.29.21.1",
                     "kubeapi_vip": VIP,
                 },
                 "dns": ["192.0.2.53"],
+            },
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0"}},
             },
             "metal": {"phoenix": GROUP if metal is None else metal},
         },

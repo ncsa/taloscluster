@@ -2,7 +2,7 @@
 
 Back to the [configuration index](../configuration.md).
 
-A `metal:` section brings bare-metal machines into the cluster. It may sit beside the one [OpenStack](openstack.md) or [Proxmox](proxmox.md) section — VMs and bare metal sharing one cluster — or stand alone when every machine is bare metal; at most one VM provider may be set, with or without `metal`. `taloscluster init --metal` scaffolds the example group below, beside a provider or instead of one, with the group's BMC credentials as `CHANGE-ME` placeholders in `secrets.yaml`. See [Metal setup](../providers/metal.md) for the preparation the machines and their BMCs need.
+A `metal:` section brings bare-metal machines into the cluster. It sits beside the one [OpenStack](openstack.md) or [Proxmox](proxmox.md) section — VMs and bare metal sharing one cluster — and is refused without it: one VM provider is always required, since the provider backend plans, converges and destroys the cluster the metal machines join. `taloscluster init --metal` scaffolds the example group below, beside a provider, with the group's BMC credentials as `CHANGE-ME` placeholders in `secrets.yaml`. See [Metal setup](../providers/metal.md) for the preparation the machines and their BMCs need.
 
 ## `metal`
 
@@ -108,5 +108,3 @@ The Redfish settings every machine in the group starts from: `ip` (the BMC's IPv
 Optional · mapping of machine name to overrides
 
 Each key names one machine and maps to the settings that machine overrides, which are the group's own keys except `servers`. The name must be a valid hostname, the same name may not appear in two groups, and a machine with no overrides inherits the group as written.
-
-On a cluster with no VM provider, the [pools](pools.md) carry only `count` and `disk`: neither VM provider's sizing keys apply, and the [`controlplane` pool](pools.md#controlplane) is still required.

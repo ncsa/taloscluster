@@ -213,8 +213,9 @@ def main(argv: list[str] | None = None) -> int:
         description="Write provider-specific cluster.yaml and secrets.yaml templates plus a "
                     ".gitignore covering the secret/derived files (secrets.yaml, "
                     "talossecrets.yaml, talosconfig, kubeconfig). --metal appends a "
-                    "bare-metal `metal:` example and its BMC credential placeholders; "
-                    "without a provider flag it scaffolds an all-bare-metal cluster. "
+                    "bare-metal `metal:` example and its BMC credential placeholders, "
+                    "and requires one of the provider flags: bare metal joins a "
+                    "cluster a provider manages. "
                     "Never overwrites an existing cluster.yaml or secrets.yaml; an "
                     "existing .gitignore only gets the entries it is missing. Edit "
                     "both files, then run `taloscluster plan`.",
@@ -237,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
     p_init.add_argument(
         "--metal", action="store_true",
         help="also append a bare-metal `metal:` section and its BMC credential "
-             "block; alone, metal replaces the VM provider",
+             "block (requires --openstack or --proxmox)",
     )
     p_init.set_defaults(func=_cmd_init, provider=None)
 

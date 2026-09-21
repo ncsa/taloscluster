@@ -61,9 +61,18 @@ def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None):
     }
     if external is not None:
         network["external"] = external
+    proxmox_network: dict = {"cluster": {"bridge": "vmbr0"}}
+    if external is not None:
+        proxmox_network["external"] = {"bridge": "br-ext"}
     overrides: dict = {
-        "controlplane": {"count": 1, "disk": 40},
+        "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
         "network": network,
+        "proxmox": {
+            "url": "https://pve.example:8006",
+            "storage": "vms",
+            "iso_storage": "isos",
+            "network": proxmox_network,
+        },
         "metal": {"phoenix": PHOENIX if metal is None else metal},
     }
     if talos_version is not None:

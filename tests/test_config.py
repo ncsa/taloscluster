@@ -446,32 +446,25 @@ def test_metal_section_loads_alongside_a_vm_provider(make_config):
     assert cfg.provider_name == "openstack"
 
 
-def test_metal_alone_loads_without_a_vm_provider(make_config):
-    cfg = make_config(
-        {
-            "controlplane": {"count": 3, "disk": 40},
-            "workers": {"worker": {"count": 2, "disk": 100}},
-            "metal": {
-                "worker": {
-                    "role": "worker",
-                    "disk": "/dev/sda",
-                    "servers": {"rp001-worker": {}},
-                }
+def test_metal_without_a_vm_provider_is_refused(make_config):
+    """A metal section always sits beside one VM provider: with none there is
+    no backend to plan, converge, bootstrap or destroy the cluster, so the
+    loader refuses the pair instead of failing mid-command."""
+    with pytest.raises(ConfigError, match="metal section requires a VM provider"):
+        make_config(
+            {
+                "controlplane": {"count": 3, "disk": 40},
+                "workers": {"worker": {"count": 2, "disk": 100}},
+                "metal": {
+                    "worker": {
+                        "role": "worker",
+                        "disk": "/dev/sda",
+                        "servers": {"rp001-worker": {}},
+                    }
+                },
             },
-        },
-        remove=("openstack",),
-    )
-
-    assert cfg.provider is None
-    assert cfg.metal is not None
-    server = cfg.metal.groups["worker"].servers["rp001-worker"]
-    assert server.group == "worker"
-    assert server.role == "worker"
-    assert server.disk == "/dev/sda"
-    assert cfg.provider_name == ""
-    # metal-only pools carry no VM sizing keys, and the machines still expand
-    assert cfg.machines["testcluster-controlplane-01"].disk == 40
-    assert cfg.machines["testcluster-worker-02"].disk == 100
+            remove=("openstack",),
+        )
 
 
 def test_metal_servers_flat_map_carries_every_server_role(make_config):
@@ -950,7 +943,7 @@ def test_metal_server_name_must_be_unique_across_groups(make_config):
 
 
 # ---------------------------------------------------------------------------
-# one VM provider plus metal: the four valid combinations
+# one VM provider plus metal
 # ---------------------------------------------------------------------------
 
 def _metal_groups() -> dict:
@@ -1080,23 +1073,6 @@ def test_proxmox_sdn_with_metal_loads(make_config):
     assert proxmox_sdn(cfg.name, cfg.provider) is not None
     assert cfg.metal == _expected_metal_groups(cfg.network.cluster)
     assert len(cfg.machines) == 1
-
-
-def test_metal_only_cluster_loads(make_config):
-    """No VM provider: every machine is bare metal, pools carry count and disk."""
-    cfg = make_config(
-        {
-            "controlplane": {"count": 3, "disk": 40},
-            "workers": {"worker": {"count": 2, "disk": 100}},
-            "metal": _metal_groups(),
-        },
-        remove=("openstack",),
-    )
-
-    assert cfg.provider is None
-    assert cfg.provider_name == ""
-    assert cfg.metal == _expected_metal_groups(cfg.network.cluster)
-    assert len(cfg.machines) == 5
 
 
 def test_openstack_with_metal_rejects_network_external(make_config):

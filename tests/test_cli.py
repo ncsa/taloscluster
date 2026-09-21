@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+import yaml
 
 from taloscluster import cli
 from taloscluster import plugins as _plugins
@@ -28,7 +29,7 @@ def _stub_plugin(name, **hooks):
 )
 def test_init_selects_provider(monkeypatch, tmp_path, provider_option, expected):
     """The provider flag is forwarded verbatim; with none given the scaffold
-    applies the OpenStack default (None means metal-only under `--metal`)."""
+    applies the OpenStack default."""
     seen = {}
 
     def init(root, name, provider, metal):
@@ -45,11 +46,10 @@ def test_init_selects_provider(monkeypatch, tmp_path, provider_option, expected)
 
 @pytest.mark.parametrize(
     ("provider_option", "expected"),
-    [([], None), (["--openstack"], "openstack"), (["--proxmox"], "proxmox")],
+    [(["--openstack"], "openstack"), (["--proxmox"], "proxmox")],
 )
 def test_init_forwards_metal(monkeypatch, tmp_path, provider_option, expected):
-    """`--metal` is additive to either provider and stands alone: with no
-    provider flag the scaffold is metal-only (provider None)."""
+    """`--metal` is additive to either provider and is forwarded verbatim."""
     seen = {}
 
     def init(root, name, provider, metal):
@@ -62,6 +62,16 @@ def test_init_forwards_metal(monkeypatch, tmp_path, provider_option, expected):
     assert seen == {
         "root": tmp_path, "name": "demo", "provider": expected, "metal": True,
     }
+
+
+def test_init_metal_without_a_provider_is_refused(tmp_path, capsys):
+    """`--metal` alone is refused: bare-metal machines join a cluster a
+    provider manages, so the scaffold never writes a metal-only pair."""
+    assert cli.main(["init", "demo", "-C", str(tmp_path), "--metal"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("ERROR: --metal requires a VM provider")
+    assert not (tmp_path / "cluster.yaml").exists()
+    assert not (tmp_path / "secrets.yaml").exists()
 
 
 def test_init_provider_flags_are_mutually_exclusive(tmp_path):
@@ -358,6 +368,45 @@ def test_metal_boot_forwards_serve(monkeypatch, tmp_path):
 def test_metal_serve_is_rejected_for_the_bmc_free_actions(tmp_path, capsys):
     assert cli.main(["metal", "wait", "rp001", "--serve", "-C", str(tmp_path)]) == 1
     assert "--serve" in capsys.readouterr().err
+
+
+# -- metal-only configs are refused by every command -------------------------
+
+def _metal_only_dir(tmp_path, monkeypatch):
+    """A cluster directory whose machines are all bare metal: the scaffolded
+    provider+metal pair with the provider section stripped out, i.e. the pair
+    the metal-only `init --metal` scaffold used to write."""
+    monkeypatch.setattr(_plugins, "discover", lambda: [])
+    cli._scaffold.init(tmp_path, name="demo", provider="proxmox", metal=True)
+    for name in ("cluster.yaml", "secrets.yaml"):
+        path = tmp_path / name
+        d = yaml.safe_load(path.read_text())
+        d.pop("proxmox", None)
+        path.write_text(yaml.safe_dump(d))
+
+
+METAL_ONLY_COMMANDS = [
+    ["plan"],
+    ["converge"],
+    ["status"],
+    ["check"],
+    ["env"],
+    ["image", "download"],
+    ["destroy"],
+]
+
+
+@pytest.mark.parametrize("argv", METAL_ONLY_COMMANDS, ids=lambda a: " ".join(a))
+def test_metal_only_config_is_refused_by_every_command(tmp_path, monkeypatch, capsys, argv):
+    """A config with a metal section but no VM provider is refused at load
+    time, so every command exits 1 with one clean ERROR line instead of the
+    TypeError traceback `backend_for` used to raise."""
+    _metal_only_dir(tmp_path, monkeypatch)
+    assert cli.main([*argv, "-C", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert err.count("ERROR:") == 1
+    assert "metal section requires a VM provider" in err
+    assert "Traceback" not in err
 
 
 # -- exception-to-exit-code mapping in main ---------------------------------

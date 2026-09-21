@@ -2,7 +2,7 @@
 
 Back to the [configuration index](../configuration.md).
 
-`controlplane` is a single pool. `workers` is a mapping of pool name to pool. Both take the same keys. The example below uses Proxmox; for OpenStack, replace `cores` and `memory` with `flavor` in every pool and omit Proxmox `node` placement. On a cluster whose machines are all bare metal ([`metal`](metal.md) with no VM provider), `count` and `disk` are the only required keys.
+`controlplane` is a single pool. `workers` is a mapping of pool name to pool. Both take the same keys. The example below uses Proxmox; for OpenStack, replace `cores` and `memory` with `flavor` in every pool and omit Proxmox `node` placement.
 
 ```yaml
 controlplane:

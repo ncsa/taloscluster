@@ -410,7 +410,7 @@ class Config:
 
     @property
     def provider_name(self) -> str:
-        """The VM provider's name, or an empty string on a metal-only cluster."""
+        """The VM provider's name, or an empty string without one."""
         if isinstance(self.provider, OpenStackConfig):
             return "openstack"
         if isinstance(self.provider, ProxmoxConfig):
@@ -1047,9 +1047,9 @@ def _provider_config(
 ) -> tuple[ProviderConfig | None, MetalConfig | None]:
     """The selected VM provider plus the optional `metal` section.
 
-    One VM provider (openstack or proxmox) may carry a `metal` section beside
-    it, or `metal` may stand alone; which machines land on which side is a
-    per-pool decision the rest of the config is not asked to make yet.
+    One VM provider (openstack or proxmox) is required; a `metal` section may
+    sit beside it. Which machines land on which side is a per-pool decision the
+    rest of the config is not asked to make yet.
     A metal group without its own `network` sits on the cluster L2, so the
     parsed blocks arrive here.
     """
@@ -1450,6 +1450,14 @@ def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:
 
 def _validate(cfg: Config) -> None:
     """Reject invalid or ambiguous desired state before touching the cluster."""
+    if cfg.provider is None:
+        # bare metal joins machines to a cluster a VM provider manages; with no
+        # provider there is no backend, no bootstrap and no kubeconfig writer,
+        # so a metal-only config is refused instead of failing mid-command
+        raise ConfigError(
+            "cluster.yaml: a metal section requires a VM provider section "
+            "(openstack or proxmox); an all-bare-metal cluster is not supported"
+        )
     if not isinstance(cfg.name, str) or not _NAME_RE.fullmatch(cfg.name):
         raise ConfigError(
             "cluster.yaml: name must contain lowercase letters, numbers and internal hyphens"
@@ -1495,11 +1503,8 @@ def _validate(cfg: Config) -> None:
             raise ConfigError(f"pool '{pool_name}' must be a YAML mapping")
         if isinstance(cfg.provider, OpenStackConfig):
             required: tuple[str, ...] = ("count", "flavor", "disk")
-        elif isinstance(cfg.provider, ProxmoxConfig):
-            required = ("count", "cores", "memory", "disk")
         else:
-            # metal alone: neither VM provider's sizing keys apply
-            required = ("count", "disk")
+            required = ("count", "cores", "memory", "disk")
         for key in required:
             if key not in p:
                 raise ConfigError(f"pool '{pool_name}' missing '{key}'")

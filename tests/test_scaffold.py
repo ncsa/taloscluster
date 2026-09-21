@@ -14,6 +14,7 @@ import yaml
 
 from taloscluster import naming, plugins
 from taloscluster.config import ConfigError, load_config
+from taloscluster.output import Die
 from taloscluster.scaffold import CLUSTER_TEMPLATE, GITIGNORE_ENTRIES, init
 
 
@@ -140,7 +141,7 @@ def test_plain_init_has_no_metal_section(tmp_path):
     assert load_config(tmp_path).metal is None
 
 
-@pytest.mark.parametrize("provider", [None, "openstack", "proxmox"])
+@pytest.mark.parametrize("provider", ["openstack", "proxmox"])
 def test_metal_scaffold_produces_a_loadable_pair(tmp_path, provider):
     init(tmp_path, name="demo", provider=provider, metal=True)
 
@@ -164,13 +165,17 @@ def test_metal_scaffold_produces_a_loadable_pair(tmp_path, provider):
     assert "bmc" not in group
 
     cfg = load_config(tmp_path)
-    assert cfg.provider_name == (provider or "")
+    assert cfg.provider_name == provider
     assert cfg.metal.groups["phoenix"].servers["rp001"].bmc.username == "CHANGE-ME"
-    if provider is None:
-        # metal alone: no VM provider section, the pools carry count+disk only
-        assert "openstack" not in cluster and "proxmox" not in cluster
-        assert "openstack" not in secrets and "proxmox" not in secrets
-        assert cluster["network"]["cluster"]["kubeapi_vip"]
+
+
+def test_metal_init_without_a_provider_is_refused(tmp_path):
+    """Bare metal joins a cluster a provider manages: `--metal` alone has no
+    backend to plan, converge or destroy, so the scaffold refuses it."""
+    with pytest.raises(Die, match="--metal requires a VM provider"):
+        init(tmp_path, name="demo", provider=None, metal=True)
+    assert not (tmp_path / "cluster.yaml").exists()
+    assert not (tmp_path / "secrets.yaml").exists()
 
 
 def test_metal_init_mentions_include_in_the_next_steps(tmp_path, capsys):

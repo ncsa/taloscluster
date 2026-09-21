@@ -25,7 +25,7 @@ taloscluster init --proxmox -C mycluster mycluster
 
 Scaffold `cluster.yaml`, `secrets.yaml`, and `.gitignore`. The provider defaults to OpenStack and the name defaults to `mycluster`. `NAME` sets the name inside the configuration; `-C DIR` selects the directory and creates it if needed.
 
-`--metal` appends a `metal:` example group with one server to `cluster.yaml` and the group's BMC credentials as `CHANGE-ME` placeholders to `secrets.yaml` ([Metal](configuration/metal.md)); it may be combined with either provider or used alone, in which case the scaffold is an all-bare-metal cluster with no VM provider section. The scaffolded group has `redfish: false`, so the pair loads until the credentials are real. A long machine list can move into a file [`include`](configuration/general.md#include) names.
+`--metal` appends a `metal:` example group with one server to `cluster.yaml` and the group's BMC credentials as `CHANGE-ME` placeholders to `secrets.yaml` ([Metal](configuration/metal.md)); it requires one of the provider flags, since bare-metal machines join a cluster a provider manages. The scaffolded group has `redfish: false`, so the pair loads until the credentials are real. A long machine list can move into a file [`include`](configuration/general.md#include) names.
 
 Existing configuration files are preserved. Installed plugins append missing sections, and `.gitignore` receives missing secret and derived-file entries. New `secrets.yaml` files have mode 0600. Edit both configuration files before running `plan`.
 

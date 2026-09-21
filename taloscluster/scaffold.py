@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import plugins as _plugins
 from .config import CLUSTER_FILE, SECRETS_FILE, read_yaml
-from .output import info, log
+from .output import Die, info, log
 from .state import DERIVED_FILES
 from .state import SECRETS_FILE as TALOS_SECRETS_FILE
 
@@ -145,22 +145,6 @@ proxmox:
     },
 }
 
-# `init --metal` with no provider flag: an all-bare-metal cluster has no VM
-# provider section and no VM sizing keys, and carries the kube-api VIP itself
-# (there is no provider to allocate the API address).
-METAL_ONLY_TEMPLATE = {
-    "controlplane_sizing": "  # bare metal: the hardware is the sizing",
-    "worker_sizing": "    # bare metal: the hardware is the sizing",
-    "network_cluster": """
-    # the kube-api VIP: a free address on this L2, outside any DHCP range
-    kubeapi_vip: 192.168.0.2""",
-    "cluster": """\
-# no VM provider: every machine of this cluster is bare metal, listed in the
-# `metal:` section at the end of this file. Add an `openstack:` or `proxmox:`
-# section to run VMs beside them.""",
-    "secrets": "",
-}
-
 # the bare-metal section `init --metal` appends: one example group with one
 # server. `redfish` starts false so the scaffolded pair loads with the
 # placeholder BMC credentials still in secrets.yaml.
@@ -209,18 +193,20 @@ def init(
 ) -> None:
     """Create provider-specific cluster.yaml and secrets.yaml plus .gitignore.
 
-    `metal` appends the bare-metal section templates; with no provider it
-    scaffolds an all-bare-metal cluster instead.
+    `metal` appends the bare-metal section templates beside the provider; it
+    is refused without one, since bare metal joins a provider-managed cluster.
     """
     if provider is None and not metal:
         provider = "openstack"
     if provider is None:
-        template = METAL_ONLY_TEMPLATE
-    else:
-        try:
-            template = PROVIDER_TEMPLATES[provider]
-        except KeyError as e:
-            raise ValueError(f"unsupported provider: {provider}") from e
+        raise Die(
+            "--metal requires a VM provider: bare-metal machines join a cluster "
+            "a provider manages, so pass --openstack or --proxmox"
+        )
+    try:
+        template = PROVIDER_TEMPLATES[provider]
+    except KeyError as e:
+        raise ValueError(f"unsupported provider: {provider}") from e
 
     root.mkdir(parents=True, exist_ok=True)
 
@@ -266,10 +252,7 @@ def init(
         credentials.append("metal BMC credentials")
     credentials.append("tailscale key")
     info(f"1. edit {SECRETS_FILE}: {' + '.join(credentials)}")
-    if provider:
-        info(f"2. edit {CLUSTER_FILE}: name, versions, pools, {provider} settings, allowlists")
-    else:
-        info(f"2. edit {CLUSTER_FILE}: name, versions, pools, machines, allowlists")
+    info(f"2. edit {CLUSTER_FILE}: name, versions, pools, {provider} settings, allowlists")
     if metal:
         info("   (a long machine list can move into a file `include:` names)")
     info("3. taloscluster plan      # dry-run, changes nothing")
