@@ -425,7 +425,10 @@ def test_build_configs_no_tailscale_patch_when_key_absent(cfg, monkeypatch, tmp_
         assert f"{host}-tailscale.yaml" not in patch_names
 
 
-def test_build_configs_stacks_the_kubespan_patch_on_every_node(cfg, monkeypatch, tmp_path):
+def test_build_configs_stacks_the_kubespan_patch_on_every_node(
+    cfg, monkeypatch, tmp_path
+):
+    cfg = replace(cfg, kubespan=True)  # the patch rides an explicit opt-in
     calls = []
 
     def fake_gen_config(**kwargs):
@@ -448,10 +451,10 @@ def test_build_configs_stacks_the_kubespan_patch_on_every_node(cfg, monkeypatch,
         assert f"{host}-kubespan.yaml" in patch_names
 
 
-def test_build_configs_no_kubespan_patch_when_disabled(
+def test_build_configs_no_kubespan_patch_by_default(
     make_config, monkeypatch, tmp_path
 ):
-    cfg = make_config({"talos": {"kubespan": False}})
+    cfg = make_config()
     calls = []
 
     def fake_gen_config(**kwargs):
@@ -568,6 +571,7 @@ def test_contribution_patches_come_before_user_patches(make_config, monkeypatch,
 
 
 def test_patch_order_is_deterministic(cfg, monkeypatch, tmp_path):
+    cfg = replace(cfg, kubespan=True)  # the kubespan slot sits mid-stack
     calls = _capture(monkeypatch)
     contributions = _contributions(cfg, TalosPatch("a", {"machine": {}}),
                                    TalosPatch("b", {"machine": {}}))

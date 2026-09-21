@@ -67,9 +67,9 @@ Freeform machine-config patches applied to every node. Pool-level `config_patche
 
 ### `talos.kubespan`
 
-Optional · boolean · default `true`
+Optional · boolean · default `false`
 
-Enables Talos KubeSpan on every node: the machine configuration turns the WireGuard overlay on and sizes its MTU to the node's layer-2 network MTU minus the 80 bytes of WireGuard overhead, so overlay traffic fragments at the same point the underlying network does. When [`network.external`](network.md#networkexternal) is configured, the endpoint filters allow every address a node owns and then remove the external network's `cidr` and `anchor_cidr`, so nodes advertise their cluster-network addresses as WireGuard peer endpoints but never an external one.
+Set it to `true` to enable Talos KubeSpan on every node: the machine configuration turns the WireGuard overlay on and sizes its MTU to the node's layer-2 network MTU minus the 80 bytes of WireGuard overhead, so overlay traffic fragments at the same point the underlying network does. When [`network.external`](network.md#networkexternal) is configured, the endpoint filters allow every address a node owns and then remove the external network's `cidr` and `anchor_cidr`, so nodes advertise their cluster-network addresses as WireGuard peer endpoints but never an external one.
 
 The overlay is what lets one cluster span layer-2 networks — VMs on the provider's network and bare metal on its own — because pod traffic between nodes is encrypted and routed over it, wherever an IP route connects the two sides, and peers find each other through Talos's discovery service. KubeSpan does not carry the Kubernetes API VIP: the kubelet on every node still reaches [`network.cluster.kubeapi_vip`](network.md#networkclusterkubeapi_vip) directly, so where the VM provider's network is an overlay the metal side cannot see (Proxmox SDN, OpenStack), the VIP must be made reachable from the metal L2 with a floating IP routed there or exit-node routing. The discovery service is reached on the internet (TCP 443); on a network with no direct egress, every node must get its proxy settings through `machine.env`, for example via [`talos.config_patches`](#talosconfig_patches), so the discovery connection traverses the proxy:
 
@@ -82,7 +82,7 @@ talos:
           HTTPS_PROXY: http://proxy.example.edu:3128
 ```
 
-Set it to `false` to emit no KubeSpan settings and leave the generated configuration without a kubespan section. The load refuses `false` while a [`metal`](metal.md) group's [`network`](metal.md#metalgroupnetwork) differs from [`network.cluster`](network.md#networkcluster), because the overlay is what carries that group's pod traffic to the rest of the cluster.
+The overlay is off unless you enable it here, and upgrading to a new release never turns it on on an existing cluster: converge applies it only after you set it, so nodes keep their plain routing until you opt in. The load refuses to leave it off — `false` or unset — while a [`metal`](metal.md) group's [`network`](metal.md#metalgroupnetwork) differs from [`network.cluster`](network.md#networkcluster), because the overlay is what carries that group's pod traffic to the rest of the cluster.
 
 ## `kubernetes`
 

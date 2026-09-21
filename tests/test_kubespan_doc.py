@@ -31,11 +31,11 @@ def test_general_page_documents_the_emitted_settings():
     assert "### `talos.kubespan`" in text
     # the default matches the loader, and the documented WireGuard overhead
     # matches the constant the emitted MTU is computed with
-    assert KUBESPAN_DEFAULT is True
+    assert KUBESPAN_DEFAULT is False
     assert f"default `{str(KUBESPAN_DEFAULT).lower()}`" in text
     assert f"{KUBESPAN_MTU_OVERHEAD} bytes of WireGuard overhead" in text
-    # false emits no kubespan section at all
-    assert "Set it to `false`" in text
+    # the overlay only comes on with an explicit opt-in
+    assert "Set it to `true`" in text
 
 
 def test_general_page_states_the_mixed_provider_reachability_contract():

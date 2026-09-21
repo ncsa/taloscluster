@@ -8,10 +8,11 @@ arrives as its own patch document instead of living inside the machine patch;
 the keys are disjoint, so the strategic merge result is identical. The stack is
 pinned for the default MTU and for a jumbo ``network.cluster.mtu``, which states
 the MTU on the eth0 LinkConfig and restates the eth0 default route with an MTU
-of 1500. A second golden pins the shared stack around the KubeSpan patch: with
-the default ``talos.kubespan`` every node carries it -- the WireGuard MTU (the
-L2 MTU minus overhead) and, when ``network.external`` exists, its networks
-excluded from endpoint discovery -- and ``talos.kubespan: false`` emits none.
+of 1500. A second golden pins the shared stack around the KubeSpan patch:
+opting in with ``talos.kubespan: true`` puts it on every node -- the WireGuard
+MTU (the L2 MTU minus overhead) and, when ``network.external`` exists, its
+networks excluded from endpoint discovery -- while the default (and
+``talos.kubespan: false``) emits none.
 
 Update the golden only when a machine-config change is intended.
 """
@@ -89,30 +90,17 @@ def _eth0_docs(cluster_mtu: int | None) -> list[dict]:
     return [link, {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": "eth0"}]
 
 
-def _kubespan_doc(cluster_mtu: int | None) -> dict:
-    """The KubeSpan patch: the WireGuard MTU (L2 MTU minus overhead). OpenStack
-    has no `network.external`, so no endpoint filters."""
-    return {
-        "machine": {"network": {"kubespan": {
-            "enabled": True,
-            "mtu": (cluster_mtu or 1500) - 80,
-        }}}
-    }
-
-
 def _golden(cluster_mtu: int | None) -> dict[str, list]:
     eth0 = _eth0_docs(cluster_mtu)
     cp_eth0 = eth0 + [
         {"apiVersion": "v1alpha1", "kind": "Layer2VIPConfig", "name": VIP, "link": "eth0"}
     ]
-    kubespan = [_kubespan_doc(cluster_mtu)]
     return {
         "testcluster-controlplane-01": [
             [_machine_patch("controlplane", "controlplane")],
             [_named(HOSTNAME_PATCH, "testcluster-controlplane-01")],
             [CLUSTER_PATCH],
             "FIREWALL",
-            kubespan,
             [_named(TAILSCALE_PATCH, "testcluster-controlplane-01")],
             cp_eth0,
         ],
@@ -120,7 +108,6 @@ def _golden(cluster_mtu: int | None) -> dict[str, list]:
             [_machine_patch("worker", "worker")],
             [_named(HOSTNAME_PATCH, "testcluster-worker-01")],
             "FIREWALL",
-            kubespan,
             [_named(TAILSCALE_PATCH, "testcluster-worker-01")],
             eth0,
         ],
@@ -212,8 +199,7 @@ def _kubespan_cfg(make_config, kubespan: bool):
             },
         },
     }
-    if not kubespan:
-        overrides["talos"] = {"kubespan": False}
+    overrides["talos"] = {"kubespan": kubespan}
     return make_config(overrides, remove=("openstack",))
 
 

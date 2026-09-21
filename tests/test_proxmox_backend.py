@@ -1175,7 +1175,9 @@ def _firewall_cfg(make_config, security, metal=None):
         "security": security,
     }
     if metal is not None:
+        # a group on another L2 requires the KubeSpan opt-in to load
         overrides["metal"] = metal
+        overrides["talos"] = {"kubespan": True}
     return make_config(overrides, remove=("openstack",))
 
 

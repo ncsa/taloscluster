@@ -76,8 +76,11 @@ def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None):
         },
         "metal": {"phoenix": PHOENIX if metal is None else metal},
     }
+    # the golden stack carries the KubeSpan patch, so the config opts in
+    talos: dict = {"kubespan": True}
     if talos_version is not None:
-        overrides["talos"] = {"version": talos_version}
+        talos["version"] = talos_version
+    overrides["talos"] = talos
     return make_config(overrides, remove=("openstack",))
 
 

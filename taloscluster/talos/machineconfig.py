@@ -174,7 +174,7 @@ KUBESPAN_MTU_OVERHEAD = 80
 
 
 def _kubespan_patch(cfg: Config, mtu: int | None = None) -> dict:
-    """machine.network.kubespan when `talos.kubespan` is on (the default).
+    """machine.network.kubespan when `talos.kubespan` is on (opt-in).
 
     The WireGuard MTU is the node L2's MTU minus the WireGuard overhead (`mtu`
     overrides the cluster L2's, for a node sitting on a different one), and a

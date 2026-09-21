@@ -57,7 +57,7 @@ The device the machines install Talos onto, such as `/dev/sda`; a server may ove
 
 Optional · mapping · default [`network.cluster`](network.md#networkcluster)
 
-The layer-2 network this group's machines sit on, with the same keys as [`network.cluster`](network.md#networkcluster). A group on the same L2 as the VM provider's machines omits it. A group on a different L2 requires [`talos.kubespan`](general.md#taloskubespan) (the default): the overlay is what carries the group's pod traffic to the rest of the cluster.
+The layer-2 network this group's machines sit on, with the same keys as [`network.cluster`](network.md#networkcluster). A group on the same L2 as the VM provider's machines omits it. A group on a different L2 requires [`talos.kubespan`](general.md#taloskubespan) enabled: the overlay is what carries the group's pod traffic to the rest of the cluster.
 
 ### `metal.<group>.interfaces`
 

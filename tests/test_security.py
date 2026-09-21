@@ -240,7 +240,7 @@ METAL = {"metal": {
 def test_desired_rules_admit_a_metal_group_on_another_l2(make_config):
     """The group's nodes sit outside the SG, so they are admitted by CIDR:
     tcp+udp for apid, kubelet and etcd, plus the KubeSpan WireGuard port."""
-    cfg = make_config(METAL)
+    cfg = make_config({"talos": {"kubespan": True}, **METAL})
     rules = _desired_rules(cfg)
 
     assert ("tcp", None, None, "172.29.22.0/24", None) in rules

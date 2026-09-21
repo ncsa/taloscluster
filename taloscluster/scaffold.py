@@ -34,7 +34,7 @@ name: {name}
 
 talos:
   version: v1.13.8
-  # extensions: []       # extra cluster-wide extensions (base set is always baked in)
+{kubespan}  # extensions: []       # extra cluster-wide extensions (base set is always baked in)
   # config_patches: []   # freeform machine-config YAML applied to all nodes
 kubernetes:
   version: v1.36.1
@@ -145,6 +145,16 @@ proxmox:
     },
 }
 
+# `init --metal` scaffolds its example group on another L2, and the KubeSpan
+# overlay is what carries that group's traffic to the cluster -- so the
+# scaffolded talos section opts in. A plain scaffold omits the key: KubeSpan
+# is off by default.
+METAL_KUBESPAN_SECTION = """\
+  # the bare-metal example group below sits on another L2, so the KubeSpan
+  # overlay is on; a single-L2 cluster omits this key
+  kubespan: true
+"""
+
 # the bare-metal section `init --metal` appends: one example group with one
 # server. `redfish` starts false so the scaffolded pair loads with the
 # placeholder BMC credentials still in secrets.yaml.
@@ -222,6 +232,7 @@ def init(
             worker_sizing=template["worker_sizing"],
             network_cluster=template["network_cluster"],
             provider_section=template["cluster"],
+            kubespan=METAL_KUBESPAN_SECTION if metal else "",
         ))
         info(f"wrote {CLUSTER_FILE}")
 

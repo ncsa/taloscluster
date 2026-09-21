@@ -151,6 +151,9 @@ def test_metal_scaffold_produces_a_loadable_pair(tmp_path, provider):
     # one example group carrying the settings every group needs
     group = cluster["metal"]["phoenix"]
     assert group["role"] == "worker"
+    # the example group sits on another L2, which only loads with the KubeSpan
+    # opt-in the scaffold writes into the talos section
+    assert cluster["talos"]["kubespan"] is True
     # redfish starts false so the placeholder BMC credentials still load
     assert group["redfish"] is False
     assert group["disk"]

@@ -74,7 +74,7 @@ METAL = {
 def test_firewall_documents_admit_a_metal_group_on_another_l2(make_config):
     """A metal group's L2 joins the intra-cluster allow-all rules, and the
     KubeSpan WireGuard port is opened from that L2 explicitly."""
-    cfg = make_config({"metal": METAL})
+    cfg = make_config({"talos": {"kubespan": True}, "metal": METAL})
     rules = _rules(machineconfig._firewall_docs(cfg))
 
     for name in ("cluster-tcp", "cluster-udp"):
@@ -86,7 +86,7 @@ def test_firewall_documents_admit_a_metal_group_on_another_l2(make_config):
 def test_metal_node_firewall_is_keyed_on_its_own_l2(make_config):
     """A metal node's own stack, keyed on its group L2, still admits the
     cluster L2: apid, kubelet and etcd arrive from the VM nodes' addresses."""
-    cfg = make_config({"metal": METAL})
+    cfg = make_config({"talos": {"kubespan": True}, "metal": METAL})
     rules = _rules(machineconfig._firewall_docs(cfg, node_cidr="172.29.22.0/24"))
 
     for name in ("cluster-tcp", "cluster-udp"):

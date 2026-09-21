@@ -258,13 +258,13 @@ def test_non_string_kubernetes_version_raises_config_error_not_attribute_error(m
         make_config({"kubernetes": {"version": 1.31}})
 
 
-def test_kubespan_defaults_to_true(make_config):
-    assert make_config().kubespan is True
+def test_kubespan_defaults_to_false(make_config):
+    assert make_config().kubespan is False
 
 
-def test_kubespan_can_be_disabled(make_config):
-    cfg = make_config({"talos": {"kubespan": False}})
-    assert cfg.kubespan is False
+def test_kubespan_can_be_enabled(make_config):
+    cfg = make_config({"talos": {"kubespan": True}})
+    assert cfg.kubespan is True
 
 
 def test_non_bool_kubespan_raises_config_error(make_config):
@@ -538,6 +538,19 @@ def test_metal_group_on_another_l2_requires_kubespan(make_config):
         })
 
 
+def test_metal_group_on_another_l2_requires_explicit_kubespan(make_config):
+    """KubeSpan is off by default, so a group on another L2 must opt in even
+    without naming the key: the unset default is refused like `false`."""
+    with pytest.raises(ConfigError, match="talos.kubespan must be true"):
+        make_config({
+            "metal": {"phoenix": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+            }},
+        })
+
+
 def test_metal_group_on_the_cluster_l2_allows_kubespan_off(make_config):
     """A group on the cluster L2 -- by omission or by the same values -- needs no overlay."""
     cfg = make_config({
@@ -556,9 +569,35 @@ def test_metal_group_on_the_cluster_l2_allows_kubespan_off(make_config):
     assert cfg.metal.groups["same"].network == cfg.network.cluster
 
 
+def test_metal_group_on_the_cluster_subnet_needs_no_kubespan_despite_the_vip(make_config):
+    """The L2 is the subnet: a group beside a cluster whose L2 carries a
+    kubeapi_vip sits on the same L2, so the KubeSpan default (off) loads."""
+    cfg = make_config({
+        "controlplane": {"count": 3, "cores": 4, "memory": 8, "disk": 40},
+        "proxmox": {
+            "url": "https://pve.example:8006",
+            "storage": "vms",
+            "iso_storage": "isos",
+            "network": {"cluster": {"bridge": "vmbr0"}},
+        },
+        "network": {"cluster": {
+            "cidr": "172.29.21.0/24",
+            "gateway": "172.29.21.1",
+            "kubeapi_vip": "172.29.21.200",
+        }},
+        "metal": {"phoenix": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+        }},
+    }, remove=("openstack",))
+
+    assert cfg.kubespan is False
+
+
 def test_metal_group_defaults_resolve_into_each_server(make_config):
     """Servers start from the group defaults; `bmc` and `interfaces` merge per key."""
-    cfg = make_config({"metal": {"phoenix": {
+    cfg = make_config({"talos": {"kubespan": True}, "metal": {"phoenix": {
         "role": "worker",
         "redfish": True,
         "disk": "/dev/sda",

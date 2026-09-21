@@ -391,9 +391,10 @@ class Config:
     # a `tailscale:` section in cluster.yaml opts the installed system into the
     # tailscale extension; the shared boot ISO always carries it either way
     tailscale_enabled: bool = True
-    # talos.kubespan: true (the default) emits machine.network.kubespan on
-    # every node; false emits no kubespan settings at all
-    kubespan: bool = True
+    # talos.kubespan: true emits machine.network.kubespan on every node; false
+    # (the default) emits no kubespan settings at all, and _validate requires
+    # true when a metal group sits on another L2
+    kubespan: bool = False
 
     # the merged cluster.yaml + secrets.yaml + include tree: it carries the
     # credentials verbatim, so never print or serialize it
@@ -1328,7 +1329,7 @@ def load_config(root: Path) -> Config:
         # credential, not a decision to run tailscale on the nodes
         tailscale_enabled="tailscale" in opted_in,
         # an explicit null is the same as an absent key, as everywhere else
-        kubespan=True if kubespan is None else kubespan,
+        kubespan=False if kubespan is None else kubespan,
         raw=d,
     )
     _validate(cfg)
@@ -1497,11 +1498,12 @@ def _validate(cfg: Config) -> None:
         raise ConfigError("cluster.yaml: talos.kubespan must be true or false")
     if not cfg.kubespan and cfg.metal is not None:
         # a group on another L2 has no path to the cluster network without the
-        # KubeSpan overlay, so turning it off there cannot converge
+        # KubeSpan overlay, so turning it off there cannot converge; the L2 is
+        # the subnet, so the VIP and MTU fields do not make a group remote
         off_l2 = sorted(
             name
             for name, group in cfg.metal.groups.items()
-            if group.network != cfg.network.cluster
+            if group.network.cidr != cfg.network.cluster.cidr
         )
         if off_l2:
             raise ConfigError(
