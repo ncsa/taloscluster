@@ -25,9 +25,10 @@ tests so the drift they caught cannot come back silently:
   current ``mkdocs.yml`` nav publishes (and a fragment to that page's heading),
   and the established ``concepts/`` URLs must survive the documentation
   reorganization rather than silently moving and breaking old links.
-- Every relative ``.md`` link in ``README.md`` must point at a file that exists
-  in the repo -- ``todo.md`` is gitignored, so a link to it 404s on a fresh
-  clone.
+- Every relative ``.md`` link in ``README.md`` and ``CHANGELOG.md`` must point
+  at a file that exists in the repo (for the CHANGELOG, with a fragment, at a
+  real heading too) -- ``todo.md`` is gitignored, so a link to it 404s on a
+  fresh clone.
 """
 
 from __future__ import annotations
@@ -368,3 +369,22 @@ def test_readme_relative_links_point_at_existing_files():
         if not (ROOT / target).is_file():
             broken.append(target)
     assert not broken, "README links to missing files: " + "; ".join(broken)
+
+
+def test_changelog_relative_links_point_at_existing_files():
+    # The CHANGELOG links repo files by relative path too (the Breaking bullet
+    # points the refused old network keys at their old-to-new table); a moved
+    # page or renamed heading would leave it pointing at nothing, so every
+    # relative .md link must resolve on disk and, with a fragment, to a real
+    # heading on the target page.
+    broken: list[str] = []
+    for filepart, anchor in _internal_link_targets(ROOT / "CHANGELOG.md"):
+        if not filepart:
+            continue
+        resolved = ROOT / filepart
+        if not resolved.is_file():
+            broken.append(f"{filepart} (missing file)")
+            continue
+        if anchor and anchor not in _headers(resolved):
+            broken.append(f"{filepart}#{anchor} (missing anchor)")
+    assert not broken, "CHANGELOG links to missing files or anchors: " + "; ".join(broken)

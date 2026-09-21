@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Refuse metal configurations whose cabling plan, BMC address or network settings could never join.
 - Refuse a metal control plane with no external link when the kubeapi VIP rides the external network.
 - Make the Redfish transport https-only unless `bmc.scheme` opts into http, and trim the virtual-media insert body to the image URL.
+- `init` adds `.metal/` to `.gitignore` and `metal apply` writes the generated machine config there at mode 0600.
 - Warn when applying a metal machine config into a cluster directory whose gitignore does not ignore the generated configs.
 - Leave Tailscale off when a `tailscale:` section appears only in `secrets.yaml`.
 - Use placeholder machine and network names in the bare-metal examples and the init scaffold.
@@ -23,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - Refuse an `include` entry naming `cluster.yaml` itself.
+- Refuse an `include` entry naming `secrets.yaml`, a nested include, and a value set in two files.
 - Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.
 - Correct the stale docs wording around the cluster gateway, the placeholder-credential refusal and bare-metal support.
 
@@ -64,7 +66,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Merge `secrets.yaml` into the cluster configuration as an implicit first include, so credentials — plugin ones included — can live in any included file.
-- **Breaking:** the network settings, including a new `mtu` applied to links and the default route, move into `network.cluster` and `network.external`; the old address keys are refused.
+- **Breaking:** the network settings, including a new `mtu` applied to links and the default route, move into `network.cluster` and `network.external`; the old address keys are refused ([old-to-new key table](docs/configuration/network.md#moving-from-the-old-keys)).
 - Delete the legacy `talos-<version>-tailscale` image on `image remove`, refusing while a managed VM still boots it, and converge detaches the boot ISO cdrom once a node boots from disk.
 - Name the timed-out kubectl command in timeout errors and allow manifest apply, diff and delete more time than a probe.
 - Apply machine configs to control planes one at a time, waiting for each restart to finish.
