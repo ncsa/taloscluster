@@ -752,7 +752,10 @@ def test_converge_plan_recovers_without_stubbing_phase_functions(
         InfrastructureInventory(
             machines={
                 "testcluster-controlplane-01": InfrastructureMachine(
-                    "testcluster-controlplane-01"
+                    "testcluster-controlplane-01",
+                    # a keyless tailscale section manages over real addresses,
+                    # so the provider inventory must report the node's address
+                    attachments=(NetworkAttachment("cluster", "192.0.2.11"),),
                 )
             }
         )

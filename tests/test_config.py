@@ -2190,6 +2190,19 @@ def test_tailscale_auth_key_may_be_omitted(make_config, tmp_path):
     assert make_config({"tailscale": {"auth_key": None}}).tailscale_auth_key is None
 
 
+def test_tailscale_active_requires_a_configured_key(make_config, tmp_path):
+    """Only a configured auth key makes the tailnet names resolvable: a
+    keyless section (or no section at all) leaves the extension idle."""
+    _write_secrets(tmp_path, {"openstack": dict(OPENSTACK_CREDENTIALS)})
+
+    assert make_config().tailscale_active is False
+    assert make_config({"tailscale": {}}).tailscale_active is False
+    assert make_config({"tailscale": {"auth_key": None}}).tailscale_active is False
+    keyed = make_config({"tailscale": {"auth_key": "tskey-auth-abc123"}})
+    assert keyed.tailscale_enabled is True
+    assert keyed.tailscale_active is True
+
+
 def test_tailscale_auth_key_loads_and_rejects_placeholders(make_config, tmp_path):
     _write_secrets(
         tmp_path,

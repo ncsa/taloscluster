@@ -15,7 +15,7 @@ tailscale:
 
 Optional · mapping, may be empty
 
-The presence of this section, even as `tailscale: {}`, keeps the tailscale extension in the installer image. Without it the installer extension set omits Tailscale unless you explicitly add `siderolabs/tailscale` through `talos.extensions` or a pool's `extensions`. The section also selects Tailscale hostnames for management; adding only the extension does not enable that address selection.
+The presence of this section, even as `tailscale: {}`, keeps the tailscale extension in the installer image. Without it the installer extension set omits Tailscale unless you explicitly add `siderolabs/tailscale` through `talos.extensions` or a pool's `extensions`. Management talks to the first control plane by its MagicDNS name only when the section also carries an [`auth_key`](#tailscaleauth_key): a keyless section leaves the extension idle, so its hostnames never resolve and management falls back to the node's real address, exactly as in a cluster without the section. Adding only the extension does not enable that address selection either.
 
 ### `tailscale.login_server`
 
@@ -34,4 +34,4 @@ tailscale:
 
 Optional · string
 
-A reusable, ideally ephemeral, pre-auth key every node registers with. Omit it (or leave it `null`) to leave the extension idle. Use a valid key when registering new or recreated nodes; an ephemeral node setting does not make an expired or single-use key reusable. A non-string, empty, or still-scaffolded `CHANGE-ME` value is refused at secrets load time. The value is redacted from the machine-config diff that `plan` prints.
+A reusable, ideally ephemeral, pre-auth key every node registers with. Omit it (or leave it `null`) to leave the extension idle: the nodes still boot, but they never join the tailnet, so management reaches the first control plane on its real address instead of its MagicDNS name. Use a valid key when registering new or recreated nodes; an ephemeral node setting does not make an expired or single-use key reusable. A non-string, empty, or still-scaffolded `CHANGE-ME` value is refused at secrets load time. The value is redacted from the machine-config diff that `plan` prints.

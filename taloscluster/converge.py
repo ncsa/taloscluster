@@ -79,8 +79,11 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     preflight_tools()
     for w in validate_warnings(cfg):
         warn(w)
-    if cfg.tailscale_auth_key is None:
-        info("no tailscale key -> tailscale extension will idle (node still boots)")
+    if cfg.tailscale_enabled and cfg.tailscale_auth_key is None:
+        info(
+            "no tailscale key -> the tailscale extension idles and talosctl "
+            "targets the node's real address"
+        )
 
     state = State(root)
     talosconfig_path = root / "talosconfig"
@@ -338,10 +341,12 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # must be on the tailnet anyway), which is always reachable -- unlike the
     # kube-api floating ip, whose routing from this host isn't guaranteed. The
     # VIP is the talos "node"; the fip stays the kube-api server URL in the
-    # kubeconfig. Without tailscale there is no MagicDNS name to resolve, so
-    # cp-01's real address is used instead (this host must route to it).
+    # kubeconfig. Without a registered tailscale (no section, or one whose
+    # keyless extension never registers) there is no MagicDNS name that
+    # resolves, so cp-01's real address is used instead (this host must route
+    # to it).
     cp1 = f"{cfg.name}-controlplane-01"
-    if not cfg.tailscale_enabled and not dry_run():
+    if not _tailscale_active(cfg) and not dry_run():
         cp1 = _resolve_cp1_address(backend, cfg, refs) or cp1
         # the talosconfig written above may predate cp-01's address (first
         # run) or carry a stale DHCP lease; keep it pointing at the real node
@@ -904,6 +909,18 @@ def _write_talosconfig(
     os.chmod(path, 0o600)
 
 
+def _tailscale_active(cfg: Config) -> bool:
+    """Whether nodes register with a pre-auth key, so cp-01's MagicDNS name
+    resolves: the section installs the extension, but without a key it idles
+    and never registers, so talosctl must use real addresses.
+
+    getattr: test fixtures and older plugins hand in duck-typed configs; one
+    without a tailscale_active attribute keeps the section-presence behaviour
+    (an enabled section is assumed to register).
+    """
+    return getattr(cfg, "tailscale_enabled", True) and getattr(cfg, "tailscale_active", True)
+
+
 def _talos_endpoint(
     cfg: Config,
     refs: NetworkResult | None = None,
@@ -914,16 +931,16 @@ def _talos_endpoint(
 ) -> str:
     """The endpoint talosctl calls go through: always a real control plane.
 
-    With tailscale that is cp-01's MagicDNS name. Without it, cp-01's real
-    address: the managed-SDN static address, else what the provider inventory
-    (guest agent) reports, else the endpoint converge recorded in the
-    talosconfig on its last run. Never the kube-api VIP -- it belongs to
-    whichever node currently owns it, and a cluster.yaml edit could point it
-    at an address no node owns yet.
+    With tailscale registered (a key is set) that is cp-01's MagicDNS name.
+    Without it -- no tailscale section, or one whose keyless extension idles
+    and never registers -- cp-01's real address: the managed-SDN static
+    address, else what the provider inventory (guest agent) reports, else the
+    endpoint converge recorded in the talosconfig on its last run. Never the
+    kube-api VIP -- it belongs to whichever node currently owns it, and a
+    cluster.yaml edit could point it at an address no node owns yet.
     """
     host = f"{cfg.name}-controlplane-01"
-    # getattr: test fixtures and older plugins hand in duck-typed configs
-    if getattr(cfg, "tailscale_enabled", True):
+    if _tailscale_active(cfg):
         return host
     address = (
         (refs.machine_address(host) if refs is not None else "")
@@ -955,7 +972,8 @@ def _talosconfig_endpoint(talosconfig: Path, cluster: str) -> str:
 
 
 def _resolve_cp1_address(backend, cfg, refs, timeout_s: int = 600, interval_s: int = 15) -> str:
-    """cp-01's address for clusters without tailscale (no MagicDNS name).
+    """cp-01's address when no MagicDNS name resolves: no tailscale section,
+    or one whose keyless extension idles and never registers.
 
     Managed-SDN static addresses come straight from the network result; a
     bridge-mode DHCP address appears once the freshly booted guest agent
@@ -965,7 +983,7 @@ def _resolve_cp1_address(backend, cfg, refs, timeout_s: int = 600, interval_s: i
     address = refs.machine_address(host)
     if address:
         return address
-    info(f"no tailscale: resolving {host} address (up to {timeout_s // 60}m)...")
+    info(f"resolving {host} address (up to {timeout_s // 60}m)...")
     deadline = time.monotonic() + timeout_s
     while True:
         address = backend.load_inventory().machine_address(host)
@@ -2299,7 +2317,7 @@ def dashboard(root: Path, nodes: list[str] | None = None) -> None:
             f"no reachable nodes via {endpoint}. "
             + (
                 "Is this machine on the tailnet?"
-                if cfg.tailscale_enabled
+                if _tailscale_active(cfg)
                 else "Can this machine reach the cluster network?"
             )
         )

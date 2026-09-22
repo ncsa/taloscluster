@@ -89,6 +89,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Detect Tailscale addresses across the whole `100.64.0.0/10` range.
 - Redact registry passwords, `machine.files` and inline-manifest contents, multiline credentials and secret-like environment entries from the `plan` diff.
 - Emit no `--login-server` argument when `tailscale.login_server` is unset.
+- Fall back to the control plane's real address when a tailscale section has no auth key instead of hanging converge.
 - Remember a grown Proxmox disk until the node reboots so a later `--reboot` converge restarts it.
 - Accept Proxmox tasks that finish with warnings as successful.
 - Reclaim OpenStack ports left behind by machines that never got a server.

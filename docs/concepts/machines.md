@@ -28,10 +28,10 @@ After a machine has joined, converge manages it like any node: the machine confi
 
 ## Reaching the nodes
 
-On OpenStack, and on Proxmox with a managed SDN, the nodes sit on a private network with no public address. Only the API VIP and the ingress address are reachable from outside. There is no SSH on Talos anyway, but `talosctl` and `taloscluster` still have to reach the Talos API on port 50000 of a real node address to bootstrap and manage the cluster. The usual answer is a bastion host or a VPN into the tenant network; taloscluster supports two management access paths, and which one applies is decided by whether the `tailscale` section is present in `cluster.yaml`:
+On OpenStack, and on Proxmox with a managed SDN, the nodes sit on a private network with no public address. Only the API VIP and the ingress address are reachable from outside. There is no SSH on Talos anyway, but `talosctl` and `taloscluster` still have to reach the Talos API on port 50000 of a real node address to bootstrap and manage the cluster. The usual answer is a bastion host or a VPN into the tenant network; taloscluster supports two management access paths, and which one applies is decided by whether the `tailscale` section is present in `cluster.yaml` together with an `auth_key` to register with:
 
-- **Tailscale** — the `tailscale` section (even empty) is present, so management talks to the first control plane by its MagicDNS name.
-- **Direct** — no `tailscale` section, so management talks to the first control plane's real node address, which your machine must already be able to route to.
+- **Tailscale** — the `tailscale` section is present with an `auth_key`, so the nodes register and management talks to the first control plane by its MagicDNS name.
+- **Direct** — no `tailscale` section, or one without an `auth_key` (the extension is installed but idles), so management talks to the first control plane's real node address, which your machine must already be able to route to.
 
 Both paths reach the same Talos API on port 50000 of one real node (controlplane-01). The Kubernetes API VIP and the ingress floating IP are not Talos API endpoints; they answer only the Kubernetes API and ingress traffic. Bare-metal machines of a [`metal`](../providers/metal.md) section follow the same two paths: they join the tailnet at boot like any node, and without one they are reached on the static address of their cluster link.
 
@@ -42,7 +42,7 @@ The [Tailscale](https://tailscale.com/) path is how taloscluster reaches a clust
 To use this path end to end:
 
 1. **Connect the management machine** to the tailnet (`tailscale up`, or `tailscale login --login-server=<url>` for Headscale) so it is up before any `taloscluster` run.
-2. **Enable the section and an auth key** in `cluster.yaml` / `secrets.yaml`: the `tailscale` section selects Tailscale hostnames for management, and the `auth_key` lets nodes register. See [Tailscale configuration](../configuration/tailscale.md).
+2. **Enable the section and an auth key** in `cluster.yaml` / `secrets.yaml`: the `auth_key` lets nodes register, and only a registered cluster is managed through its Tailscale hostnames — a section without a key leaves the extension idle and falls back to the direct path. See [Tailscale configuration](../configuration/tailscale.md).
 3. **Let the allowlists include the tailnet**: add `100.64.0.0/10` to the `kubernetes` and `talos` rules under [`security`](../configuration/security.md), or converge locks itself out of the firewall it just applied. The Talos host firewall opens UDP/41641 for Tailscale whenever the section is present.
 4. **Run `taloscluster converge`.** taloscluster reaches the first control plane as `<name>-controlplane-01` by its MagicDNS name, writes the `talosconfig` pointing at that name, waits for a freshly booted node to come up, and bootstraps.
 
@@ -55,7 +55,7 @@ talosctl --talosconfig talosconfig -n mycluster-controlplane-01 version
 
 ### Path B: direct access to real node addresses without Tailscale
 
-A cluster without a `tailscale` section works, but only where you can already reach the node addresses — for example Proxmox on a routed bridge, or a routed network your management machine can route to. With no MagicDNS name to resolve, taloscluster falls back to the provider-reported address of the first control plane. The Kubernetes API VIP is never used as this address — it moves between control planes, so it is excluded from guest-agent and Talos discovery address selection, which report the next real address or nothing rather than the VIP.
+A cluster without a `tailscale` section — or with one that carries no `auth_key`, leaving the extension idle — works, but only where you can already reach the node addresses — for example Proxmox on a routed bridge, or a routed network your management machine can route to. With no MagicDNS name to resolve, taloscluster falls back to the provider-reported address of the first control plane. The Kubernetes API VIP is never used as this address — it moves between control planes, so it is excluded from guest-agent and Talos discovery address selection, which report the next real address or nothing rather than the VIP.
 
 To use this path end to end:
 

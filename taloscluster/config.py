@@ -431,6 +431,14 @@ class Config:
         return _require_secret("tailscale.auth_key", self.auth_key)
 
     @property
+    def tailscale_active(self) -> bool:
+        """True when nodes register with a pre-auth key, so their MagicDNS
+        names resolve and management can use them. A section without a key
+        leaves the extension idle, and management falls back to the nodes'
+        real addresses."""
+        return self.tailscale_auth_key is not None
+
+    @property
     def provider_name(self) -> str:
         """The VM provider's name, or an empty string without one."""
         if isinstance(self.provider, OpenStackConfig):

@@ -34,11 +34,16 @@ def test_guide_documents_both_access_paths_end_to_end():
 
 
 def test_guide_maps_the_paths_to_the_tailscale_section():
-    # Which path applies is decided by the presence of the `tailscale` section.
+    # Which path applies is decided by the presence of the `tailscale` section
+    # together with an auth key: a keyless section idles the extension and takes
+    # the direct path, since its MagicDNS name never resolves.
     text = GUIDE.read_text()
-    assert "decided by whether the `tailscale` section is present in `cluster.yaml`" in text
-    assert "`tailscale` section (even empty) is present" in text
-    assert "no `tailscale` section" in text
+    assert (
+        "decided by whether the `tailscale` section is present in `cluster.yaml` "
+        "together with an `auth_key` to register with" in text
+    )
+    assert "the `tailscale` section is present with an `auth_key`" in text
+    assert "no `tailscale` section, or one without an `auth_key`" in text
     assert "management talks to the first control plane's real node address" in text
 
 

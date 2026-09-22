@@ -1802,6 +1802,39 @@ def test_talos_endpoint_with_tailscale_is_the_magicdns_name():
     assert converge._talos_endpoint(cfg) == "phoenix-controlplane-01"
 
 
+def test_talos_endpoint_with_a_keyed_tailscale_section_is_the_magicdns_name(make_config):
+    cfg = make_config({"tailscale": {"auth_key": "tskey-auth-abc123"}})
+    assert cfg.tailscale_enabled and cfg.tailscale_active
+    assert converge._talos_endpoint(cfg) == "testcluster-controlplane-01"
+
+
+def test_talos_endpoint_with_a_keyless_tailscale_section_uses_the_real_address(
+    make_config, tmp_path
+):
+    """A `tailscale:` section without an auth_key leaves the extension idle:
+    the node never registers, so the MagicDNS name would never resolve and
+    talosctl must take the real-address path instead of hanging on it."""
+    cfg = make_config({"tailscale": {"login_server": "https://headscale.example.edu"}})
+    assert cfg.tailscale_enabled and not cfg.tailscale_active
+    host = "testcluster-controlplane-01"
+    refs = NetworkResult(
+        machine_attachments={host: (NetworkAttachment(name="cluster", address="192.168.100.11"),)}
+    )
+    assert converge._talos_endpoint(cfg, refs) == "192.168.100.11"
+    assert (
+        converge._talos_endpoint(cfg, talosconfig=tmp_path / "none", required=False) == host
+    )
+    with pytest.raises(ReconcileError, match=f"no address known for {host}"):
+        converge._talos_endpoint(cfg, NetworkResult(), InfrastructureInventory())
+
+
+def test_talos_endpoint_duck_typed_section_without_active_attr_still_registers():
+    # a duck-typed config (test fixture, older plugin) without a
+    # tailscale_active attribute keeps the section-presence behaviour
+    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=True, tailscale_auth_key=None)
+    assert converge._talos_endpoint(cfg) == "phoenix-controlplane-01"
+
+
 # ---- --reboot: one node at a time, control planes first ------------------
 
 def test_reboot_nodes_is_serial_controlplanes_first_and_health_checked(monkeypatch, tmp_path):
@@ -2289,21 +2322,25 @@ class _ExistingDownBackend(_SecretsBackend):
 
 
 def _stub_converge_full(monkeypatch, tmp_path, state, backend, machine_cfg,
-                        *, stub_health=False):
+                        *, stub_health=False, cfg=None):
     """Wire converge() to run through the compute phase against fakes.
 
     `stub_health` replaces the health phase with no-ops -- used only for a path
     where the cluster is EXPECTED to come up (e.g. an interrupted first run that
     bootstraps); callers that want to observe that the health phase is skipped
     on an unreachable cluster leave it False and patch the phase themselves.
+    `cfg` defaults to a duck-typed enabled-tailscale config; pass a real Config
+    (e.g. from make_config) to exercise loader-backed behaviour such as a
+    keyless tailscale section.
     """
-    cfg = SimpleNamespace(
-        name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
-        extension_sets=lambda: [()],
-        machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
-        tailscale_enabled=True,
-        tailscale_auth_key=None,
-    )
+    if cfg is None:
+        cfg = SimpleNamespace(
+            name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+            extension_sets=lambda: [()],
+            machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+            tailscale_enabled=True,
+            tailscale_auth_key=None,
+        )
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
     monkeypatch.setattr(converge, "preflight_tools", lambda: None)
     monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
@@ -2402,6 +2439,46 @@ def test_converge_rebootstraps_an_interrupted_first_run(monkeypatch, tmp_path):
     assert "reachable" in events and "bootstrap" in events and "kubeconfig" in events
     joined = " ".join(warns)
     assert "NOT a fresh cluster" not in joined
+
+
+def test_converge_bootstraps_a_keyless_tailscale_cluster_on_the_real_address(
+    monkeypatch, tmp_path, make_config
+):
+    """A `tailscale:` section without an auth_key leaves the extension idle:
+    the node never registers, so its MagicDNS name never resolves and waiting
+    on it would hang bootstrap for 15 minutes. Converge must resolve cp-01's
+    real address and dial that instead."""
+    cfg = make_config(
+        {
+            "name": "phoenix",
+            "controlplane": {"count": 1},
+            "tailscale": {"login_server": "https://headscale.example.edu"},
+        },
+    )
+    assert cfg.tailscale_enabled and not cfg.tailscale_active
+    state = _FakeState(True, tmp_path / "talossecrets.yaml")
+    backend = _ExistingDownBackend(_cp_inventory("phoenix-controlplane-01"))
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    waits: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        converge, "_wait_reachable",
+        lambda _t, endpoint, node, **_k: waits.append((endpoint, node)),
+    )
+    events: list[str] = []
+    monkeypatch.setattr(converge.talosctl, "bootstrap", lambda *a, **k: events.append("bootstrap"))
+    monkeypatch.setattr(
+        converge.talosctl, "kubeconfig", lambda *a, **k: events.append("kubeconfig")
+    )
+
+    assert _stub_converge_full(
+        monkeypatch, tmp_path, state, backend,
+        {"phoenix-controlplane-01": "config"}, stub_health=True, cfg=cfg,
+    ) == 0
+
+    assert "bootstrap" in events and "kubeconfig" in events
+    # every wait dialed the real inventory address, never the MagicDNS name
+    assert waits
+    assert set(waits) == {("192.0.2.1", "192.0.2.1")}
 
 
 def test_converge_does_not_replace_the_prebootstrap_identity_through_bootstrap(
