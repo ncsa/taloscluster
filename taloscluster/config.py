@@ -711,8 +711,8 @@ def _apply_includes(
     """Merge every `include:` file into the `cluster.yaml` tree.
 
     Returns the merged tree and the top-level sections the cluster opted into
-    by hand -- every top-level key any merged file carries, since a section is
-    itself a setting wherever it is written.
+    by hand -- every top-level key any merged file sets to a value, since a
+    section is itself a setting wherever it is written.
 
     Included files carry the same keys as `cluster.yaml` and are merged before
     validation, so where a value lives is the user's choice and the schema is
@@ -728,7 +728,10 @@ def _apply_includes(
     directory cannot lose its credentials when the contract changed.
     """
     origins: dict[str, str] = {}
-    opted_in = set(d)
+    # an explicit null opts nothing in, as in _merge_yaml: a comment-only
+    # section (`tailscale:` with only comments under it) adds no settings, so
+    # counting its key here would switch the feature on with nothing set
+    opted_in = {key for key, value in d.items() if value is not None}
     secrets = (root / SECRETS_FILE).resolve()
     sources = _include_paths(d, root, CLUSTER_FILE)
     for path in sources:
@@ -741,7 +744,9 @@ def _apply_includes(
                 "included files cannot include further files"
             )
         _reject_unknown_keys(extra, path.name, known - {"include"})
-        opted_in.update(extra)
+        opted_in.update(
+            key for key, value in extra.items() if value is not None
+        )
         _merge_yaml(d, extra, path.name, origins, CLUSTER_FILE)
     if secrets.is_file() and secrets not in {path.resolve() for path in sources}:
         raise ConfigError(

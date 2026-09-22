@@ -108,6 +108,15 @@ def test_tailscale_extension_dropped_without_tailscale_section(make_config):
         assert "siderolabs/qemu-guest-agent" in m.extensions
 
 
+def test_comment_only_tailscale_section_is_no_tailscale_section(make_config):
+    # a `tailscale:` key left null (only comments under it) is no value at all,
+    # as everywhere else in the loader, so it must not opt the extension in
+    cfg = make_config({"tailscale": None})
+    assert not cfg.tailscale_enabled
+    for m in cfg.machines.values():
+        assert "siderolabs/tailscale" not in m.extensions
+
+
 def test_extensions_cluster_and_pool_merged(make_config):
     cfg = make_config({
         "tailscale": {"login_server": "https://hs.example"},
@@ -3329,6 +3338,15 @@ def test_include_treats_an_explicit_null_section_as_absent(make_config, tmp_path
     assert cfg.login_server == "https://hs.example"
 
 
+def test_a_comment_only_section_in_an_include_opts_nothing_in(make_config, tmp_path):
+    (tmp_path / "ts.yaml").write_text(yaml.safe_dump({"tailscale": None}))
+    cfg = make_config({"include": ["ts.yaml"]})
+
+    assert not cfg.tailscale_enabled
+    for machine in cfg.machines.values():
+        assert "siderolabs/tailscale" not in machine.extensions
+
+
 def test_load_raw_merges_secrets_and_includes(tmp_path):
     """`load_raw` is the merged tree a plugin reads its own section from: a
     value is found wherever the include contract lets it live, without the rest
@@ -3365,6 +3383,19 @@ def test_load_raw_opts_in_a_secrets_yaml_section(tmp_path):
 
     assert raw["rancher"] == {"url": "https://rancher.example.edu", "token": "token-x:y"}
     assert "rancher" in opted_in
+
+
+def test_load_raw_does_not_opt_in_a_null_section(tmp_path):
+    """A comment-only section in cluster.yaml or an included file is an
+    explicit null, no value at all, so it opts nothing in."""
+    (tmp_path / "ts.yaml").write_text(yaml.safe_dump({"tailscale": None}))
+    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({
+        "name": "testcluster", "include": ["ts.yaml"], "tailscale": None,
+    }))
+
+    raw, opted_in = load_raw(tmp_path)
+
+    assert "tailscale" not in opted_in
 
 
 def test_load_raw_refuses_secrets_yaml_that_is_not_included(tmp_path):
