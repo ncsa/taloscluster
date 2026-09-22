@@ -1,6 +1,14 @@
 # How machines are created and reached
 
-taloscluster discovers managed infrastructure from provider ownership markers rather than a separate infrastructure state file. Keep the local `talossecrets.yaml`, which holds the cluster identity. Cluster resources use deterministic names, while boot images are shared by Talos version and base schematic. Nodes are named `<cluster>-controlplane-01`, `<cluster>-<pool>-01` and so on, which is why adding or removing a node never renumbers the others.
+taloscluster discovers managed infrastructure from provider ownership markers rather than a separate infrastructure state file — what each provider records is described under [Ownership markers](#ownership-markers). Keep the local `talossecrets.yaml`, which holds the cluster identity. Cluster resources use deterministic names, while boot images are shared by Talos version and base schematic. Nodes are named `<cluster>-controlplane-01`, `<cluster>-<pool>-01` and so on, which is why adding or removing a node never renumbers the others.
+
+## Ownership markers
+
+Which provider resources a run may touch is decided by ownership markers taloscluster wrote itself, never by a state file, and each provider carries them differently:
+
+- **OpenStack** — tags are plain strings, so every resource converge creates (network, subnet, router, security group, the reserved VIP ports and floating IPs) carries `managed-by=taloscluster` and `cluster=<name>`, and the per-machine ports and servers add `role=<role>` and `pool=<pool>`. Discovery adopts anything tagged `cluster=<name>` carrying either managed-by value: resources still tagged `managed-by=clusterctl` from the tool's earlier name are managed like the rest instead of being left foreign.
+- **Proxmox** — tags are bare strings, so the markers are `taloscluster`, `cluster_<name>` and, on each node, `role_<role>` and `pool_<pool>`. A VM counts as owned only when it carries the `taloscluster` and `cluster_<name>` tags, sits in the resource pool `taloscluster-<name>`, and that pool's comment is exactly `managed-by=taloscluster cluster=<name>` — a pool of that name with a foreign comment is refused rather than adopted. On a managed SDN the VNet carries the same marker in its alias (`managed-by taloscluster cluster <name>`), which the alias character set allows where `=` is not.
+- **Metal** — no provider records the machines, so there is no marker: the [`metal`](../configuration/metal.md) section of `cluster.yaml` is the inventory, and a joined machine is recognised as this cluster's node through its kube Node object.
 
 ## Boot image
 

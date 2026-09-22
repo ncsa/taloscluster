@@ -1,11 +1,30 @@
-"""Deterministic resource names + the tag convention.
+"""Deterministic resource names + the ownership-marker conventions.
 
 Names are derived purely from cluster.yaml so every run computes the same name
 for the same resource -- that determinism is what makes reconcile idempotent
-without a state file. Tags let us enumerate exactly the resources this tool owns
-(and only those), instead of a persisted inventory.
+without a state file. Ownership markers are what let us enumerate exactly the
+resources this tool owns (and only those), instead of a persisted inventory.
+Each provider carries them differently:
 
-Neutron/Nova/Cinder tags are plain strings, so we use a `key=value` convention.
+- OpenStack: Neutron/Nova/Cinder tags are plain strings, so we use a
+  `key=value` convention. Every created resource is tagged
+  `managed-by=taloscluster` + `cluster=<name>` (base_tags); per-machine ports
+  and servers add `role=<role>` + `pool=<pool>` (node_tags). Discovery accepts
+  the pre-rename `managed-by=clusterctl` too (LEGACY_MANAGED_BY), so resources
+  tagged before the rename are still adopted instead of left foreign.
+- Proxmox: VM tags are bare strings, so the markers are `taloscluster`,
+  `cluster_<name>` and, per node, `role_<name>` + `pool_<name>`
+  (proxmox.inventory.owned_tags). A VM is owned only when it also sits in the
+  resource pool `taloscluster-<name>` whose comment is exactly
+  `managed-by=taloscluster cluster=<name>` (proxmox.backend.pool_id /
+  pool_comment) -- a pool with a foreign comment is refused, not adopted. On a
+  managed SDN the VNet carries the marker in its alias instead, because the
+  alias character set forbids `=` (sdn_alias below).
+- Metal: no provider records the machines, so there is no marker; the
+  `metal:` section of cluster.yaml is the inventory, and a joined machine is
+  recognised as this cluster's node through its kube Node object.
+
+docs/concepts/machines.md ("Ownership markers") says the same for operators.
 """
 
 from __future__ import annotations
