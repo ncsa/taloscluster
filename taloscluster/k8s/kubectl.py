@@ -205,3 +205,32 @@ def node_summary(kubeconfig: Path) -> list[dict]:
             "internal_ip": internal,
         })
     return nodes
+
+
+def node_addresses(kubeconfig: Path) -> dict[str, str]:
+    """Every node's InternalIP as kubelet registered it, name -> address.
+
+    The Node keeps its addresses whatever its Ready state, so this is the only
+    address source left for a node the config no longer describes and Talos
+    discovery no longer reports -- a metal machine in particular belongs to no
+    provider inventory, so dropping it from the config drops its static ip too.
+    Best-effort: an unreachable api returns nothing rather than raising.
+    """
+    proc = _run(_kc(kubeconfig) + ["get", "nodes", "-o", "json"], capture=True, check=False)
+    if proc.returncode != 0:
+        return {}
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    addresses = {}
+    for item in data.get("items", []):
+        name = (item.get("metadata") or {}).get("name", "")
+        internal = next(
+            (a["address"] for a in (item.get("status") or {}).get("addresses", [])
+             if a.get("type") == "InternalIP"),
+            "",
+        )
+        if name and internal:
+            addresses[name] = internal
+    return addresses

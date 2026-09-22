@@ -10,7 +10,12 @@ newer than the rest:
 `validate` refuses provider changes that cannot be reconciled in place (an
 OpenStack flavor, disk or availability-zone change, a Proxmox placement,
 storage, disk-shrink or NIC attachment move) before any phase mutates, so a
-rejected change never leaves a half-applied cluster.
+rejected change never leaves a half-applied cluster. It refuses a configured
+bare-metal machine converge could never bring in on the same grounds.
+
+`compute` creates the VM pools and joins the bare-metal machines the config
+lists but the cluster does not have, both after the upgrade phase for the same
+reason: a node added in this run must not join newer than the rest.
 
 Plugins run last because they need a reachable cluster and the kubeconfig this
 run just wrote; on destroy they run first, for the same reason inverted.
@@ -51,7 +56,9 @@ from .infrastructure import (
     resolve_node_address,
 )
 from .k8s import kubectl
+from .metal import redfish as metal_redfish
 from .metal import talos as metal_talos
+from .naming import METAL_BASE_EXTENSIONS
 from .output import action, dry_run, info, log, warn
 from .output import report as print_report
 from .state import State
@@ -110,6 +117,10 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     log("validate")
     inv = backend.load_inventory()
     backend.validate_machines(machines, inv)
+    # the same contract for hardware: a configured machine converge can neither
+    # reach in maintenance mode nor power on through a BMC is refused here,
+    # while the cluster is still untouched, not skipped silently mid-run
+    _validate_metal_joinable(cfg, kubeconfig_path)
     # Validate configured plugin sections ahead of any cluster change, so a
     # malformed or contradictory plugin configuration stops the run here -- not
     # as a late plugin failure once the image, network and machines mutated.
@@ -300,6 +311,10 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
                 )
             )
         needs_restart = backend.reconcile_machines(machines, inv, boot_image, configs) or set()
+        # the bare-metal half of the same phase: a configured machine that is
+        # not in the cluster is brought in here, after the existing nodes were
+        # upgraded, so it never joins newer than the rest
+        _join_metal(cfg, configs, kubeconfig_path)
     else:
         warn("skipping compute: no machine configs (network fip not ready)")
 
@@ -469,6 +484,158 @@ def _metal_servers(cfg: Config) -> list[MetalServer]:
         return []
     servers = [s for group in metal.groups.values() for s in group.servers.values()]
     return sorted(servers, key=lambda s: 0 if s.role == "controlplane" else 1)
+
+
+# how often the maintenance apid is polled while a machine boots; how long it
+# is polled for is the machine's own `boot_timeout` (cold hardware can spend
+# many minutes in POST before Talos starts)
+_METAL_MAINTENANCE_INTERVAL_S = 10
+
+
+def _metal_unjoined(cfg: Config, kubeconfig: Path) -> list[MetalServer]:
+    """Every configured metal server with no Kubernetes Node yet.
+
+    These are the machines the config says belong to the cluster and that are
+    not in it -- the bare-metal equivalent of a VM pool whose count grew.
+    """
+    if not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
+        # no cluster yet: every configured machine still has to be joined
+        return _metal_servers(cfg)
+    return [s for s in _metal_servers(cfg) if not kubectl.node_exists(kubeconfig, s.name)]
+
+
+def _validate_metal_joinable(cfg: Config, kubeconfig: Path) -> None:
+    """Refuse a configured metal machine converge could never bring in.
+
+    The provider backends refuse a change they cannot reconcile in place during
+    the validate phase, before any later phase mutates, so a rejected config
+    never leaves a half-applied cluster. A machine the config lists but that is
+    neither in the cluster, waiting in maintenance mode, nor reachable through a
+    BMC converge may power on is exactly such a change: no phase can bring it in
+    and there is nothing to drive. Hardware is physical, so the fix is a person
+    at the rack -- converge says which machine and stops while the cluster is
+    still untouched.
+    """
+    stuck = [
+        s
+        for s in _metal_unjoined(cfg, kubeconfig)
+        if not s.redfish and not talosctl.maintenance_reachable(metal_talos.cluster_ip(s))
+    ]
+    if not stuck:
+        return
+    named = ", ".join(
+        f"{s.name} ({metal_talos.cluster_ip(s)})" for s in sorted(stuck, key=lambda s: s.name)
+    )
+    raise ReconcileError(
+        f"metal server(s) not joinable: {named}. Each is configured but not in "
+        "the cluster, does not answer the maintenance apid, and has redfish "
+        "disabled, so converge cannot boot it. Boot the machine into maintenance "
+        "mode (its group is `redfish: false`, so PXE or media by hand), or "
+        "comment its entry out of the metal section to stop expecting it."
+    )
+
+
+def _join_metal(
+    cfg: Config,
+    configs: dict[str, str],
+    kubeconfig: Path,
+) -> None:
+    """Bring every configured-but-unjoined metal machine into the cluster.
+
+    The bare-metal half of the compute phase, and deliberately in it: a VM pool
+    that grew is created here, after the existing nodes were upgraded, so a new
+    node never joins newer than the rest. A metal machine joins the same way --
+    it installs the cluster's Talos version from the machine config this run
+    already generated, which carries the running Kubernetes version.
+
+    A machine already waiting in maintenance mode is applied straight away. One
+    with a BMC converge may drive is booted from the install ISO and waited out
+    first, the same boot/wait/apply order `metal join` uses. `apply-config
+    --insecure` only ever lands on a machine in maintenance mode -- a node
+    running a configuration rejects that API -- so a machine mid-join is left
+    alone for the next converge rather than reinstalled under itself.
+    """
+    pending = _metal_unjoined(cfg, kubeconfig)
+    if not pending:
+        return
+    # the metal base set: the VM providers' image carries qemu-guest-agent,
+    # whose service never starts on bare metal and would leave the machine
+    # blocked in startAllServices short of the maintenance apid
+    iso_url = factory.nocloud_iso_url(
+        factory.schematic_id(METAL_BASE_EXTENSIONS), cfg.talos_version
+    )
+    for server in sorted(pending, key=lambda s: 0 if s.role == "controlplane" else 1):
+        ip = metal_talos.cluster_ip(server)
+        config_yaml = configs.get(server.name)
+        if not config_yaml:
+            # no machine config this run (no secrets, or no advertised endpoint
+            # yet) -- the same condition that skips the VM half of compute
+            warn(f"metal {server.name}: no machine config this run; not joining")
+            continue
+        if talosctl.maintenance_reachable(ip):
+            info(f"metal {server.name} ({ip}) is in maintenance mode; joining")
+        elif server.redfish:
+            info(f"metal {server.name} ({ip}) is not in maintenance mode; booting its BMC")
+            _boot_metal(server, iso_url)
+            if not _wait_maintenance(server, ip):
+                continue
+        else:
+            # validate refused this case before anything mutated; reaching it
+            # means the machine dropped out since, so stop rather than skip
+            raise ReconcileError(
+                f"metal {server.name} ({ip}) stopped answering the maintenance "
+                "apid since the validate phase and has redfish disabled; "
+                "re-run converge once it is back in maintenance mode"
+            )
+        action(f"join metal {server.name} ({ip})")
+        if not dry_run():
+            talosctl.apply_config_insecure(ip, config_yaml)
+            info(f"metal {server.name}: config applied; it installs to {server.disk} and reboots")
+
+
+def _boot_metal(server: MetalServer, iso_url: str) -> None:
+    """Mount the install ISO in one machine's virtual media and power it on.
+
+    Only ever asks the BMC to mount media, one-time boot it and manage power --
+    no BIOS boot-mode changes and no boot-order manipulation, so after the
+    one-time boot the machine falls back to its own order (its disk, once
+    installed).
+    """
+    action(f"boot metal {server.name} from {iso_url} via {server.bmc.ip}")
+    if dry_run():
+        return
+    rf = metal_redfish.Redfish(server.bmc)
+    if rf.eject_media():
+        info(f"ejected the media already mounted on {server.bmc.ip}")
+    rf.insert_media(iso_url)
+    rf.boot_once_cd()
+    rf.power_on()
+
+
+def _wait_maintenance(server: MetalServer, ip: str) -> bool:
+    """Poll one machine's maintenance apid. False if it never answered.
+
+    The budget is the machine's own `boot_timeout`, so a group of slow hardware
+    raises it once for every machine in it. A machine that does not come up is
+    reported and skipped rather than fatal: the rest of the converge is
+    unaffected, and the next run picks it up. A dry run waits for nothing -- it
+    booted nothing.
+    """
+    if dry_run():
+        return True
+    timeout = server.boot_timeout
+    info(f"waiting for the maintenance apid on {ip} (up to {timeout // 60}m)...")
+    deadline = time.monotonic() + timeout
+    while not talosctl.maintenance_reachable(ip):
+        if time.monotonic() >= deadline:
+            warn(
+                f"metal {server.name} did not answer the maintenance apid on {ip} "
+                f"within {timeout // 60}m; not joined this run"
+            )
+            return False
+        time.sleep(_METAL_MAINTENANCE_INTERVAL_S)
+    info(f"metal {server.name} is up in maintenance mode on {ip}")
+    return True
 
 
 def _reboot_nodes(
@@ -1151,8 +1318,10 @@ def _scale_down(
         # list (a real run writes it, or recovers it from the restored
         # identity, first); with no nodes known there is nothing to scale down.
         live = []
+        kube_addresses: dict[str, str] = {}
     else:
         live = kubectl.node_names(kubeconfig)
+        kube_addresses = kubectl.node_addresses(kubeconfig)
     # Removals are reconciled from OUR owned provider inventory as well as the
     # live Kubernetes node set: `_scale_down` deletes the kube Node before the
     # provider VM, so a VM deletion that fails strands the VM forever -- a rerun
@@ -1238,9 +1407,31 @@ def _scale_down(
         # Node (it never joined, or a prior run deleted the Node before its VM
         # delete failed), so there is nothing to drain or to delete via kubectl.
         has_node = node in live_set
-        address = resolve_node_address(node, discovered, inv, refs)
+        # The kube Node's own InternalIP is the last fallback, and deliberately
+        # last: Talos discovery, the network result and the provider inventory
+        # are all live, while a Node object can outlive the machine that
+        # registered it. It matters for a removal no other source can place --
+        # a metal machine is in no provider inventory, so commenting out its
+        # config takes its static address with it, and a NotReady node is gone
+        # from Talos discovery too. Without an address the node below is only
+        # deleted from Kubernetes, leaving a live machine whose kubelet
+        # re-registers it seconds later; with one it is reset and actually
+        # leaves.
+        address = resolve_node_address(node, discovered, inv, refs) or kube_addresses.get(node, "")
+        # Hardware, unlike a VM, is not deleted by anything after its reset, so
+        # it must be left reusable rather than blank: wipe STATE and EPHEMERAL
+        # and reboot, and it comes back in maintenance mode on the installed
+        # Talos, ready to join another cluster. A removal is by definition absent
+        # from the config, so `cfg.metal_servers` cannot identify it -- that is
+        # exactly the case where the metal section was commented out. The
+        # standing evidence is the provider inventory: a removal it does not list
+        # is no VM of ours, so deleting it is a no-op and no reinstall follows.
+        is_metal = node not in inv.machines
         if address:
-            info(f"removing {node} ({address})")
+            info(
+                f"removing {node} ({address})"
+                + (" -- bare metal: reset to maintenance mode, not deleted" if is_metal else "")
+            )
             if has_node:
                 try:
                     kubectl.drain(kubeconfig, node)
@@ -1261,7 +1452,8 @@ def _scale_down(
                 # therefore not proof the node matters on a rerun: fall through to
                 # the authoritative etcd-member check rather than aborting forever.
                 try:
-                    talosctl.reset(talosconfig, endpoint, address, control_plane=True)
+                    talosctl.reset(talosconfig, endpoint, address, control_plane=True,
+                                   to_maintenance=is_metal)
                 except ReconcileError:
                     etcd = talosctl.etcd_members(talosconfig, endpoint)
                     if node in etcd:
@@ -1276,7 +1468,8 @@ def _scale_down(
                         f"surviving control plane's etcd member list; deleting"
                     )
             else:
-                talosctl.reset(talosconfig, endpoint, address, control_plane=is_cp)
+                talosctl.reset(talosconfig, endpoint, address, control_plane=is_cp,
+                               to_maintenance=is_metal)
         else:
             # node_ready reads the kube Node: for a node with no kube Node there
             # is nothing to be Ready, so only consult it when a Node exists.

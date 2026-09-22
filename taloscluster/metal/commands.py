@@ -35,7 +35,7 @@ import requests
 from ..config import Config, ConfigError, MetalServer, load_config
 from ..converge import _config_kubernetes_version
 from ..errors import ReconcileError
-from ..naming import BASE_EXTENSIONS
+from ..naming import METAL_BASE_EXTENSIONS
 from ..output import action, info, report, warn
 from ..state import State
 from ..talos import factory, talosctl
@@ -43,8 +43,8 @@ from . import redfish
 from . import talos as metal_talos
 
 # ISO boot to a maintenance-mode apid: the BMC fetches the media, the machine
-# boots it and Talos starts apid with no configuration applied yet
-WAIT_TIMEOUT_S = 600
+# boots it and Talos starts apid with no configuration applied yet. How long
+# that is allowed to take is the machine's `boot_timeout`.
 # apply-config to a node booted from the ISO installs Talos to disk and
 # reboots into it, which takes longer than a plain boot
 VERIFY_TIMEOUT_S = 1200
@@ -96,9 +96,14 @@ def _cluster_ip(server: MetalServer) -> str:
 
 
 def _iso_url(cfg: Config) -> str:
-    """The factory's install ISO for the cluster's Talos version, with the
-    base extensions baked in -- the same boot image the VM providers use."""
-    schematic = factory.schematic_id(BASE_EXTENSIONS)
+    """The factory's install ISO for the cluster's Talos version, with the metal
+    base extensions baked in.
+
+    Not the VM providers' boot image: that one carries qemu-guest-agent, whose
+    service never starts on bare metal and leaves the machine blocked in
+    `startAllServices` instead of reaching the maintenance apid.
+    """
+    schematic = factory.schematic_id(METAL_BASE_EXTENSIONS)
     return factory.nocloud_iso_url(schematic, cfg.talos_version)
 
 
@@ -158,11 +163,17 @@ def boot(root: Path, name: str, *, serve: bool = False, foreground: bool = True)
             raise
 
 
-def wait(root: Path, name: str, *, timeout_s: int = WAIT_TIMEOUT_S,
+def wait(root: Path, name: str, *, timeout_s: int | None = None,
          interval_s: int = 10) -> None:
-    """Poll for the maintenance-mode apid on the machine's cluster address."""
+    """Poll for the maintenance-mode apid on the machine's cluster address.
+
+    The budget is the machine's `boot_timeout`, so a group of cold-booting
+    hardware raises it once for every machine in it; `timeout_s` overrides it.
+    """
     cfg = load_config(root)
     server = _find_server(cfg, name)
+    if timeout_s is None:
+        timeout_s = server.boot_timeout
     ip = _cluster_ip(server)
     info(f"waiting for the maintenance apid on {ip} (up to {timeout_s // 60}m)...")
     deadline = time.monotonic() + timeout_s

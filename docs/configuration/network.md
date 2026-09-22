@@ -36,6 +36,8 @@ The network the nodes' private addresses come from, written as a network address
 - **Proxmox with `bridge` or `vnet`**: must match the DHCP-served subnet on that link.
 - **Proxmox managed SDN**: the overlay subnet. Nodes get static addresses from it, so it cannot change once the cluster runs. See [Proxmox](proxmox.md#proxmoxnetworkclustersdn).
 
+It must not overlap the Kubernetes pod or service networks, which Talos defaults to `10.244.0.0/16` and `10.96.0.0/12`. A node whose own addresses fall inside either cannot tell its traffic from cluster traffic, and Talos raises its [`address-overlap`](https://talos.dev/latest/advanced/troubleshooting-control-plane/) diagnostic on it while kubelet, DNS and service routing misbehave. `check` and `converge` warn when any stated host network — this one, [`network.external.cidr`](#networkexternalcidr), [`network.external.anchor_cidr`](#networkexternalanchor_cidr) or a [metal group's](metal.md#metalgroupnetwork) — collides, naming the key. The warning reads Talos's defaults, so a cluster that moves the subnets with a `cluster.network.podSubnets`/`serviceSubnets` patch under [`talos.config_patches`](general.md#talosconfig_patches) is outside what it can see; so is an address a DHCP server hands a link `cluster.yaml` does not describe, such as a metal machine's PXE NIC, which only the node's own diagnostic catches.
+
 ### `network.cluster.gateway`
 
 Optional · IPv4 address inside `cidr` · default none

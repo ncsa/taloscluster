@@ -19,6 +19,7 @@ from .. import naming
 from ..config import (
     DEFAULT_MTU,
     KUBESPAN_PORT,
+    MIN_PVE_MAJOR,
     Config,
     Machine,
     ProxmoxConfig,
@@ -93,6 +94,7 @@ class ProxmoxBackend:
         self._preflight_complete = False
         self._compute_nodes: tuple[str, ...] = ()
         self._anchors_checked = False
+        self._pve_major: int | None = None
 
     def talos_contribution(
         self, machine: Machine, endpoint: Endpoint
@@ -204,6 +206,7 @@ class ProxmoxBackend:
         self._compute_nodes = tuple(sorted(required or usable))
         if not self._compute_nodes:
             raise ReconcileError("no online Proxmox node can access every required storage")
+        self._require_pve9()
         self._check_firewall(inventory)
 
     def _check_firewall(self, inventory: ProxmoxInventory) -> None:
@@ -370,11 +373,51 @@ class ProxmoxBackend:
             machine_attachments=attachments,
         )
 
+    def _require_pve9(self) -> None:
+        """Refuse a Proxmox older than 9.
+
+        taloscluster targets Proxmox 9's VM NIC semantics, where leaving a
+        VirtIO vNIC's MTU unset makes it inherit the bridge MTU. Proxmox 8 and
+        earlier default an unset MTU to 1500 and need an `mtu=1` sentinel to
+        inherit instead -- the opposite convention, and one 9 reads as a
+        literal MTU of 1. Supporting both means writing the wrong one whenever
+        the version read is wrong, and a wrong guess costs the node its
+        network, so the version is a requirement rather than a branch.
+        See https://pve.proxmox.com/wiki/Roadmap#9.0-known-issues
+
+        A version that cannot be read is a warning, not a refusal: converge
+        must not be blocked by one unreadable endpoint on a cluster that is
+        otherwise fine.
+        """
+        if self._pve_major is not None:
+            return
+        for node in self._compute_nodes:
+            try:
+                data = self.client.get(f"nodes/{node}/version")
+            except Exception:  # noqa: BLE001 - reported as unreadable below
+                continue
+            major = str((data or {}).get("version") or "").split(".", 1)[0]
+            if major.isdigit():
+                self._pve_major = int(major)
+                if self._pve_major < MIN_PVE_MAJOR:
+                    raise ReconcileError(
+                        f"Proxmox {self._pve_major} on node {node} is not supported: "
+                        f"taloscluster requires Proxmox {MIN_PVE_MAJOR} or newer, whose VM NICs "
+                        "inherit the bridge MTU from an unset MTU. On 8 and earlier "
+                        "that setting means 1500 and needs the opposite convention. "
+                        "Upgrade the Proxmox cluster, or pin taloscluster to 0.8.x."
+                    )
+                return
+        warn(
+            "could not read the Proxmox version from any node; assuming 9 or newer "
+            "(VM NICs inherit the bridge MTU from an unset MTU)"
+        )
+
     def _check_bridge_mtu(self) -> None:
         """Warn when a target node's bridges cannot carry their L2's MTU.
 
-        A VM NIC inherits the MTU of the bridge it attaches to (the NIC is
-        created with Proxmox `mtu=1`), so the bridge, not the machine
+        A VM NIC inherits the MTU of the bridge it attaches to (Proxmox 9
+        inherits it from an unset NIC MTU), so the bridge, not the machine
         configuration, caps the guest link. Both the cluster and the external
         bridge are checked, each against its own L2's MTU. The node network
         listing is the persisted config the API offers: an interface without
@@ -1280,22 +1323,16 @@ class ProxmoxBackend:
         if have_disk is not None and have_disk != machine.disk:
             # not a shrink: _assert_supported_changes refused that already
             drift["disk"] = (have_disk, machine.disk)
-        # A jumbo L2 needs its NIC on Proxmox `mtu=1` (inherit the bridge MTU);
-        # VMs created before the MTU was raised lack it and stay capped at
-        # 1500. Rewriting the NIC applies live, so this is reconcilable drift.
+        # A NIC must inherit the bridge MTU, which on Proxmox 9 is what an unset
+        # MTU does -- so any `mtu=` is drift and is stripped, whatever the L2
+        # carries. That also repairs a VM an older taloscluster wrote `mtu=1`
+        # onto, which 9 reads as a literal MTU of 1. Rewriting the NIC applies
+        # live, so this is reconcilable drift.
         mtu_nics: dict[str, str] = {}
-        if stated_mtu(self.cfg.network.cluster.mtu) is not None:
-            net0 = _net_with_bridge_mtu(config.get("net0"))
-            if net0 is not None:
-                mtu_nics["net0"] = net0
-        if (
-            self.cfg.network.external is not None
-            and stated_mtu(self.cfg.network.external.mtu) is not None
-            and config.get("net1") is not None
-        ):
-            net1 = _net_with_bridge_mtu(config.get("net1"))
-            if net1 is not None:
-                mtu_nics["net1"] = net1
+        for nic in ("net0", "net1"):
+            stripped = _net_without_mtu(config.get(nic))
+            if stripped is not None:
+                mtu_nics[nic] = stripped
         if mtu_nics:
             drift["mtu"] = mtu_nics
         if (
@@ -1342,7 +1379,7 @@ class ProxmoxBackend:
                 )
         if "mtu" in drift:
             for nic, value in sorted(drift["mtu"].items()):
-                action(f"set mtu=1 on {vm.name} {nic} to inherit the bridge MTU")
+                action(f"unset the mtu on {vm.name} {nic} to inherit the bridge MTU")
                 if not dry_run():
                     self.client.mutate(
                         "PUT",
@@ -1398,10 +1435,8 @@ class ProxmoxBackend:
             )
             if self.cfg.network.cluster.vlan is not None:
                 net0 += f",tag={self.cfg.network.cluster.vlan}"
-            # Proxmox `mtu=1` makes the NIC inherit the bridge's MTU, so a
-            # jumbo cluster L2 reaches the guest whatever the bridge carries.
-            if stated_mtu(self.cfg.network.cluster.mtu) is not None:
-                net0 += ",mtu=1"
+            # No `mtu=`: on Proxmox 9 an unset NIC MTU inherits the bridge's, so
+            # a jumbo cluster L2 reaches the guest whatever the bridge carries.
             data: dict[str, Any] = {
                 "vmid": vmid,
                 "name": machine.name,
@@ -2072,18 +2107,18 @@ def _kv(value: Any) -> dict[str, str]:
     return out
 
 
-def _net_with_bridge_mtu(value: Any) -> str | None:
-    """A net string rewritten to Proxmox `mtu=1` (inherit the bridge MTU).
+def _net_without_mtu(value: Any) -> str | None:
+    """A net string with any `mtu=` dropped, or None when it has none.
 
-    None when the NIC already inherits. An explicit `mtu=` override is
-    replaced, so the NIC tracks the bridge instead of a stale value.
+    The correct form on Proxmox 9+, where an unset MTU inherits the bridge's.
+    It is also the repair for a `mtu=1` an older taloscluster wrote, which 9+
+    reads as a literal MTU of 1.
     """
     if not isinstance(value, str) or not value:
         return None
     parts = value.split(",")
-    if "mtu=1" in parts:
-        return None
-    return ",".join([part for part in parts if not part.startswith("mtu=")] + ["mtu=1"])
+    kept = [part for part in parts if not part.startswith("mtu=")]
+    return ",".join(kept) if len(kept) != len(parts) else None
 
 
 def _link(bridge: str | None, tag: str | None) -> str:

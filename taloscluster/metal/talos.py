@@ -74,10 +74,11 @@ def installer(cfg: Config) -> tuple[str, str]:
     """(schematic id, installer image ref) for the cluster's metal machines.
 
     Metal machines belong to no VM pool, so the resolved extension set is the
-    base extensions (tailscale only when configured) plus the cluster-wide
-    ones, and the installer reference rides the metal platform.
+    base extensions (tailscale only when configured, and never the VM-only ones
+    -- bare metal has no QEMU host for qemu-guest-agent to reach) plus the
+    cluster-wide ones, and the installer reference rides the metal platform.
     """
-    schematic = factory.schematic_id(cfg._resolve_extensions({}))
+    schematic = factory.schematic_id(cfg._resolve_extensions({}, metal=True))
     return schematic, factory.installer_image(schematic, cfg.talos_version, platform="metal")
 
 

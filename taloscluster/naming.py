@@ -26,6 +26,18 @@ LEGACY_MANAGED_BY = "clusterctl"
 # graceful shutdown and report guest info to Nova. Neither is required to boot.
 BASE_EXTENSIONS = ("siderolabs/tailscale", "siderolabs/qemu-guest-agent")
 
+# Base extensions that only make sense inside a VM. qemu-guest-agent talks to a
+# QEMU host through a virtio serial port that bare metal does not have, so its
+# service never reaches "up" and the machine blocks in `startAllServices`
+# forever, repeating `service "ext-qemu-guest-agent" to be "up"`. Metal images
+# and installers therefore drop it.
+VM_ONLY_EXTENSIONS = ("siderolabs/qemu-guest-agent",)
+
+# The base set a bare-metal machine boots and installs.
+METAL_BASE_EXTENSIONS = tuple(
+    ext for ext in BASE_EXTENSIONS if ext not in VM_ONLY_EXTENSIONS
+)
+
 
 # ---- tags -----------------------------------------------------------------
 

@@ -85,8 +85,13 @@ def _permissions(manage_sdn=False):
     return {"/": {privilege: 1 for privilege in privileges}}
 
 
-def _data(permissions=None):
+def _data(permissions=None, pve=9):
+    """Fake Proxmox facts. `pve` is the release the nodes report: it decides
+    whether an unset NIC MTU inherits the bridge MTU (9+) or defaults to 1500
+    and needs the `mtu=1` sentinel (8 and earlier)."""
     return {
+        "nodes/pve001/version": {"version": f"{pve}.2.2", "release": f"{pve}.2"},
+        "nodes/pve002/version": {"version": f"{pve}.2.2", "release": f"{pve}.2"},
         "nodes": [
             {"node": "pve001", "status": "online", "mem": 0, "maxmem": 32 * 1024**3},
             {"node": "pve002", "status": "online", "mem": 0, "maxmem": 32 * 1024**3},
@@ -150,6 +155,8 @@ def test_inventory_uses_bulk_reads_and_only_exposes_owned_vms(proxmox_cfg):
         ("GET", "cluster/resources"),
         ("GET", "access/permissions"),
         ("GET", "cluster/firewall/options"),
+        # the supported-release check, once per run against the first node
+        ("GET", "nodes/pve001/version"),
         ("GET", "nodes/pve001/qemu/800/config"),
         ("GET", "nodes/pve001/qemu/800/agent/network-get-interfaces"),
     ]
@@ -902,12 +909,23 @@ def _create_first_vm(cfg, data, monkeypatch):
     )
 
 
-def test_vm_create_states_mtu1_on_a_jumbo_cluster(make_config, monkeypatch):
-    """Proxmox mtu=1 makes the NIC inherit the bridge MTU, so the guest sees
-    the jumbo L2 the machine configuration states."""
-    payload = _create_first_vm(_jumbo_cfg(make_config), _data(), monkeypatch)
+def test_proxmox_8_is_refused(proxmox_cfg):
+    """Proxmox 8 defaults an unset NIC MTU to 1500 and needs an `mtu=1` sentinel
+    to inherit the bridge -- the opposite of 9, which reads that as a literal
+    MTU of 1. Writing the wrong one costs the node its network, so the release
+    is a requirement rather than a branch."""
+    client = FakeClient(_data(pve=8))
 
-    assert payload["net0"].endswith(",mtu=1")
+    with pytest.raises(ReconcileError, match="Proxmox 8 on node pve001 is not supported"):
+        _backend(proxmox_cfg, client).load_inventory()
+
+
+def test_vm_create_omits_mtu_on_a_jumbo_cluster(make_config, monkeypatch):
+    """Proxmox 9 inherits the bridge MTU from an unset NIC MTU, and reads
+    `mtu=1` as a literal MTU of 1 -- so the sentinel must not be written."""
+    payload = _create_first_vm(_jumbo_cfg(make_config), _data(pve=9), monkeypatch)
+
+    assert "mtu" not in payload["net0"]
 
 
 def test_vm_create_omits_mtu_at_the_default(proxmox_cfg, monkeypatch):
@@ -1083,8 +1101,8 @@ def test_provider_status_includes_ingress_pool(make_config):
     assert status["ingress_pool"] == "203.0.113.20-203.0.113.40"
 
 
-def _external_data():
-    data = _data()
+def _external_data(pve=9):
+    data = _data(pve=pve)
     data["nodes/pve001/qemu/800/config"]["net1"] = (
         "virtio=02:00:00:00:00:01,bridge=vmbr1,firewall=1,tag=1691"
     )
@@ -2740,78 +2758,26 @@ def test_disk_shrink_is_refused_before_any_mutation(make_config):
 # NIC MTU: VMs created before the MTU was raised lack `mtu=1` and stay capped
 # at 1500; the rewrite applies live, so it is reconcilable drift.
 
-def test_plan_reports_missing_nic_mtu_as_drift_without_mutating(make_config, capsys):
+
+def test_plan_reports_a_stale_mtu1_as_drift_on_pve9(make_config, capsys):
+    """The repair for a sentinel an older taloscluster wrote: on Proxmox 9 the
+    key is dropped so the NIC inherits the bridge MTU instead of running at 1."""
     set_dry_run(True)
-    client = FakeClient(_data())
+    data = _data(pve=9)
+    data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1"
+    client = FakeClient(data)
 
     _reconcile_cp1(_jumbo_cfg(make_config), client)
 
     out = capsys.readouterr().out
     assert (
-        "set mtu=1 on testcluster-controlplane-01 net0 to inherit the bridge MTU" in out
+        "unset the mtu on testcluster-controlplane-01 net0 to inherit the bridge MTU" in out
     )
     assert client.mutations == []
 
 
-def test_converge_sets_mtu1_on_the_cluster_nic(make_config):
-    client = FakeClient(_data())
-
-    backend = _reconcile_cp1(_jumbo_cfg(make_config), client)
-
-    assert (
-        "PUT",
-        "nodes/pve001/qemu/800/config",
-        {"net0": "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1,mtu=1"},
-    ) in client.mutations
-    # the rewrite applies live, so no restart is asked for
-    assert backend.restart_result == set()
 
 
-def test_converge_sets_mtu1_on_the_external_nic(make_config):
-    # only the external L2 is jumbo here: net1 gets mtu=1, net0 is untouched
-    client = FakeClient(_external_data())
-
-    _reconcile_cp1(_jumbo_external_cfg(make_config), client)
-
-    puts = [
-        payload
-        for method, path, payload in client.mutations
-        if method == "PUT" and path == "nodes/pve001/qemu/800/config"
-    ]
-    assert {
-        "net1": "virtio=02:00:00:00:00:01,bridge=vmbr1,firewall=1,tag=1691,mtu=1"
-    } in puts
-    assert all("net0" not in payload for payload in puts)
-
-
-def test_nic_already_inheriting_the_bridge_mtu_is_not_drift(make_config, capsys):
-    data = _data()
-    data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1"
-    client = FakeClient(data)
-
-    backend = _reconcile_cp1(_jumbo_cfg(make_config), client)
-
-    assert "server testcluster-controlplane-01 exists" in capsys.readouterr().out
-    assert backend.restart_result == set()
-    assert not any(
-        "net0" in payload
-        for method, path, payload in client.mutations
-        if method == "PUT" and path == "nodes/pve001/qemu/800/config"
-    )
-
-
-def test_explicit_nic_mtu_override_is_replaced_with_bridge_inheritance(make_config):
-    data = _data()
-    data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1500"
-    client = FakeClient(data)
-
-    _reconcile_cp1(_jumbo_cfg(make_config), client)
-
-    assert (
-        "PUT",
-        "nodes/pve001/qemu/800/config",
-        {"net0": "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1,mtu=1"},
-    ) in client.mutations
 
 
 def test_bridge_change_is_refused_before_any_mutation(make_config):
@@ -3255,3 +3221,65 @@ def test_firewall_reconcile_claims_an_unmarked_kubespan_rule(make_config):
         (r["proto"], r.get("dport"), r.get("source")) for r in created
     }
     assert deleted == []
+
+
+def test_converge_strips_a_stale_mtu1_on_pve9(make_config):
+    """A NIC an older taloscluster wrote `mtu=1` onto runs at a literal MTU of 1
+    on Proxmox 9 the moment it re-plugs. Converge repairs it by dropping the key,
+    which is what inherits the bridge MTU there."""
+    data = _data(pve=9)
+    data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1"
+    client = FakeClient(data)
+
+    backend = _reconcile_cp1(_jumbo_cfg(make_config), client)
+
+    assert (
+        "PUT",
+        "nodes/pve001/qemu/800/config",
+        {"net0": "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1"},
+    ) in client.mutations
+    # the rewrite applies live, so no restart is asked for
+    assert backend.restart_result == set()
+
+
+def test_converge_strips_a_stale_mtu1_even_on_a_default_mtu_cluster(make_config, proxmox_cfg):
+    """The repair does not depend on the cluster being jumbo: `mtu=1` is wrong on
+    Proxmox 9 whatever the L2 carries, and a cluster that lowered its MTU back to
+    the default must not be left with a NIC stuck at 1."""
+    data = _data(pve=9)
+    data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1"
+    client = FakeClient(data)
+
+    _reconcile_cp1(proxmox_cfg, client)
+
+    assert (
+        "PUT",
+        "nodes/pve001/qemu/800/config",
+        {"net0": "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1"},
+    ) in client.mutations
+
+
+def test_a_clean_nic_is_not_drift_on_pve9(make_config, capsys):
+    """An unset MTU is already correct on Proxmox 9, so there is nothing to do."""
+    client = FakeClient(_data(pve=9))
+
+    backend = _reconcile_cp1(_jumbo_cfg(make_config), client)
+
+    assert "server testcluster-controlplane-01 exists" in capsys.readouterr().out
+    assert backend.restart_result == set()
+    assert not any(
+        "net0" in payload
+        for method, path, payload in client.mutations
+        if method == "PUT" and path == "nodes/pve001/qemu/800/config"
+    )
+
+
+def test_an_unreadable_pve_version_assumes_the_modern_semantics(make_config, monkeypatch):
+    """Guessing the sentinel breaks the NIC outright on 9+, while leaving the MTU
+    unset is safe on every release, so an unreadable version must not write it."""
+    data = _data(pve=9)
+    del data["nodes/pve001/version"]
+    del data["nodes/pve002/version"]
+    payload = _create_first_vm(_jumbo_cfg(make_config), data, monkeypatch)
+
+    assert "mtu" not in payload["net0"]

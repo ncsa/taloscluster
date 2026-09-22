@@ -296,6 +296,47 @@ def test_validate_warnings_three_no_warnings(make_config):
     assert validate_warnings(cfg) == []
 
 
+def test_warns_when_the_node_network_overlaps_the_pod_network(make_config):
+    """Talos raises its address-overlap diagnostic on such a node; catching it
+    from the config names the colliding key before a node ever boots."""
+    cfg = make_config({"network": {"cluster": {"cidr": "10.244.7.0/24"}}})
+    warnings = validate_warnings(cfg)
+    assert any(
+        "network.cluster.cidr (10.244.7.0/24) overlaps the kubernetes pod network" in w
+        and "address-overlap" in w
+        for w in warnings
+    )
+
+
+def test_warns_when_a_host_network_overlaps_the_service_network(make_config):
+    """10.96.0.0/12 reaches 10.111.255.255, so a 10.100.x host network collides
+    even though it shares no prefix with the stated subnet."""
+    cfg = make_config({"network": {"cluster": {"cidr": "10.100.0.0/16"}}})
+    assert any("overlaps the kubernetes service network" in w for w in validate_warnings(cfg))
+
+
+def test_warns_when_a_metal_group_network_overlaps(make_config):
+    """A metal group states its own L2, which must clear the cluster CIDRs too."""
+    cfg = make_config({"talos": {"kubespan": True}, "metal": {"rack1": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "network": {"cidr": "10.244.0.0/16", "gateway": "10.244.0.1"},
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "10.244.0.5/16"}}}},
+    }}})  # an off-cluster metal L2 needs the KubeSpan overlay to reach the cluster
+    assert any(
+        "metal.rack1.network.cidr (10.244.0.0/16) overlaps the kubernetes pod network" in w
+        for w in validate_warnings(cfg)
+    )
+
+
+def test_no_overlap_warning_for_networks_clear_of_the_kubernetes_subnets(make_config):
+    """A 10/8 network that misses both subnets is fine: the check is a real
+    overlap test, not a prefix guess."""
+    cfg = make_config({"network": {"cluster": {"cidr": "10.10.0.0/16"}}})
+    assert not any("overlaps the kubernetes" in w for w in validate_warnings(cfg))
+
+
 def test_warns_that_dns_is_dhcp_backed_on_proxmox_bridge(make_config):
     cfg = make_config(
         {
@@ -955,6 +996,54 @@ def test_metal_group_defaults_resolve_into_each_server(make_config):
             role=("cluster",), ip="172.29.21.6/24", dns=("192.0.2.53",)
         ),
     }
+
+
+def test_metal_boot_timeout_defaults_and_overrides_per_group_and_server(make_config):
+    """Cold hardware can spend many minutes in POST before Talos starts, so the
+    boot budget is a group default one slow machine can raise further."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "boot_timeout": 1800,
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "servers": {
+            "rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}},
+            "rp002": {
+                "boot_timeout": 3600,
+                "interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}},
+            },
+        },
+    }}})
+    group = cfg.metal.groups["phoenix"]
+    assert group.boot_timeout == 1800
+    assert group.servers["rp001"].boot_timeout == 1800
+    assert group.servers["rp002"].boot_timeout == 3600
+
+
+def test_metal_boot_timeout_defaults_to_ten_minutes(make_config):
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
+    }}})
+    assert cfg.metal.groups["phoenix"].servers["rp001"].boot_timeout == 600
+
+
+# not None: the loader strips null keys at group and server level, so
+# `boot_timeout:` with no value means unset and takes the default
+@pytest.mark.parametrize("bad", [0, -60, True, "30m", 1.5])
+def test_metal_boot_timeout_must_be_a_positive_whole_number(make_config, bad):
+    """`true` is an int in python and `boot_timeout: true` never meant one
+    second, so a bool is refused like any other non-integer."""
+    with pytest.raises(ConfigError, match="boot_timeout must be a positive"):
+        make_config({"metal": {"phoenix": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "boot_timeout": bad,
+            "interfaces": {"enp1s0f0": {"role": "cluster"}},
+            "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
+        }}})
 
 
 def test_metal_redfish_credentials_resolve_from_group_default_or_server_override(make_config):

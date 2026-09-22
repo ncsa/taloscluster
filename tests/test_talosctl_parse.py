@@ -1008,3 +1008,37 @@ def test_apply_config_insecure_runs_insecure_behind_the_subcommand(monkeypatch):
         "apply-config", "--insecure", "-n", "172.29.21.5",
         "--file", seen["args"][5],
     ]
+
+
+def _reset_args(monkeypatch, **kw) -> list[str]:
+    """Run `reset` against a stubbed subprocess and return the argv it built."""
+    captured: list[list[str]] = []
+
+    def _nocheck(args, timeout=None):
+        captured.append(list(args))
+        return 0, "", ""
+
+    monkeypatch.setattr(talosctl, "_run_nocheck", _nocheck)
+    talosctl.reset(Path("/nonexistent/talosconfig"), "10.0.0.1", "10.0.0.2", **kw)
+    return captured[0]
+
+
+def test_reset_wipes_a_vm_whole_and_shuts_it_down(monkeypatch):
+    """The default is right for a VM the provider deletes seconds later: the
+    whole system disk goes (talosctl's `--wipe-mode all` default) and the
+    machine shuts down rather than rebooting."""
+    args = _reset_args(monkeypatch)
+    assert "--reboot=false" in args
+    assert "--system-labels-to-wipe" not in args
+
+
+def test_reset_to_maintenance_keeps_the_install_and_reboots(monkeypatch):
+    """Hardware is deleted by nothing, so a scaled-down machine must be left
+    reusable: only the cluster's identity and data go (STATE, EPHEMERAL), the
+    Talos install stays, and the reboot brings it up with no machine config --
+    maintenance mode, ready to join another cluster without a reinstall."""
+    args = _reset_args(monkeypatch, to_maintenance=True)
+    assert "--reboot=true" in args
+    assert "--reboot=false" not in args
+    labels = [args[i + 1] for i, a in enumerate(args) if a == "--system-labels-to-wipe"]
+    assert labels == ["STATE", "EPHEMERAL"]

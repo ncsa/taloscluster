@@ -42,7 +42,7 @@ network:
 
 Required · URL
 
-The Proxmox server origin. The `/api2/json` path is added internally; URLs that already include it still work.
+The Proxmox server origin. The `/api2/json` path is added internally; URLs that already include it still work. The cluster must run Proxmox 9 or newer, which converge checks against the first node and refuses below: Proxmox 9 makes a VM NIC inherit its bridge's MTU from an unset MTU, while 8 and earlier default it to 1500 and need an `mtu=1` sentinel to inherit — the opposite convention, and one 9 reads as a literal MTU of 1, which costs the node its network. See the [Proxmox 9.0 known issues](https://pve.proxmox.com/wiki/Roadmap#9.0-known-issues).
 
 ### `proxmox.storage`
 

@@ -678,3 +678,37 @@ def test_metal_external_interface_needs_a_vlan(make_config):
     server = cfg.metal.groups["phoenix"].servers["rp001"]
     with pytest.raises(Exception, match="needs a VLAN id"):
         metal_talos.network_docs(server, cfg)
+
+
+def test_metal_installer_drops_the_vm_only_extensions(make_config):
+    """qemu-guest-agent talks to a QEMU host over a virtio serial port bare metal
+    does not have, so its service never reaches "up" and the machine blocks in
+    startAllServices. The metal installer must not carry it."""
+    cfg = make_config({})
+    resolved = cfg._resolve_extensions({}, metal=True)
+
+    assert "siderolabs/qemu-guest-agent" not in resolved
+
+
+def test_vm_pools_keep_the_qemu_guest_agent(make_config):
+    """The VM half is untouched: OpenStack uses the agent for graceful shutdown
+    and guest reporting."""
+    cfg = make_config({})
+
+    assert "siderolabs/qemu-guest-agent" in cfg._resolve_extensions({})
+
+
+def test_metal_still_honours_an_explicitly_requested_extension(make_config):
+    """Only the base set is trimmed -- an extension the cluster asks for by name
+    is still installed, even a VM-only one somebody has a reason to want."""
+    cfg = make_config({"talos": {"extensions": ["siderolabs/qemu-guest-agent"]}})
+
+    assert "siderolabs/qemu-guest-agent" in cfg._resolve_extensions({}, metal=True)
+
+
+def test_metal_base_extensions_is_the_base_set_without_the_vm_only_ones():
+    from taloscluster.naming import BASE_EXTENSIONS, METAL_BASE_EXTENSIONS
+
+    assert "siderolabs/qemu-guest-agent" in BASE_EXTENSIONS
+    assert "siderolabs/qemu-guest-agent" not in METAL_BASE_EXTENSIONS
+    assert "siderolabs/tailscale" in METAL_BASE_EXTENSIONS

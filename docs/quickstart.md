@@ -7,7 +7,7 @@ Create a first cluster, confirm its nodes are ready, and connect with `kubectl`.
 Choose OpenStack or Proxmox. You need enough capacity for the configured node pools and credentials that can create the provider resources.
 
 - **OpenStack:** prepare an application credential, the identity endpoint, an external network, an availability zone, and the flavor names for your pools. See [OpenStack configuration](configuration/openstack.md) for the keys and [OpenStack setup](providers/openstack.md) for the tenant setup, required services and quotas.
-- **Proxmox:** prepare an API token, VM disk storage, ISO storage, node-local cloud-init storage, and an existing bridge or VNet. See [Proxmox setup](providers/proxmox.md) for token permissions and managed SDN alternatives.
+- **Proxmox:** requires Proxmox 9 or newer. Prepare an API token, VM disk storage, ISO storage, node-local cloud-init storage, and an existing bridge or VNet. See [Proxmox setup](providers/proxmox.md) for token permissions and managed SDN alternatives.
 
 Either provider's cluster can also bring bare-metal machines alongside its VMs: describe them in a [`metal:`](configuration/metal.md) section (`taloscluster init --metal` scaffolds an example group beside the provider flag) and see [Metal setup](providers/metal.md) for the preparation the machines and their BMCs need.
 

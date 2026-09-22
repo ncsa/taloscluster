@@ -9,9 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Document that DHCP links keep a single default route with the 1500 MTU clamp over the lease's route.
+- Join a configured bare-metal machine that is not in the cluster during converge's compute phase, booting it through its BMC when redfish is on, and refuse one converge can neither reach in maintenance mode nor power on during validate.
+- Warn when a configured host network overlaps the Kubernetes pod (`10.244.0.0/16`) or service (`10.96.0.0/12`) network, which is what Talos's `address-overlap` diagnostic reports on a node.
+- Add `metal.<group>.boot_timeout` (seconds, default 600) for how long a machine may take to reach maintenance mode, overridable per server, for hardware that is slow from cold.
 
 ### Changed
 
+- Leave the QEMU guest agent out of bare-metal boot media and installers: with no QEMU host to reach, its service never starts and the machine stalls in `startAllServices` short of the maintenance apid.
+- **Breaking:** require Proxmox 9 or newer, refused during converge's validate phase. Proxmox 9 makes a VM NIC inherit the bridge MTU from an unset MTU, where 8 needed an `mtu=1` sentinel that 9 reads as a literal MTU of 1.
+- Never write `mtu=1` on a VM NIC, and strip one an earlier release wrote, so a NIC inherits the bridge MTU instead of coming up at 1 on Proxmox 9 ([9.0 known issues](https://pve.proxmox.com/wiki/Roadmap#9.0-known-issues)).
 - Refuse a Proxmox SDN zone MTU below the cluster MTU.
 - Refuse metal configurations whose cabling plan, BMC address or network settings could never join.
 - Refuse a metal control plane with no external link when the kubeapi VIP rides the external network.
@@ -23,6 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Reset a node dropped from the config at the address its kube Node reports when no other source knows it, so a metal machine removed by commenting out its config leaves the cluster instead of re-registering.
+- Scale a bare-metal machine down into maintenance mode: wipe only `STATE` and `EPHEMERAL` and reboot, keeping the Talos install, so the machine is ready to join another cluster instead of wiped whole and powered off like a VM.
 - Refuse an `include` entry naming `cluster.yaml` itself.
 - Refuse an `include` entry naming `secrets.yaml`, a nested include, and a value set in two files.
 - Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.

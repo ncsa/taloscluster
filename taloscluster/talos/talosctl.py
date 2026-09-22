@@ -821,7 +821,7 @@ def upgrade_k8s(talosconfig: Path, endpoint: str, node: str, version: str) -> No
 
 
 def reset(talosconfig: Path, endpoint: str, node: str,
-          control_plane: bool = False) -> None:
+          control_plane: bool = False, to_maintenance: bool = False) -> None:
     """Gracefully reset a node so it cleanly leaves the cluster.
 
     `control_plane` marks an etcd member. A failed or timed-out reset leaves a
@@ -829,14 +829,31 @@ def reset(talosconfig: Path, endpoint: str, node: str,
     control plane we therefore refuse (raise) so the caller aborts the scale-down
     and keeps the VM. Workers are not etcd members, so a failed worker reset is
     only a warning and the VM can be deleted.
+
+    `to_maintenance` leaves the machine reusable instead of blank. The default
+    wipes the whole system disk and shuts the machine down, which is right for a
+    VM the provider deletes seconds later. Hardware is not deleted by anything,
+    so for it only STATE and EPHEMERAL are wiped -- the cluster's identity and
+    data, not the Talos install -- and the machine is rebooted. It comes back on
+    the installed Talos with no machine config, which is maintenance mode, ready
+    to join another cluster without a reinstall.
     """
-    action(f"talosctl reset --graceful {node}")
+    if to_maintenance:
+        wipe: tuple[str, ...] = (
+            "--system-labels-to-wipe", "STATE", "--system-labels-to-wipe", "EPHEMERAL"
+        )
+        reboot = "--reboot=true"
+        action(f"talosctl reset --graceful --reboot {node} (STATE+EPHEMERAL, to maintenance mode)")
+    else:
+        wipe = ()
+        reboot = "--reboot=false"
+        action(f"talosctl reset --graceful {node}")
     if dry_run():
         return
     try:
         rc, out, err = _run_nocheck(
             _talos(talosconfig, endpoint, node, "reset",
-                   "--graceful", "--reboot=false", "--timeout", "10m"),
+                   "--graceful", reboot, *wipe, "--timeout", "10m"),
             timeout=660,
         )
     except subprocess.TimeoutExpired as e:

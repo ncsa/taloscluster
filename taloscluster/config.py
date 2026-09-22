@@ -19,7 +19,7 @@ import yaml
 
 from . import naming, versions
 from .errors import ConfigError
-from .naming import BASE_EXTENSIONS
+from .naming import BASE_EXTENSIONS, VM_ONLY_EXTENSIONS
 
 CLUSTER_FILE = "cluster.yaml"
 SECRETS_FILE = "secrets.yaml"
@@ -70,7 +70,7 @@ _PROXMOX_EXTERNAL_KEYS = {"bridge"}
 #: Direct keys a `metal` group accepts. A group is the defaults its `servers`
 #: start from: each server carries the same keys and overrides its own.
 _METAL_GROUP_KEYS = {"role", "redfish", "disk", "network", "interfaces", "bmc",
-                     "servers"}
+                     "boot_timeout", "servers"}
 #: Direct keys one `metal.<group>.servers` entry accepts: the group settings it
 #: may override, minus the servers list itself.
 _METAL_SERVER_KEYS = _METAL_GROUP_KEYS - {"servers"}
@@ -110,8 +110,22 @@ SECRET_PLACEHOLDER = "CHANGE-ME"
 # multi-document network kinds (LinkConfig, DHCPv4Config, Layer2VIPConfig,
 # RoutingRuleConfig, ResolverConfig) all exist from v1.13.
 MIN_TALOS_VERSION = "v1.13.0"
+#: Oldest Proxmox release taloscluster supports. 9 made a VM NIC inherit the
+#: bridge MTU from an unset MTU; 8 and earlier default it to 1500 and need an
+#: `mtu=1` sentinel to inherit, the opposite convention, which 9 reads as a
+#: literal MTU of 1. Writing the wrong one costs the node its network.
+MIN_PVE_MAJOR = 9
 #: Ethernet MTU used for an L2 that does not set one.
 DEFAULT_MTU = 1500
+#: How long a metal machine gets to answer the maintenance apid after a boot.
+#: Cold hardware can spend many minutes in POST and firmware before Talos
+#: starts, so a group of slow machines raises it (`metal.<group>.boot_timeout`).
+DEFAULT_METAL_BOOT_TIMEOUT_S = 600
+#: Talos's own defaults for the Kubernetes pod and service networks. taloscluster
+#: never sets `cluster.network.podSubnets`/`serviceSubnets`, so these are what a
+#: cluster runs unless a `talos.config_patches` entry overrides them.
+TALOS_POD_SUBNET = "10.244.0.0/16"
+TALOS_SERVICE_SUBNET = "10.96.0.0/12"
 #: Smallest MTU a node may be configured with (the IPv6 minimum link MTU).
 MIN_MTU = 1280
 _VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
@@ -301,6 +315,7 @@ class MetalGroup:
     disk: str                          # install disk device
     network: L2Network                 # the group's node L2
     redfish: bool = False
+    boot_timeout: int = DEFAULT_METAL_BOOT_TIMEOUT_S   # seconds to maintenance mode
     interfaces: dict[str, MetalInterface] = field(default_factory=dict)
     bmc: MetalBmc = field(default_factory=MetalBmc)
     servers: dict[str, MetalServer] = field(default_factory=dict)
@@ -316,6 +331,7 @@ class MetalServer:
     disk: str                          # install disk device
     network: L2Network                 # the machine's node L2
     redfish: bool = False
+    boot_timeout: int = DEFAULT_METAL_BOOT_TIMEOUT_S   # seconds to maintenance mode
     interfaces: dict[str, MetalInterface] = field(default_factory=dict)
     bmc: MetalBmc = field(default_factory=MetalBmc)
 
@@ -551,13 +567,21 @@ class Config:
         """The distinct resolved extension sets in use -> one image per set."""
         return {m.extensions for m in self.machines.values()}
 
-    def _resolve_extensions(self, pool: dict[str, Any]) -> tuple[str, ...]:
+    def _resolve_extensions(
+        self, pool: dict[str, Any], *, metal: bool = False
+    ) -> tuple[str, ...]:
         # the boot ISO always bakes BASE_EXTENSIONS, but the installer image
         # (machine.install.image) drops tailscale when no tailscale: section is
-        # configured, so the installed system does not carry a dormant service
+        # configured, so the installed system does not carry a dormant service.
+        # `metal` additionally drops the VM-only ones: there is no QEMU host for
+        # qemu-guest-agent to reach, so it would never start and the machine
+        # would block in startAllServices. An extension the cluster or the group
+        # asks for by name is still honoured -- this only trims the base set.
         merged = set(BASE_EXTENSIONS)
         if not self.tailscale_enabled:
             merged.discard("siderolabs/tailscale")
+        if metal:
+            merged.difference_update(VM_ONLY_EXTENSIONS)
         merged.update(self.talos_extensions)
         merged.update(pool.get("extensions", []) or [])
         return tuple(sorted(merged))
@@ -1002,6 +1026,9 @@ def _metal_fields(
         "role": _metal_role(require(raw, "role", where=where), f"{where}.role"),
         "disk": _metal_disk(require(raw, "disk", where=where), f"{where}.disk"),
         "redfish": _metal_flag(raw.get("redfish", False), f"{where}.redfish"),
+        "boot_timeout": _metal_boot_timeout(
+            raw.get("boot_timeout", DEFAULT_METAL_BOOT_TIMEOUT_S), f"{where}.boot_timeout"
+        ),
         "network": _metal_l2(
             _mapping(raw.get("network"), f"{where}.network"), f"{where}.network", cluster
         ),
@@ -1013,6 +1040,17 @@ def _metal_fields(
 def _metal_role(value: Any, where: str) -> str:
     if value not in ("controlplane", "worker"):
         raise ConfigError(f"{where} must be 'controlplane' or 'worker'")
+    return value
+
+
+def _metal_boot_timeout(value: Any, where: str) -> int:
+    """Seconds a machine gets to reach maintenance mode. Must be positive.
+
+    A bool is rejected outright: `True` is an int in python, and a boot budget
+    of one second is never what `boot_timeout: true` meant.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{where} must be a positive whole number of seconds")
     return value
 
 
@@ -1895,4 +1933,58 @@ def validate_warnings(cfg: Config) -> list[str]:
             "nodes get their DNS from the DHCP server, so the configured resolvers "
             "are not applied"
         )
+    warnings.extend(_kubernetes_overlap_warnings(cfg))
+    return warnings
+
+
+def _kubernetes_overlap_warnings(cfg: Config) -> list[str]:
+    """Warn when a stated host network overlaps the pod or service network.
+
+    Talos raises its own `address-overlap` diagnostic on a node whose host
+    addresses fall inside the pod or service subnets: the node cannot tell its
+    own traffic from cluster traffic, so kubelet, DNS and service routing break
+    in ways that look like anything but an addressing mistake. Reading it off
+    the configuration names the colliding key before a node ever boots.
+
+    Only the networks `cluster.yaml` states are checked, against Talos's
+    defaults: a cluster that overrides the subnets through `talos.config_patches`
+    is outside what this can see, and so is a DHCP-assigned address on a link the
+    config does not describe -- a metal machine's PXE NIC is the case that hits
+    in practice, and only the node itself can see that one.
+    """
+    kube = (("pod", TALOS_POD_SUBNET), ("service", TALOS_SERVICE_SUBNET))
+    stated: list[tuple[str, str]] = [
+        ("network.cluster.cidr", cfg.network.cluster.cidr),
+    ]
+    # a cluster may state no external network at all
+    if cfg.network.external is not None:
+        stated += [
+            ("network.external.cidr", cfg.network.external.cidr),
+            ("network.external.anchor_cidr", cfg.network.external.anchor_cidr),
+        ]
+    if cfg.metal is not None:
+        for gname, group in cfg.metal.groups.items():
+            stated.append((f"metal.{gname}.network.cidr", group.network.cidr))
+            for sname, server in group.servers.items():
+                if server.network.cidr != group.network.cidr:
+                    stated.append(
+                        (f"metal.{gname}.servers.{sname}.network.cidr", server.network.cidr)
+                    )
+    warnings: list[str] = []
+    for where, cidr in stated:
+        if not cidr:
+            continue
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            continue  # a malformed cidr is the loader's error to report, not ours
+        for kind, kube_cidr in kube:
+            if net.overlaps(ipaddress.ip_network(kube_cidr)):
+                warnings.append(
+                    f"{where} ({cidr}) overlaps the kubernetes {kind} network "
+                    f"{kube_cidr}: talos raises its address-overlap diagnostic on such "
+                    "a node and service routing is unreliable -- move the host network, "
+                    f"or point cluster.network.{kind}Subnets elsewhere with a "
+                    "talos.config_patches entry"
+                )
     return warnings

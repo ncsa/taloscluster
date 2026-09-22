@@ -105,6 +105,23 @@ Optional · integer 1-4094 · default [`network.external.vlan`](network.md#netwo
 
 The VLAN id tagged on an `external` link's VLAN child, instead of the external network's own. Like `link_name`, it is refused on an interface without the `external` role.
 
+### `metal.<group>.boot_timeout`
+
+Optional · seconds · default `600`
+
+How long a machine is given to answer the maintenance-mode apid after it is booted, for both `metal wait`/`metal join` and the converge phase that joins configured machines. Cold hardware can spend many minutes in POST, firmware and NIC initialisation before Talos starts, so a group of slow machines raises this once for every machine in it and a single slow machine overrides it further:
+
+```yaml
+metal:
+  rack1:
+    boot_timeout: 1800      # 30m: these take a long time from cold
+    servers:
+      srv01:
+        boot_timeout: 3600  # and this one longer still
+```
+
+A machine that does not answer within its budget is reported and skipped; the rest of the converge is unaffected and the next run picks it up.
+
 ### `metal.<group>.bmc`
 
 Optional · mapping

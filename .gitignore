@@ -13,6 +13,7 @@ infra.yaml
 
 /openstack/
 /proxmox/
+/csfarm
 /.claude/
 
 # plans
