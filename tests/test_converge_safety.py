@@ -3309,6 +3309,133 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     }]
 
 
+def test_converge_reports_a_failed_metal_join_as_incomplete(monkeypatch, tmp_path):
+    """A configured metal machine that never reaches maintenance mode is
+    reported, not fatal -- the rest of the converge proceeds and the plugins
+    still run -- but the run exits nonzero like an unreachable cluster instead
+    of reading as a clean no-op, and the health phase leaves the machine out of
+    the Ready wait it can never pass while waiting on the machines that joined."""
+    inventory = _cp_inventory("phoenix-controlplane-01")
+    state = _FakeState(True, tmp_path / "talossecrets.yaml")
+    backend = _MetalConfigBackend(inventory)
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+    metal = SimpleNamespace(
+        groups={"site": SimpleNamespace(
+            servers={"rp001": SimpleNamespace(
+                name="rp001", role="worker", redfish=True, disk="/dev/sda",
+                boot_timeout=600, bmc=SimpleNamespace(ip="192.0.2.61"),
+            )}
+        )}
+    )
+    cfg = SimpleNamespace(
+        name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+        extension_sets=lambda: [()],
+        machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+        tailscale_enabled=True,
+        tailscale_auth_key=None,
+        metal_servers={"rp001": "worker"},
+        metal=metal,
+    )
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge.talosctl, "gen_talosconfig", lambda *a, **k: "talosconfig")
+    monkeypatch.setattr(
+        converge.machineconfig, "build_configs",
+        lambda *a, **k: {"phoenix-controlplane-01": "vm-config"},
+    )
+    monkeypatch.setattr(
+        converge.metal_talos, "installer",
+        lambda _cfg: ("m-sch", "factory.talos.dev/metal-installer/m-sch:v1.13.0"),
+    )
+    monkeypatch.setattr(
+        converge.metal_talos, "build_config",
+        lambda _s, *_a, **_k: "metal-config:rp001",
+    )
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.31.0")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
+    monkeypatch.setattr(converge, "_require_final_health", lambda *a, **k: None)
+    waited: list[set[str]] = []
+
+    def fake_wait(_kubeconfig, nodes, *_a, **_k):
+        waited.append(set(nodes))
+
+    monkeypatch.setattr(converge, "_wait_nodes_ready", fake_wait)
+    monkeypatch.setattr(converge.kubectl, "get_nodes_wide", lambda _kc: "")
+    monkeypatch.setattr(
+        converge, "_reconcile_joined", lambda *a, **k: inventory
+    )
+    monkeypatch.setattr(converge, "_run_plugins", lambda *a, **kw: 0)
+    # rp001 never comes up: booted through its BMC, waited out, never answers
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
+    monkeypatch.setattr(converge, "_boot_metal", lambda *_a: None)
+    monkeypatch.setattr(converge, "_wait_maintenance", lambda *_a: False)
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config_insecure",
+        lambda *_a: pytest.fail("a machine that never came up must not be applied"),
+    )
+
+    assert converge.converge(tmp_path) == 1
+    # the failed machine is out of the Ready wait; the control plane stays in
+    assert waited == [{"phoenix-controlplane-01"}]
+
+
+def test_converge_leaves_a_plan_clean_when_no_metal_config_exists(monkeypatch, tmp_path):
+    """Plan never joins (no secrets -> no machine configs), so the pending
+    machines must not turn the plan's exit nonzero."""
+    state = _FakeState(False, tmp_path / "talossecrets.yaml")
+    backend = _ExistingDownBackend(InfrastructureInventory())
+    metal = SimpleNamespace(
+        groups={"site": SimpleNamespace(
+            servers={"rp001": SimpleNamespace(
+                name="rp001", role="worker", redfish=False, disk="/dev/sda"
+            )}
+        )}
+    )
+    cfg = SimpleNamespace(
+        name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+        extension_sets=lambda: [()],
+        machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+        tailscale_enabled=True,
+        tailscale_auth_key=None,
+        metal_servers={"rp001": "worker"},
+        metal=metal,
+    )
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge.talosctl, "gen_talosconfig", lambda *a, **k: "talosconfig")
+    monkeypatch.setattr(
+        converge.metal_talos, "installer",
+        lambda _cfg: ("m-sch", "factory.talos.dev/metal-installer/m-sch:v1.13.0"),
+    )
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
+    monkeypatch.setattr(
+        converge.metal_redfish,
+        "Redfish",
+        lambda _bmc: pytest.fail("a dry run must not reach a BMC"),
+    )
+
+    assert converge.converge(tmp_path) == 0
+
+
 def _pending_metal_cfg(**server_kw):
     """A cfg whose one metal server is configured but not in the cluster."""
     fields = {
@@ -3545,9 +3672,12 @@ def test_join_metal_applies_the_config_to_a_machine_in_maintenance(monkeypatch):
         lambda _bmc: pytest.fail("a machine in maintenance mode needs no BMC"),
     )
 
-    converge._join_metal(
-        _pending_metal_cfg(), {"rp001": "rp001-config"},
-        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
+    assert (
+        converge._join_metal(
+            _pending_metal_cfg(), {"rp001": "rp001-config"},
+            ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
+        )
+        == set()
     )
 
     assert applied == [("192.0.2.61", "rp001-config")]
@@ -3616,7 +3746,9 @@ def test_join_metal_honours_the_machines_own_boot_timeout(monkeypatch):
 
 def test_join_metal_skips_a_machine_that_never_reaches_maintenance(monkeypatch):
     """A machine that does not come up is reported, not fatal: the rest of the
-    converge is unaffected and the next run picks it up."""
+    converge is unaffected and the next run picks it up -- but the machine is
+    named back to the caller, which reports the run incomplete instead of a
+    clean exit and leaves it out of the Ready wait."""
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
     monkeypatch.setattr(converge.factory, "schematic_id", lambda _e: "sch")
@@ -3630,10 +3762,10 @@ def test_join_metal_skips_a_machine_that_never_reaches_maintenance(monkeypatch):
         lambda *_a: pytest.fail("a machine that never came up must not be applied"),
     )
 
-    converge._join_metal(
+    assert converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
         ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
-    )
+    ) == {"rp001"}
 
 
 def test_join_metal_touches_nothing_in_a_dry_run(monkeypatch):
@@ -3690,12 +3822,15 @@ def test_join_metal_skips_a_joined_machine_whose_kube_node_is_missing(
         lambda *_a: pytest.fail("a joined machine must not have a config applied"),
     )
 
-    converge._join_metal(
+    unjoined = converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
         talosconfig, kubeconfig,
     )
 
     assert "not reinstalling" in capsys.readouterr().err
+    # the machine is named back so it stays out of the Ready wait and the run
+    # reports incomplete instead of a clean exit
+    assert unjoined == {"rp001"}
 
 
 def test_metal_unjoined_ignores_a_failed_node_query(monkeypatch, tmp_path):

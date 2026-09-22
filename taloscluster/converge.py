@@ -68,8 +68,9 @@ from .talos import factory, machineconfig, talosctl
 
 def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     """Make the cluster match cluster.yaml. Returns a non-zero exit code when
-    an installed plugin failed, or when an existing cluster remains unreachable
-    -- an incomplete converge that must not read as a clean no-op. A plugin
+    an installed plugin failed, when an existing cluster remains unreachable,
+    or when a configured metal machine did not join this run -- an incomplete
+    converge that must not read as a clean no-op. A plugin
     failure happens only once the cluster itself is already built, so a
     downstream registration failure must not look like a converge that did not
     happen; an unreachable existing cluster is the reverse -- nothing was
@@ -303,6 +304,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # ---- 7. COMPUTE (create / scale up) ----------------------------------
     log("compute")
     needs_restart: set[str] = set()
+    metal_unjoined: set[str] = set()
     if existing_but_down and not dry_run():
         warn(
             "skipping compute: machines exist but the kube-api is unreachable -- "
@@ -345,8 +347,10 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         needs_restart = backend.reconcile_machines(machines, inv, boot_image, configs) or set()
         # the bare-metal half of the same phase: a configured machine that is
         # not in the cluster is brought in here, after the existing nodes were
-        # upgraded, so it never joins newer than the rest
-        _join_metal(cfg, configs, talosconfig_path, kubeconfig_path)
+        # upgraded, so it never joins newer than the rest. One that could not
+        # be brought in is reported, not fatal -- but it keeps the run from
+        # reading as a clean no-op at the end
+        metal_unjoined = _join_metal(cfg, configs, talosconfig_path, kubeconfig_path)
     else:
         warn("skipping compute: no machine configs (network fip not ready)")
 
@@ -410,7 +414,11 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     if not dry_run() and not existing_but_down and refs.kubernetes.vip:
         log("health")
         _require_final_health(talosconfig_path, cp1, refs.kubernetes.vip, kubeconfig_path)
-        _wait_nodes_ready(kubeconfig_path, machines)
+        # every configured machine must be Ready before the run reads clean --
+        # the VM pools and a metal machine joined this run or before alike;
+        # one already reported as not joined can never pass and is left out
+        expected = {s.name for s in metal_servers} | set(machines)
+        _wait_nodes_ready(kubeconfig_path, expected - metal_unjoined)
         # OpenStack first-boot and scaled-up nodes are created on the shared
         # base image, so re-check every node's running schematic now that it has
         # joined and reinstall any that came up short of its configured
@@ -465,7 +473,18 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             "hooks and reporting an incomplete converge"
         )
         return 1
-    return _run_plugins(ctx, "converge", assume_yes=assume_yes)
+    rc = _run_plugins(ctx, "converge", assume_yes=assume_yes)
+    if metal_unjoined and not dry_run():
+        # a configured metal machine this run could not join is an incomplete
+        # converge too: the rest of the cluster came up, so the plugins ran,
+        # but the run must not read as a clean no-op
+        warn(
+            "metal machine(s) did not join this run: "
+            + ", ".join(sorted(metal_unjoined))
+            + " -- reporting an incomplete converge"
+        )
+        return 1
+    return rc
 
 
 def _run_plugins(ctx: Context, hook: str, reverse: bool = False, **kw) -> int:
@@ -769,7 +788,7 @@ def _join_metal(
     configs: dict[str, str],
     talosconfig: Path,
     kubeconfig: Path,
-) -> None:
+) -> set[str]:
     """Bring every configured-but-unjoined metal machine into the cluster.
 
     The bare-metal half of the compute phase, and deliberately in it: a VM pool
@@ -790,10 +809,16 @@ def _join_metal(
     machine in maintenance mode -- a node running a configuration rejects that
     API -- so a machine mid-join is left alone for the next converge rather
     than reinstalled under itself.
+
+    Returns the names of the machines that did not join this run -- one that
+    never answered the maintenance apid within its budget, and one left alone
+    above -- so the caller can leave them out of the Ready wait and report an
+    incomplete converge instead of a clean exit.
     """
+    unjoined: set[str] = set()
     pending = _metal_unjoined(cfg, kubeconfig)
     if not pending:
-        return
+        return unjoined
     # the metal base set: the VM providers' image carries qemu-guest-agent,
     # whose service never starts on bare metal and would leave the machine
     # blocked in startAllServices short of the maintenance apid
@@ -807,6 +832,7 @@ def _join_metal(
             # no machine config this run (no secrets, or no advertised endpoint
             # yet) -- the same condition that skips the VM half of compute
             warn(f"metal {server.name}: no machine config this run; not joining")
+            unjoined.add(server.name)
             continue
         if talosconfig.is_file() and metal_talos.answers_as_cluster(talosconfig, server):
             warn(
@@ -814,6 +840,7 @@ def _join_metal(
                 "cluster's identity but has no Kubernetes Node; not reinstalling "
                 "it -- reset the machine first if a re-join is intended"
             )
+            unjoined.add(server.name)
             continue
         if talosctl.maintenance_reachable(ip):
             info(f"metal {server.name} ({ip}) is in maintenance mode; joining")
@@ -821,6 +848,7 @@ def _join_metal(
             info(f"metal {server.name} ({ip}) is not in maintenance mode; booting its BMC")
             _boot_metal(server, iso_url)
             if not _wait_maintenance(server, ip):
+                unjoined.add(server.name)
                 continue
         else:
             # validate refused this case before anything mutated; reaching it
@@ -834,6 +862,7 @@ def _join_metal(
         if not dry_run():
             talosctl.apply_config_insecure(ip, config_yaml)
             info(f"metal {server.name}: config applied; it installs to {server.disk} and reboots")
+    return unjoined
 
 
 def _boot_metal(server: MetalServer, iso_url: str) -> None:
@@ -861,8 +890,8 @@ def _wait_maintenance(server: MetalServer, ip: str) -> bool:
     The budget is the machine's own `boot_timeout`, so a group of slow hardware
     raises it once for every machine in it. A machine that does not come up is
     reported and skipped rather than fatal: the rest of the converge is
-    unaffected, and the next run picks it up. A dry run waits for nothing -- it
-    booted nothing.
+    unaffected, the next run picks it up, and the caller reports the run
+    incomplete. A dry run waits for nothing -- it booted nothing.
     """
     if dry_run():
         return True
@@ -1234,15 +1263,18 @@ def _wait_reachable(
 
 
 def _wait_nodes_ready(
-    kubeconfig: Path, machines: dict[str, Machine], timeout_s: int = 900, interval_s: int = 15
+    kubeconfig: Path, nodes: set[str], timeout_s: int = 900, interval_s: int = 15
 ) -> None:
-    """Wait for every desired machine to appear as a Ready Kubernetes node.
+    """Wait for every desired node to appear as a Ready Kubernetes node.
 
-    Existing machines are already Ready and pass immediately; new machines
-    need time to boot, install Talos, and join the cluster. Must complete
-    before ``finalize_machines`` detaches credential-bearing cidata ISOs.
+    `nodes` names every configured machine -- the VM pools and the metal
+    servers alike. Existing machines are already Ready and pass immediately;
+    new machines need time to boot, install Talos, and join the cluster. A
+    machine the caller knows did not join this run is left out by it. Must
+    complete before ``finalize_machines`` detaches credential-bearing cidata
+    ISOs.
     """
-    pending = set(machines)
+    pending = set(nodes)
     deadline = time.monotonic() + timeout_s
     while pending and time.monotonic() < deadline:
         ready = {n["name"] for n in kubectl.node_summary(kubeconfig) if n["ready"]}

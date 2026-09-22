@@ -120,7 +120,7 @@ metal:
         boot_timeout: 3600  # and this one longer still
 ```
 
-A machine that does not answer within its budget is reported and skipped; the rest of the converge is unaffected and the next run picks it up.
+A machine that does not answer within its budget is reported and skipped; the rest of the converge is unaffected and the next run picks it up, but the run exits nonzero — the converge is incomplete, not a clean no-op.
 
 ### `metal.<group>.bmc`
 
