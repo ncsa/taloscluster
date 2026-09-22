@@ -212,18 +212,21 @@ class ProxmoxBackend:
         self._check_firewall(inventory)
 
     def _check_firewall(self, inventory: ProxmoxInventory) -> None:
-        """Warn if the Proxmox firewall is not fully enabled.
+        """Fail without the datacenter firewall; warn on a missing NIC flag.
 
         Proxmox requires three levels of enablement for VM firewall rules to
         take effect: cluster-wide, per-VM, and per-NIC.  We set the VM and NIC
         flags ourselves during creation, but the cluster-wide switch is
-        operator-controlled.  Warn if it is off, and warn if existing owned VMs
-        are missing NIC firewall flags (e.g. created before this was enforced).
+        operator-controlled.  Fail while it is off -- the per-VM
+        ``policy_in=DROP`` and the allowlist rules would never take effect --
+        and warn if existing owned VMs are missing NIC firewall flags (e.g.
+        created before this was enforced).
         """
         if not _truthy(inventory.firewall_options.get("enable")):
-            warn(
+            raise ReconcileError(
                 "Proxmox cluster firewall is not enabled — "
-                "security allowlists are NOT enforced"
+                "security allowlists are NOT enforced; enable it in the "
+                "datacenter firewall settings and retry"
             )
         for name, vm in inventory.vms.items():
             if not self._owns_vm(inventory, vm):

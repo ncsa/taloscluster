@@ -47,7 +47,7 @@ The Talos host firewall allows TCP and UDP from `network.cluster.cidr` and from 
 
 ## Proxmox firewall enablement
 
-Enable the datacenter firewall yourself. taloscluster configures per-VM firewall options and sets `firewall=1` on NICs it creates, but only warns if the datacenter switch is off or an existing NIC lacks that flag.
+Enable the datacenter firewall yourself. taloscluster configures per-VM firewall options and sets `firewall=1` on NICs it creates, but refuses to run while the datacenter switch is off — the per-VM deny-in policy and the allowlist rules would never take effect — and warns if an existing NIC lacks that flag.
 
 ## CIDR format
 

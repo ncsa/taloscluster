@@ -753,11 +753,11 @@ def test_cidata_storage_must_be_node_local(proxmox_cfg):
         _backend(proxmox_cfg, FakeClient(data)).load_inventory()
 
 
-def test_warns_when_cluster_firewall_disabled(proxmox_cfg, capsys):
+def test_fails_when_cluster_firewall_disabled(proxmox_cfg):
     data = _data()
     data["cluster/firewall/options"] = {"enable": 0}
-    _backend(proxmox_cfg, FakeClient(data)).load_inventory()
-    assert "cluster firewall is not enabled" in capsys.readouterr().err
+    with pytest.raises(ReconcileError, match="cluster firewall is not enabled"):
+        _backend(proxmox_cfg, FakeClient(data)).load_inventory()
 
 
 def test_warns_when_vm_nic_missing_firewall_flag(proxmox_cfg, capsys):
