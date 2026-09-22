@@ -11,7 +11,8 @@ newer than the rest:
 OpenStack flavor, disk or availability-zone change, a Proxmox placement,
 storage, disk-shrink or NIC attachment move) before any phase mutates, so a
 rejected change never leaves a half-applied cluster. It refuses a configured
-bare-metal machine converge could never bring in on the same grounds.
+bare-metal machine converge could never bring in on the same grounds, and an
+edit a joined one cannot take (its install disk or cluster address).
 
 `compute` creates the VM pools and joins the bare-metal machines the config
 lists but the cluster does not have, both after the upgrade phase for the same
@@ -124,6 +125,9 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # reach in maintenance mode nor power on through a BMC is refused here,
     # while the cluster is still untouched, not skipped silently mid-run
     _validate_metal_joinable(cfg, kubeconfig_path)
+    # and so is an edit a JOINED metal machine cannot take in place: its install
+    # disk or cluster address, compared against the machine the cluster records
+    _validate_metal_machines(cfg, talosconfig_path, kubeconfig_path)
     # a tailscale section added or removed after the first converge switches
     # every node's schematic and deadlocks the upgrade rollout; refuse it here,
     # while the cluster is still untouched
@@ -575,6 +579,65 @@ def _validate_metal_joinable(cfg: Config, kubeconfig: Path) -> None:
         "mode (its group is `redfish: false`, so PXE or media by hand), or "
         "comment its entry out of the metal section to stop expecting it."
     )
+
+
+def _validate_metal_machines(cfg: Config, talosconfig: Path, kubeconfig: Path) -> None:
+    """Refuse an edit a joined metal machine cannot reconcile in place.
+
+    The metal equivalent of the providers' ``validate_machines`` preflight: for
+    every configured machine that is already in the cluster, the configured
+    cluster address is compared against the address the kube Node records and
+    the configured ``disk`` against the install disk the machine's running
+    configuration names -- the disk its next Talos upgrade would install to.
+    Neither can be reconciled in place: converge pushes configuration and
+    upgrades to the static cluster address of the cabling plan, so an edited
+    address dials a machine that answers only on the recorded one, and a
+    reinstalled machine boots from the configured disk, never migrating the
+    installed Talos to a new one. Refused here, while every earlier phase is
+    still unmutated -- the same contract `_validate_metal_joinable` applies to
+    the machines that have not joined yet.
+
+    The checks degrade gracefully like the other validate probes: without a
+    kubeconfig a joined machine cannot be told from a pending one; a node query
+    the api cannot answer records no address; a machine whose configuration
+    cannot be read reports no disk. An unknown is never a refusal -- an
+    unreachable machine fails on its own later, without this check guessing.
+    """
+    if not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
+        return
+    joined = [
+        s for s in _metal_servers(cfg)
+        if kubectl.node_exists(kubeconfig, s.name) is True
+    ]
+    if not joined:
+        return
+    recorded = kubectl.node_addresses(kubeconfig)
+    for server in joined:
+        have = recorded.get(server.name, "")
+        want = metal_talos.cluster_ip(server)
+        if have and have != want:
+            raise ReconcileError(
+                f"refusing to move the cluster address of metal server "
+                f"{server.name} from {have} to {want}: converge reaches a "
+                "joined machine at the static address it runs on, and the "
+                "config push would dial the new address, where nothing "
+                "answers; revert the change in cluster.yaml, or reset the "
+                "machine and join it again at the new address"
+            )
+        dial = have or want
+        try:
+            have_disk = talosctl.running_install_disk(talosconfig, dial, dial)
+        except (OSError, subprocess.CalledProcessError):
+            continue  # the machine does not answer; it fails on its own later
+        if have_disk and have_disk != server.disk:
+            raise ReconcileError(
+                f"refusing to move the install disk of metal server "
+                f"{server.name} from {have_disk} to {server.disk}: a joined "
+                "machine cannot migrate its installed Talos to another disk "
+                "(the next upgrade would install there); revert `disk` in "
+                "cluster.yaml, or reset the machine and join it again at the "
+                "new disk"
+            )
 
 
 def _validate_tailscale_toggle(

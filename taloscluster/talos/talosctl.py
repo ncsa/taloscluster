@@ -793,6 +793,39 @@ def running_extensions(talosconfig: Path, endpoint: str, node: str) -> list[str]
     return names
 
 
+def running_install_disk(talosconfig: Path, endpoint: str, node: str) -> str:
+    """The install disk the node's ACTIVE machine configuration names, or "".
+
+    `talosctl get machineconfig v1alpha1` returns the configuration the running
+    OS was configured with, its spec carried as the raw machine-config YAML
+    (talosctl v1.13 marshals the resource's spec as a YAML string). The config
+    the node runs names the disk its next Talos upgrade would install to, so
+    this is the thing to compare a metal machine's configured `disk` against --
+    before the apply phase rewrites the node's configuration to the new disk.
+    Raises when the node does not answer, so a caller that must tell
+    "unreachable" from "no disk recorded" can catch it; "" covers a reply the
+    disk cannot be read from, which is compared as unknown, never as a match.
+    """
+    out = _run(
+        _talos(talosconfig, endpoint, node,
+               "get", "machineconfig", "v1alpha1", "-o", "yaml"),
+        capture=True,
+    )
+    for doc in _resource_docs(out):
+        spec = doc.get("spec")
+        if isinstance(spec, str):
+            try:
+                spec = yaml.safe_load(spec)
+            except yaml.YAMLError:
+                continue
+        if not isinstance(spec, dict):
+            continue
+        install = ((spec.get("machine") or {}).get("install") or {})
+        if install.get("disk"):
+            return str(install["disk"])
+    return ""
+
+
 def _resource_docs(out: str) -> list[dict]:
     """The resource documents in `talosctl get ... -o yaml` output.
 

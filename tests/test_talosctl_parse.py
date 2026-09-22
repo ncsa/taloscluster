@@ -163,6 +163,96 @@ def test_running_extensions_empty_on_empty_output(monkeypatch):
     assert talosctl.running_extensions(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == []
 
 
+# ---------------------------------------------------------------------------
+# running_install_disk
+# ---------------------------------------------------------------------------
+
+# A realistic `get machineconfig v1alpha1 -o yaml` stream: one resource whose
+# spec is the machine configuration itself, carried as a YAML string (talosctl
+# marshals the resource's spec with the `talos.dev/yaml-spec` annotation). The
+# string holds a multi-document config, so its own `---` separators are indented
+# INSIDE the block scalar; the machine section names the install disk.
+MACHINECONFIG_OUTPUT = """\
+node: 192.0.2.61
+---
+metadata:
+    namespace: config
+    type: MachineConfigs.config.talos.dev
+    id: v1alpha1
+    version: 5
+    owner: config.V1Alpha1Controller
+    phase: running
+spec: |
+    machine:
+        type: worker
+        install:
+            disk: /dev/sda
+            image: factory.talos.dev/metal-installer/abc:v1.13.9
+    ---
+    apiVersion: v1alpha1
+    kind: LinkConfig
+    name: eno1
+"""
+
+
+def test_running_install_disk_reads_the_running_configurations_disk(monkeypatch):
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: MACHINECONFIG_OUTPUT)
+    got = talosctl.running_install_disk(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    assert got == "/dev/sda"
+
+
+def test_running_install_disk_also_reads_an_inline_spec(monkeypatch):
+    """A talosctl that marshals the spec as the parsed config mapping instead of
+    a YAML string is read the same way."""
+    out = (
+        "node: 192.0.2.61\n"
+        "---\n"
+        "metadata:\n"
+        "    id: v1alpha1\n"
+        "spec:\n"
+        "    machine:\n"
+        "        install:\n"
+        "            disk: /dev/nvme0n1\n"
+    )
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: out)
+    got = talosctl.running_install_disk(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    assert got == "/dev/nvme0n1"
+
+
+def test_running_install_disk_empty_without_a_disk(monkeypatch):
+    out = (
+        "node: 192.0.2.61\n"
+        "---\n"
+        "metadata:\n"
+        "    id: v1alpha1\n"
+        "spec: |\n"
+        "    machine:\n"
+        "        type: worker\n"
+    )
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: out)
+    assert talosctl.running_install_disk(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
+
+
+def test_running_install_disk_empty_on_garbage_or_empty_output(monkeypatch):
+    for out in ("nonsense", ""):
+        monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, out=out: out)
+        assert talosctl.running_install_disk(
+            Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+        ) == ""
+
+
+def test_running_install_disk_targets_the_machineconfig_resource(monkeypatch):
+    seen = {}
+
+    def fake_run(args, capture=False):
+        seen["args"] = args
+        return ""
+
+    monkeypatch.setattr(talosctl, "_run", fake_run)
+    talosctl.running_install_disk(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    assert "get" in seen["args"] and "machineconfig" in seen["args"]
+
+
 # A realistic `get members -o json` stream: separate JSON objects, NOT an array.
 # controlplane-01 carries the shared kube-api VIP among its private ips, and the
 # members differ in talos version (a rollout in flight).

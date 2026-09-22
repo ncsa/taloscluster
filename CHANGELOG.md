@@ -109,6 +109,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Refuse a `talos.version` older than the running release and a `kubernetes.version` the pinned Talos does not support.
 - Wait out control-plane reboots through the control-plane endpoint so an unroutable node address no longer stalls the rollout.
 - Generate metal machine configs with the same hostname document as VM nodes on every supported Talos version.
+- Refuse a joined metal machine's changed `disk` or cluster address during validate, before any phase mutates.
 
 ## [0.7.0] - 2026-09-06
 

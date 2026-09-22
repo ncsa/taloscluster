@@ -3397,6 +3397,136 @@ def test_validate_allows_a_joined_metal_machine(monkeypatch, tmp_path):
     converge._validate_metal_joinable(_pending_metal_cfg(), kubeconfig)
 
 
+def test_validate_refuses_a_joined_metal_machine_address_change(
+    monkeypatch, tmp_path
+):
+    """Converge pushes a joined machine's config and upgrades to the static
+    cluster address of the cabling plan. An edited `ip` there dials the new
+    address, where the machine -- still running on the one the kube Node
+    records -- never answers. Refused in validate, like a provider's
+    unreconcilable machine edit, while the cluster is still untouched."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+    monkeypatch.setattr(
+        converge.kubectl, "node_addresses", lambda _kc: {"rp001": "192.0.2.61"}
+    )
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.99")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "running_install_disk",
+        lambda *_a, **_k: pytest.fail("an address refusal needs no live probe"),
+    )
+
+    with pytest.raises(ReconcileError, match="refusing to move the cluster address"):
+        converge._validate_metal_machines(
+            _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
+        )
+
+
+def test_validate_refuses_a_joined_metal_machine_disk_change(monkeypatch, tmp_path):
+    """A joined machine's Talos is installed on the disk its running
+    configuration names; a changed `disk` in cluster.yaml would push a config
+    naming the new disk, and the next upgrade would install there. Refused in
+    validate against the disk the live node reports."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+    monkeypatch.setattr(
+        converge.kubectl, "node_addresses", lambda _kc: {"rp001": "192.0.2.61"}
+    )
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(
+        converge.talosctl, "running_install_disk",
+        lambda _t, _e, _n: "/dev/nvme0n1",
+    )
+
+    with pytest.raises(ReconcileError, match="refusing to move the install disk"):
+        converge._validate_metal_machines(
+            _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
+        )
+
+
+def test_validate_allows_a_joined_metal_machine_whose_drift_matches(
+    monkeypatch, tmp_path
+):
+    """A machine still at its configured address and disk passes: a converged
+    cluster must never be refused."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+    monkeypatch.setattr(
+        converge.kubectl, "node_addresses", lambda _kc: {"rp001": "192.0.2.61"}
+    )
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(
+        converge.talosctl, "running_install_disk",
+        lambda _t, _e, _n: "/dev/sda",
+    )
+
+    converge._validate_metal_machines(
+        _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
+    )
+
+
+def test_validate_skips_the_metal_machine_check_without_a_kubeconfig(monkeypatch):
+    """No kubeconfig means the kube phase has not yet told a fresh cluster from
+    a live one whose kubeconfig was lost, so a joined machine cannot be told
+    from a pending one and must not abort the run as drifted."""
+    monkeypatch.setattr(
+        converge.kubectl,
+        "node_exists",
+        lambda *_a: pytest.fail("nothing to decide before the kubeconfig is settled"),
+    )
+
+    converge._validate_metal_machines(
+        _pending_metal_cfg(), ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig")
+    )
+
+
+def test_validate_metal_machine_check_ignores_a_failed_node_query(
+    monkeypatch, tmp_path
+):
+    """A node query the api cannot answer (5xx, connection refused, an expired
+    kubeconfig) leaves the machine's presence unknown: it must not read as
+    joined and be refused as drifted."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: None)
+    monkeypatch.setattr(
+        converge.talosctl,
+        "running_install_disk",
+        lambda *_a, **_k: pytest.fail("an unknown presence must not be probed"),
+    )
+
+    converge._validate_metal_machines(
+        _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
+    )
+
+
+def test_validate_metal_machine_check_stays_silent_when_the_node_does_not_answer(
+    monkeypatch, tmp_path
+):
+    """An unreachable machine cannot be compared and must not refuse the run:
+    it fails on its own later, without this check guessing."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+    monkeypatch.setattr(
+        converge.kubectl, "node_addresses", lambda _kc: {"rp001": "192.0.2.61"}
+    )
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+
+    def down(*_a, **_k):
+        raise subprocess.CalledProcessError(1, "talosctl")
+
+    monkeypatch.setattr(converge.talosctl, "running_install_disk", down)
+
+    converge._validate_metal_machines(
+        _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
+    )
+
+
 def test_join_metal_applies_the_config_to_a_machine_in_maintenance(monkeypatch):
     """The cheap path: the machine is already waiting, so no BMC is touched and
     it joins with the config this converge run generated."""
