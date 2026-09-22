@@ -82,6 +82,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Activate the ArgoCD plugin only with a `kubeconfig` or `context` apply target.
 - Reorganize the documentation around installation, quickstart, usage, commands, configuration, plugins and troubleshooting, and shorten the README.
 - Reinstall metal machines joined with an early 0.8.0 development build once, on the first converge after upgrading taloscluster.
+- Resolve the metal install ISO's schematic in the image phase, before machines are created, booted or joined.
 
 ### Fixed
 

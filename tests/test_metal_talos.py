@@ -857,3 +857,16 @@ def test_metal_base_extensions_is_the_base_set_without_the_vm_only_ones():
     assert "siderolabs/qemu-guest-agent" in BASE_EXTENSIONS
     assert "siderolabs/qemu-guest-agent" not in METAL_BASE_EXTENSIONS
     assert "siderolabs/tailscale" in METAL_BASE_EXTENSIONS
+
+
+def test_metal_iso_url_boots_the_shared_nocloud_asset(make_config, monkeypatch):
+    """The boot ISO carries the metal base set on the shared nocloud asset --
+    the boot media only has to reach maintenance mode, and the platform the
+    machine installs and runs comes from the metal installer, so booting the
+    nocloud ISO while installing the metal installer is deliberate."""
+    cfg = make_config({})
+    monkeypatch.setattr(metal_talos.factory, "schematic_id", lambda _e: "abc123")
+
+    assert metal_talos.iso_url(cfg) == (
+        "https://factory.talos.dev/image/abc123/v1.13.9/nocloud-amd64.iso"
+    )

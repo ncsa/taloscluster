@@ -113,7 +113,7 @@ def fake_redfish(monkeypatch):
 
 @pytest.fixture
 def stub_factory(monkeypatch):
-    monkeypatch.setattr(commands.factory, "schematic_id", lambda _ext: "abc123")
+    monkeypatch.setattr(commands.metal_talos.factory, "schematic_id", lambda _ext: "abc123")
 
 
 @pytest.fixture

@@ -3506,6 +3506,15 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
         converge.metal_talos, "installer",
         lambda _cfg: ("m-sch", "factory.talos.dev/metal-installer/m-sch:v1.13.0"),
     )
+    # the install ISO's schematic id is resolved once, in the image phase --
+    # not lazily inside compute when a machine happens to need joining
+    iso_cfgs: list = []
+
+    def fake_iso_url(cfg_obj):
+        iso_cfgs.append(cfg_obj)
+        return "http://iso"
+
+    monkeypatch.setattr(converge.metal_talos, "iso_url", fake_iso_url)
     built: list[dict] = []
 
     def fake_build(server, _cfg, _secrets, installer, endpoint,
@@ -3547,6 +3556,9 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     )
 
     assert converge.converge(tmp_path) == 0
+
+    # the install ISO was resolved once, in the image phase
+    assert len(iso_cfgs) == 1
 
     # the compute phase joined it with the config this run generated
     assert applied == [("192.0.2.61", "metal-config:rp001")]
@@ -4023,7 +4035,6 @@ def test_join_metal_applies_the_config_to_a_machine_in_maintenance(monkeypatch):
     applied: list[tuple[str, str]] = []
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: True)
-    monkeypatch.setattr(converge.factory, "schematic_id", lambda _e: "sch")
     monkeypatch.setattr(converge, "dry_run", lambda: False)
     monkeypatch.setattr(
         converge.talosctl, "apply_config_insecure",
@@ -4038,7 +4049,7 @@ def test_join_metal_applies_the_config_to_a_machine_in_maintenance(monkeypatch):
     assert (
         converge._join_metal(
             _pending_metal_cfg(), {"rp001": "rp001-config"},
-            ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
+            ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
         )
         == (set(), set())
     )
@@ -4047,16 +4058,21 @@ def test_join_metal_applies_the_config_to_a_machine_in_maintenance(monkeypatch):
 
 
 def test_join_metal_boots_a_redfish_machine_then_applies(monkeypatch):
-    """Not in maintenance but drivable: mount media, one-time boot, power on,
-    wait for the maintenance apid, then apply -- `metal join`'s order."""
+    """Not in maintenance but drivable: mount the ISO the image phase resolved,
+    one-time boot, power on, wait for the maintenance apid, then apply --
+    `metal join`'s order. The join itself never asks the factory for anything:
+    the ISO's schematic id is resolved in the image phase."""
     calls: list[str] = []
     reachable = iter([False, False, True])
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(
         converge.talosctl, "maintenance_reachable", lambda _ip: next(reachable, True)
     )
-    monkeypatch.setattr(converge.factory, "schematic_id", lambda _e: "sch")
-    monkeypatch.setattr(converge.factory, "nocloud_iso_url", lambda _s, _v: "http://iso")
+    monkeypatch.setattr(
+        converge.factory,
+        "schematic_id",
+        lambda _e: pytest.fail("the join must consume the ISO the image phase resolved"),
+    )
     monkeypatch.setattr(converge, "dry_run", lambda: False)
     monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
 
@@ -4084,7 +4100,7 @@ def test_join_metal_boots_a_redfish_machine_then_applies(monkeypatch):
 
     converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
-        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
+        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
     )
 
     assert calls == ["eject", "insert:http://iso", "boot_once_cd", "power_on", "apply"]
@@ -4114,8 +4130,6 @@ def test_join_metal_skips_a_machine_that_never_reaches_maintenance(monkeypatch):
     clean exit and leaves it out of the Ready wait."""
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
-    monkeypatch.setattr(converge.factory, "schematic_id", lambda _e: "sch")
-    monkeypatch.setattr(converge.factory, "nocloud_iso_url", lambda _s, _v: "http://iso")
     monkeypatch.setattr(converge, "dry_run", lambda: False)
     monkeypatch.setattr(converge, "_wait_maintenance", lambda *_a: False)
     monkeypatch.setattr(converge, "_boot_metal", lambda *_a: None)
@@ -4127,7 +4141,7 @@ def test_join_metal_skips_a_machine_that_never_reaches_maintenance(monkeypatch):
 
     assert converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
-        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
+        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
     ) == ({"rp001"}, set())
 
 
@@ -4135,8 +4149,6 @@ def test_join_metal_touches_nothing_in_a_dry_run(monkeypatch):
     """Plan reports what a converge would join and mutates nothing."""
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
-    monkeypatch.setattr(converge.factory, "schematic_id", lambda _e: "sch")
-    monkeypatch.setattr(converge.factory, "nocloud_iso_url", lambda _s, _v: "http://iso")
     monkeypatch.setattr(converge, "dry_run", lambda: True)
     monkeypatch.setattr(
         converge.metal_redfish,
@@ -4151,7 +4163,7 @@ def test_join_metal_touches_nothing_in_a_dry_run(monkeypatch):
 
     converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
-        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
+        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
     )
 
 
@@ -4161,7 +4173,6 @@ def test_join_metal_lists_the_join_in_a_plan_without_configs(monkeypatch, capsys
     would perform, so plan lists each one as an action instead of warning per
     server that there is no config to join with."""
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
-    monkeypatch.setattr(converge.factory, "schematic_id", lambda _e: "sch")
     monkeypatch.setattr(converge, "dry_run", lambda: True)
     monkeypatch.setattr(
         converge.talosctl,
@@ -4176,6 +4187,7 @@ def test_join_metal_lists_the_join_in_a_plan_without_configs(monkeypatch, capsys
 
     assert converge._join_metal(
         _pending_metal_cfg(), {}, ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
+        "http://iso",
     ) == (set(), set())
 
     out = capsys.readouterr()
@@ -4200,7 +4212,6 @@ def test_join_metal_skips_a_joined_machine_whose_kube_node_is_missing(
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
     monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: True)
-    monkeypatch.setattr(converge.factory, "schematic_id", lambda _e: "sch")
     monkeypatch.setattr(converge, "dry_run", lambda: False)
     monkeypatch.setattr(
         converge.metal_redfish,
@@ -4215,7 +4226,7 @@ def test_join_metal_skips_a_joined_machine_whose_kube_node_is_missing(
 
     unjoined, _deferred = converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
-        talosconfig, kubeconfig,
+        talosconfig, kubeconfig, "http://iso",
     )
 
     assert "not reinstalling" in capsys.readouterr().err
@@ -4246,7 +4257,7 @@ def test_join_metal_leaves_a_machine_without_auto_join_alone(monkeypatch):
 
     unjoined, deferred = converge._join_metal(
         _pending_metal_cfg(auto_join=False), {"rp001": "rp001-config"},
-        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
+        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
     )
 
     assert unjoined == set()

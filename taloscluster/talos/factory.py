@@ -13,6 +13,11 @@ import yaml
 FACTORY = "https://factory.talos.dev"
 # openstack disk image is the installed system; this is the raw disk asset
 IMAGE_ASSET = "openstack-amd64.raw.xz"
+# the ISO boot media of every provider that boots one: the ISO only carries
+# the machine to its configuration -- delivered by Proxmox's cidata seed,
+# applied in maintenance mode on bare metal -- and the platform the machine
+# installs and runs comes from the installer reference in that config, so
+# metal machines boot this asset yet install the metal installer
 NOCLOUD_ISO_ASSET = "nocloud-amd64.iso"
 
 

@@ -36,10 +36,9 @@ from ..config import Config, ConfigError, MetalServer, load_config
 from ..converge import _config_kubernetes_version
 from ..errors import ReconcileError
 from ..infrastructure import Endpoint, backend_for
-from ..naming import METAL_BASE_EXTENSIONS
 from ..output import action, info, report, warn
 from ..state import State
-from ..talos import factory, talosctl
+from ..talos import talosctl
 from . import redfish
 from . import talos as metal_talos
 
@@ -97,15 +96,9 @@ def _cluster_ip(server: MetalServer) -> str:
 
 
 def _iso_url(cfg: Config) -> str:
-    """The factory's install ISO for the cluster's Talos version, with the metal
-    base extensions baked in.
-
-    Not the VM providers' boot image: that one carries qemu-guest-agent, whose
-    service never starts on bare metal and leaves the machine blocked in
-    `startAllServices` instead of reaching the maintenance apid.
-    """
-    schematic = factory.schematic_id(METAL_BASE_EXTENSIONS)
-    return factory.nocloud_iso_url(schematic, cfg.talos_version)
+    """The factory install ISO a metal machine boots -- see
+    `metal_talos.iso_url` for the boot-media intent."""
+    return metal_talos.iso_url(cfg)
 
 
 def _installer_image(cfg: Config) -> str:

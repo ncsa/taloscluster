@@ -58,7 +58,6 @@ from .infrastructure import (
 from .k8s import kubectl
 from .metal import redfish as metal_redfish
 from .metal import talos as metal_talos
-from .naming import METAL_BASE_EXTENSIONS
 from .output import action, dry_run, info, log, warn
 from .output import report as print_report
 from .state import State, write_private
@@ -144,6 +143,11 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
 
     # ---- 2. IMAGE --------------------------------------------------------
     log("image")
+    # the metal machines' install ISO: its schematic id used to be POSTed to
+    # the factory lazily inside the compute phase, once a machine needed
+    # joining -- resolve it here, beside the VM boot media, so a factory
+    # outage surfaces before any machine is created, booted or joined
+    metal_iso_url = metal_talos.iso_url(cfg) if metal_servers else ""
     boot_image = backend.ensure_boot_artifact()
 
     # ---- 3. STATE (talos machine secrets) --------------------------------
@@ -376,7 +380,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         # not fatal -- but it keeps the run from reading as a clean no-op at
         # the end; a machine auto-join does not cover is left for `metal join`
         metal_unjoined, metal_deferred = _join_metal(
-            cfg, configs, talosconfig_path, kubeconfig_path
+            cfg, configs, talosconfig_path, kubeconfig_path, metal_iso_url
         )
     else:
         warn("skipping compute: no machine configs (network fip not ready)")
@@ -821,6 +825,7 @@ def _join_metal(
     configs: dict[str, str],
     talosconfig: Path,
     kubeconfig: Path,
+    iso_url: str,
 ) -> tuple[set[str], set[str]]:
     """Bring every configured-but-unjoined metal machine into the cluster.
 
@@ -841,7 +846,9 @@ def _join_metal(
 
     A machine already waiting in maintenance mode is applied straight away. One
     with a BMC converge may drive is booted from the install ISO and waited out
-    first, the same boot/wait/apply order `metal join` uses. One that already
+    first, the same boot/wait/apply order `metal join` uses -- the ISO url is
+    the one the image phase resolved, so the factory is never asked for it
+    here. One that already
     answers apid with this cluster's identity -- a joined machine whose kube
     Node went missing -- is left alone: booting it into the install media would
     wipe a live node, a control plane's etcd with it, so the probe `metal join`
@@ -862,12 +869,6 @@ def _join_metal(
     pending = _metal_unjoined(cfg, kubeconfig)
     if not pending:
         return unjoined, deferred
-    # the metal base set: the VM providers' image carries qemu-guest-agent,
-    # whose service never starts on bare metal and would leave the machine
-    # blocked in startAllServices short of the maintenance apid
-    iso_url = factory.nocloud_iso_url(
-        factory.schematic_id(METAL_BASE_EXTENSIONS), cfg.talos_version
-    )
     for server in sorted(pending, key=lambda s: 0 if s.role == "controlplane" else 1):
         ip = metal_talos.cluster_ip(server)
         if not server.auto_join:

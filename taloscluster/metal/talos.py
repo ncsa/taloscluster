@@ -39,6 +39,7 @@ from ..config import (
     MetalServer,
 )
 from ..infrastructure import Endpoint, stated_mtu
+from ..naming import METAL_BASE_EXTENSIONS
 from ..proxmox.talos import (
     EXT_RETURN_MARK,
     EXT_RETURN_RULE_PRIORITY,
@@ -86,6 +87,21 @@ def installer(cfg: Config) -> tuple[str, str]:
     """
     schematic = factory.schematic_id(cfg._resolve_extensions({}, metal=True))
     return schematic, factory.installer_image(schematic, cfg.talos_version, platform="metal")
+
+
+def iso_url(cfg: Config) -> str:
+    """The factory install ISO a metal machine boots, metal base set baked in.
+
+    No qemu-guest-agent: its service never starts on bare metal and would
+    leave the machine blocked in `startAllServices` short of the maintenance
+    apid. The asset is the shared nocloud ISO, not a metal-platform one --
+    the boot media only has to reach maintenance mode, and the platform the
+    machine installs and runs comes from the installer `installer` resolves --
+    so metal boots the nocloud ISO yet installs the metal installer by design.
+    """
+    return factory.nocloud_iso_url(
+        factory.schematic_id(METAL_BASE_EXTENSIONS), cfg.talos_version
+    )
 
 
 def _machine(server: MetalServer, cfg: Config) -> Machine:
