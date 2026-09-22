@@ -2,7 +2,7 @@
 
 Prepare the provider before following the [Quickstart](../quickstart.md). For each configuration key, see the [Proxmox reference](../configuration/proxmox.md).
 
-The cluster must run **Proxmox 9 or newer**. Converge reads the release from the first node and refuses to touch an older one, because Proxmox 9 changed what an unset VM NIC MTU means: it now inherits the bridge MTU, where 8 and earlier defaulted it to 1500 and needed an `mtu=1` sentinel to inherit instead. The two conventions are each other's opposite, and the sentinel is a literal MTU of 1 on 9, so a cluster written for the wrong release loses its nodes' networking. Stay on taloscluster 0.8.x for a Proxmox 8 cluster.
+The cluster must run **Proxmox 9 or newer**. Converge reads the release from the first node and refuses to touch an older one, because Proxmox 9 changed what an unset VM NIC MTU means: it now inherits the bridge MTU, where 8 and earlier defaulted it to 1500 and needed an `mtu=1` sentinel to inherit instead. The two conventions are each other's opposite, and the sentinel is a literal MTU of 1 on 9, so a cluster written for the wrong release loses its nodes' networking. Stay on taloscluster 0.7.x for a Proxmox 8 cluster.
 
 ## Existing networks
 

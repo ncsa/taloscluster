@@ -404,7 +404,7 @@ class ProxmoxBackend:
                         f"taloscluster requires Proxmox {MIN_PVE_MAJOR} or newer, whose VM NICs "
                         "inherit the bridge MTU from an unset MTU. On 8 and earlier "
                         "that setting means 1500 and needs the opposite convention. "
-                        "Upgrade the Proxmox cluster, or pin taloscluster to 0.8.x."
+                        "Upgrade the Proxmox cluster, or pin taloscluster to 0.7.x."
                     )
                 return
         warn(
