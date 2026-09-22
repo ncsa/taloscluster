@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import types
 from dataclasses import replace
+from typing import Any, get_type_hints
+from unittest import mock
 
 import pytest
 
 from taloscluster.config import ConfigError
 from taloscluster.errors import ReconcileError
 from taloscluster.infrastructure import (
+    InfrastructureBackend,
     InfrastructureInventory,
     InfrastructureMachine,
     NetworkAttachment,
@@ -198,6 +202,39 @@ def test_openstack_status_and_env_read_the_public_config(make_config, capsys, mo
     out = capsys.readouterr().out
     assert "export OS_AUTH_URL=https://example.com:5000/v3/" in out
     assert "export OS_APPLICATION_CREDENTIAL_ID=app-cred" in out
+
+
+def test_provider_status_protocol_allows_non_string_values():
+    """Proxmox's status carries a list (`online_nodes`); the protocol return
+    type must not claim `dict[str, str]` again."""
+    hints = get_type_hints(InfrastructureBackend.provider_status)
+    assert hints["return"] == dict[str, Any]
+
+
+def test_openstack_restart_machine_soft_reboots_through_nova(make_config):
+    """The protocol's restart contract is real on OpenStack too: a Nova soft
+    reboot waited out through the provider, not a refusal stub."""
+    from taloscluster.openstack.backend import OpenStackBackend
+    from taloscluster.openstack.session import Inventory
+
+    backend = object.__new__(OpenStackBackend)
+    backend.cfg = make_config()
+    calls = []
+    backend.conn = types.SimpleNamespace(
+        compute=types.SimpleNamespace(
+            reboot_server=lambda sid, reboot_type: calls.append(("reboot", sid, reboot_type)),
+            wait_for_server=lambda _s, status, wait: calls.append(("wait", status, wait)),
+        )
+    )
+    inv = Inventory(mock.Mock(), "testcluster")
+    inv._by_name["servers"] = {
+        "testcluster-controlplane-01": types.SimpleNamespace(id="server-1")
+    }
+    inventory = InfrastructureInventory(provider_data=inv)
+
+    backend.restart_machine("testcluster-controlplane-01", inventory)
+
+    assert calls == [("reboot", "server-1", "SOFT"), ("wait", "ACTIVE", 300)]
 
 
 def test_proxmox_backend_contribution_rejects_anchor_collisions(make_config):

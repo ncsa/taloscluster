@@ -40,16 +40,16 @@ class Context:
     @classmethod
     def from_converge(cls, root: Path, cfg: Config, kubeapi: dict[str, str],
                       ingress: dict[str, Any], openstack: dict[str, str],
-                      infrastructure: dict[str, str] | None = None) -> Context:
+                      infrastructure: dict[str, Any] | None = None) -> Context:
         """In-converge constructor: the status payload is already known, so no
-        plugin can trigger a second round-trip to OpenStack."""
+        plugin can trigger a second round-trip to the provider."""
         return cls(
             root=root,
             cfg=cfg,
             status={
                 "cluster": cfg.name,
                 "infrastructure": infrastructure or {
-                    "provider": "openstack",
+                    "provider": cfg.provider_name,
                     **openstack,
                 },
                 "openstack": openstack,
@@ -79,7 +79,7 @@ class Context:
         return self.status
 
     @property
-    def infrastructure(self) -> dict[str, str]:
+    def infrastructure(self) -> dict[str, Any]:
         """Provider-neutral infrastructure identity and provider details."""
         return dict(self._report().get("infrastructure") or {})
 

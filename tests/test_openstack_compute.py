@@ -1,9 +1,10 @@
-"""Tests for OpenStack compute unsupported-change detection and subnet DNS.
+"""Tests for OpenStack compute unsupported-change detection, restarts and subnet DNS.
 
 Servers are create-only on OpenStack, so a flavor, disk or availability-zone
-edit on an existing server is refused before any converge phase mutates, and
-an existing subnet's DNS nameservers are reconciled in place instead of being
-ignored. These tests use fake Connection/Inventory objects; no cloud access.
+edit on an existing server is refused before any converge phase mutates, an
+existing subnet's DNS nameservers are reconciled in place instead of being
+ignored, and a restart goes through Nova as a soft reboot. These tests use
+fake Connection/Inventory objects; no cloud access.
 """
 
 from __future__ import annotations
@@ -216,6 +217,53 @@ def test_validate_tolerates_an_unreadable_boot_volume(make_config):
     server.attached_volumes = None
 
     compute.validate(FakeConn(), cfg, cfg.machines, _inventory_with(server))  # no raise
+
+
+# ---- restart -------------------------------------------------------------------
+
+class FakeRebootConn:
+    def __init__(self):
+        self.calls = []
+        self.compute = types.SimpleNamespace(
+            reboot_server=self._reboot, wait_for_server=self._wait
+        )
+
+    def _reboot(self, server_id, reboot_type):
+        self.calls.append(("reboot", server_id, reboot_type))
+
+    def _wait(self, server, status, wait):
+        self.calls.append(("wait", status, wait))
+
+
+def _owned_server():
+    server = _server()
+    server.id = "server-1"
+    return server
+
+
+def test_restart_node_soft_reboots_the_server_and_waits_for_it(make_config):
+    conn = FakeRebootConn()
+
+    compute.restart_node(conn, "testcluster-controlplane-01", _inventory_with(_owned_server()))
+
+    assert conn.calls == [("reboot", "server-1", "SOFT"), ("wait", "ACTIVE", 300)]
+
+
+def test_restart_node_refuses_an_unknown_server(make_config):
+    conn = FakeRebootConn()
+
+    with pytest.raises(ReconcileError, match="cannot restart unknown OpenStack server"):
+        compute.restart_node(conn, "foreign", _inventory_with(_owned_server()))
+    assert conn.calls == []
+
+
+def test_restart_node_is_read_only_under_plan(make_config):
+    conn = FakeRebootConn()
+    set_dry_run(True)
+
+    compute.restart_node(conn, "testcluster-controlplane-01", _inventory_with(_owned_server()))
+
+    assert conn.calls == []
 
 
 # ---- subnet DNS reconciliation -------------------------------------------------

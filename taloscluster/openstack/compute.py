@@ -226,6 +226,23 @@ def _create_server(conn, cfg: Config, m: Machine, inv, boot_image: str, configs)
     inv.put("servers", server)
 
 
+def restart_node(conn: Connection, host: str, inv: Inventory) -> None:
+    """Soft-reboot one server and wait until Nova reports it active again.
+
+    A soft reboot is the ACPI shutdown Talos handles gracefully, like the
+    Proxmox reboot path. There is no provider-side sizing to pick up (servers
+    are create-only), but the reboot goes through Nova so the node really
+    cycles rather than being restarted from inside the guest.
+    """
+    server = inv.get("servers", host)
+    if server is None:
+        raise ReconcileError(f"cannot restart unknown OpenStack server {host!r}")
+    action(f"restart server {host}")
+    if not dry_run():
+        conn.compute.reboot_server(server.id, reboot_type="SOFT")
+        conn.compute.wait_for_server(server, status="ACTIVE", wait=300)
+
+
 def delete_node(conn: Connection, host: str, inv: Inventory) -> None:
     """Delete a scaled-down node's server (boot volume follows) and its port."""
     server = inv.get("servers", host)

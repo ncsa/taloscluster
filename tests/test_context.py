@@ -7,6 +7,8 @@ round-trip to the cloud to learn them.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from taloscluster import converge as _converge
@@ -47,6 +49,35 @@ def test_from_converge_never_calls_status_report(spy, tmp_path, make_config):
     assert ctx.openstack["project"] == "proj"
     assert ctx.kubernetes["endpoint"] == "https://1.2.3.4:6443"
     assert spy == []
+
+
+_PROXMOX_OVERRIDES = {
+    "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+    "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
+    "proxmox": {
+        "url": "https://pve.example:8006",
+        "storage": "vms",
+        "iso_storage": "isos",
+        "token_id": "user@pve!provider",
+        "token_secret": "secret",
+        "network": {"cluster": {"bridge": "vmbr0"}},
+    },
+}
+
+
+def test_from_converge_defaults_the_provider_from_the_config(spy, tmp_path, make_config):
+    """Without a payload handed over, the provider comes from cluster.yaml --
+    it used to be hardcoded to openstack, wrong for Proxmox and metal-only."""
+    ctx = Context.from_converge(tmp_path, make_config(), kubeapi={}, ingress={}, openstack={})
+    assert ctx.infrastructure["provider"] == "openstack"
+
+    cfg = make_config(_PROXMOX_OVERRIDES, remove=("openstack",))
+    ctx = Context.from_converge(tmp_path, cfg, kubeapi={}, ingress={}, openstack={})
+    assert ctx.infrastructure["provider"] == "proxmox"
+
+    metal_only = replace(cfg, provider=None)
+    ctx = Context.from_converge(tmp_path, metal_only, kubeapi={}, ingress={}, openstack={})
+    assert ctx.infrastructure["provider"] == ""
 
 
 def test_standalone_fetches_once_and_caches(spy, tmp_path, make_config):

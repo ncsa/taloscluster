@@ -191,8 +191,9 @@ class OpenStackBackend:
     def delete_machine(self, name: str, inventory: InfrastructureInventory) -> None:
         compute.delete_node(self.conn, name, self._raw(inventory))
 
+    @_reconcile_errors
     def restart_machine(self, name: str, inventory: InfrastructureInventory) -> None:
-        raise ReconcileError(f"restarting {name} is not supported on OpenStack")
+        compute.restart_node(self.conn, name, self._raw(inventory))
 
     def finalize_machines(self, inventory: InfrastructureInventory) -> None:
         return None
