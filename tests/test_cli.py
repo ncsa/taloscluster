@@ -279,6 +279,25 @@ def test_plugin_destroy_confirmation_wrong_name_aborts(make_config, monkeypatch,
     assert exc.value.code == "aborted"
 
 
+def test_plugin_destroy_confirmation_eof_aborts_cleanly(
+    make_config, monkeypatch, tmp_path, capsys
+):
+    """Without a TTY the confirmation prompt reads EOF instead of an answer;
+    the CLI must exit cleanly rather than leak an EOFError traceback."""
+    make_config()  # a valid cluster.yaml so the plugin is configured
+    plugin = _stub_plugin("demo", configured=lambda ctx: True,
+                          destroy=lambda ctx, assume_yes=False: None)
+    monkeypatch.setattr(cli._plugins, "discover", lambda: [plugin])
+    monkeypatch.setattr(cli._plugins, "validate", lambda ctx, only=None: None)
+
+    def eof(_prompt):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", eof)
+    assert cli.main(["plugin", "demo", "destroy", "-C", str(tmp_path)]) == 130
+    assert "interrupted" in capsys.readouterr().err
+
+
 def test_plugin_destroy_confirmation_matching_name_runs(make_config, monkeypatch, tmp_path):
     make_config()
     plugin = _stub_plugin("demo", configured=lambda ctx: True,
@@ -453,5 +472,13 @@ def test_main_maps_timeout_expired_to_exit_1(monkeypatch, tmp_path, capsys):
 
 def test_main_maps_keyboard_interrupt_to_130(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli._converge, "converge", _bomb(KeyboardInterrupt()))
+    assert cli.main(["converge", "-C", str(tmp_path)]) == 130
+    assert "interrupted" in capsys.readouterr().err
+
+
+def test_main_maps_eof_error_to_130(monkeypatch, tmp_path, capsys):
+    """A confirmation prompt reading a closed stdin (CI without --yes) raises
+    EOFError, which must abort cleanly like a Ctrl-C, never traceback."""
+    monkeypatch.setattr(cli._converge, "converge", _bomb(EOFError()))
     assert cli.main(["converge", "-C", str(tmp_path)]) == 130
     assert "interrupted" in capsys.readouterr().err

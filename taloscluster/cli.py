@@ -494,7 +494,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {cmd} timed out (the api accepted TCP but never answered); "
               "investigate the cluster and retry.", file=sys.stderr)
         return 1
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         print("\ninterrupted", file=sys.stderr)
         return 130
     return int(rc or 0)
