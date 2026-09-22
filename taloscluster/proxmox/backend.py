@@ -34,7 +34,6 @@ from ..infrastructure import (
     NetworkAttachment,
     NetworkResult,
     TalosContribution,
-    stated_mtu,
 )
 from ..output import action, dry_run, info, warn
 from ..talos import factory
@@ -1468,11 +1467,6 @@ class ProxmoxBackend:
                 )
                 if ext.get("vlan") is not None:
                     net1 += f",tag={int(ext['vlan'])}"
-                # the external link states its own L2's MTU, so its NIC inherits
-                # the external bridge's MTU for the same reason net0 does
-                ext_l2 = self.cfg.network.external
-                if ext_l2 is not None and stated_mtu(ext_l2.mtu) is not None:
-                    net1 += ",mtu=1"
                 data["net1"] = net1
             self.client.mutate("POST", f"nodes/{node}/qemu", data=data)
             created = True

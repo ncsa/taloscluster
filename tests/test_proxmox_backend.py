@@ -965,13 +965,14 @@ def _jumbo_external_cfg(make_config):
     )
 
 
-def test_vm_create_states_mtu1_on_a_jumbo_external_l2(make_config, monkeypatch):
-    """The external NIC inherits its own bridge's MTU, per its own L2."""
+def test_vm_create_omits_mtu_on_a_jumbo_external_l2(make_config, monkeypatch):
+    """The external NIC inherits its own bridge's MTU, per its own L2 -- so
+    no `mtu=` is written, on either NIC, whatever the L2s carry."""
     payload = _create_first_vm(
         _jumbo_external_cfg(make_config), _external_data(), monkeypatch
     )
 
-    assert payload["net1"].endswith(",mtu=1")
+    assert "mtu" not in payload["net1"]
     assert "mtu" not in payload["net0"]
 
 
