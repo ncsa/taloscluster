@@ -314,7 +314,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         # the bare-metal half of the same phase: a configured machine that is
         # not in the cluster is brought in here, after the existing nodes were
         # upgraded, so it never joins newer than the rest
-        _join_metal(cfg, configs, kubeconfig_path)
+        _join_metal(cfg, configs, talosconfig_path, kubeconfig_path)
     else:
         warn("skipping compute: no machine configs (network fip not ready)")
 
@@ -496,12 +496,17 @@ def _metal_unjoined(cfg: Config, kubeconfig: Path) -> list[MetalServer]:
     """Every configured metal server with no Kubernetes Node yet.
 
     These are the machines the config says belong to the cluster and that are
-    not in it -- the bare-metal equivalent of a VM pool whose count grew.
+    not in it -- the bare-metal equivalent of a VM pool whose count grew. A
+    node query the api cannot answer is not an answer: a machine whose presence
+    is unknown stays out of the list, so a flaky api never reads as a machine
+    to install.
     """
     if not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
         # no cluster yet: every configured machine still has to be joined
         return _metal_servers(cfg)
-    return [s for s in _metal_servers(cfg) if not kubectl.node_exists(kubeconfig, s.name)]
+    return [
+        s for s in _metal_servers(cfg) if kubectl.node_exists(kubeconfig, s.name) is False
+    ]
 
 
 def _validate_metal_joinable(cfg: Config, kubeconfig: Path) -> None:
@@ -538,6 +543,7 @@ def _validate_metal_joinable(cfg: Config, kubeconfig: Path) -> None:
 def _join_metal(
     cfg: Config,
     configs: dict[str, str],
+    talosconfig: Path,
     kubeconfig: Path,
 ) -> None:
     """Bring every configured-but-unjoined metal machine into the cluster.
@@ -550,10 +556,14 @@ def _join_metal(
 
     A machine already waiting in maintenance mode is applied straight away. One
     with a BMC converge may drive is booted from the install ISO and waited out
-    first, the same boot/wait/apply order `metal join` uses. `apply-config
-    --insecure` only ever lands on a machine in maintenance mode -- a node
-    running a configuration rejects that API -- so a machine mid-join is left
-    alone for the next converge rather than reinstalled under itself.
+    first, the same boot/wait/apply order `metal join` uses. One that already
+    answers apid with this cluster's identity -- a joined machine whose kube
+    Node went missing -- is left alone: booting it into the install media would
+    wipe a live node, a control plane's etcd with it, so the probe `metal join`
+    refuses on skips it instead. `apply-config --insecure` only ever lands on a
+    machine in maintenance mode -- a node running a configuration rejects that
+    API -- so a machine mid-join is left alone for the next converge rather
+    than reinstalled under itself.
     """
     pending = _metal_unjoined(cfg, kubeconfig)
     if not pending:
@@ -571,6 +581,13 @@ def _join_metal(
             # no machine config this run (no secrets, or no advertised endpoint
             # yet) -- the same condition that skips the VM half of compute
             warn(f"metal {server.name}: no machine config this run; not joining")
+            continue
+        if talosconfig.is_file() and metal_talos.answers_as_cluster(talosconfig, server):
+            warn(
+                f"metal {server.name} ({ip}) already answers apid with this "
+                "cluster's identity but has no Kubernetes Node; not reinstalling "
+                "it -- reset the machine first if a re-join is intended"
+            )
             continue
         if talosctl.maintenance_reachable(ip):
             info(f"metal {server.name} ({ip}) is in maintenance mode; joining")

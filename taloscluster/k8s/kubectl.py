@@ -87,9 +87,19 @@ def node_names(kubeconfig: Path) -> list[str]:
     return [item["metadata"]["name"] for item in data.get("items", [])]
 
 
-def node_exists(kubeconfig: Path, name: str) -> bool:
-    proc = _run(_kc(kubeconfig) + ["get", "node", name], capture=True, check=False)
-    return proc.returncode == 0
+def node_exists(kubeconfig: Path, name: str) -> bool | None:
+    """True if the Node exists, False if the api's node list answers it is
+    absent, None when the query failed.
+
+    A failed query (api 5xx, connection refused, an expired kubeconfig) says
+    nothing about the node and must never read as "absent": a caller deciding
+    a destructive action from absence would act on a node that may be live.
+    """
+    proc = _run(_kc(kubeconfig) + ["get", "nodes", "-o", "json"], capture=True, check=False)
+    if proc.returncode != 0:
+        return None
+    data = json.loads(proc.stdout or "{}")
+    return name in [item["metadata"]["name"] for item in data.get("items", [])]
 
 
 def node_ready(kubeconfig: Path, name: str) -> bool | None:

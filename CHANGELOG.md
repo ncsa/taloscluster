@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Document that DHCP links keep a single default route with the 1500 MTU clamp over the lease's route.
-- Join a configured bare-metal machine that is not in the cluster during converge's compute phase, booting it through its BMC when redfish is on, and refuse one converge can neither reach in maintenance mode nor power on during validate.
+- Join a configured bare-metal machine missing from the cluster during converge, booting it through its BMC and never reinstalling one that already answers apid with the cluster's identity.
 - Warn when a configured host network overlaps the Kubernetes pod (`10.244.0.0/16`) or service (`10.96.0.0/12`) network, which is what Talos's `address-overlap` diagnostic reports on a node.
 - Add `metal.<group>.boot_timeout` (seconds, default 600) for how long a machine may take to reach maintenance mode, overridable per server, for hardware that is slow from cold.
 

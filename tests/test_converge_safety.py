@@ -2759,7 +2759,8 @@ def test_join_metal_applies_the_config_to_a_machine_in_maintenance(monkeypatch):
     )
 
     converge._join_metal(
-        _pending_metal_cfg(), {"rp001": "rp001-config"}, Path("/nonexistent/kubeconfig")
+        _pending_metal_cfg(), {"rp001": "rp001-config"},
+        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
     )
 
     assert applied == [("192.0.2.61", "rp001-config")]
@@ -2803,7 +2804,7 @@ def test_join_metal_boots_a_redfish_machine_then_applies(monkeypatch):
 
     converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
-        Path("/nonexistent/kubeconfig"),
+        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
     )
 
     assert calls == ["eject", "insert:http://iso", "boot_once_cd", "power_on", "apply"]
@@ -2844,7 +2845,7 @@ def test_join_metal_skips_a_machine_that_never_reaches_maintenance(monkeypatch):
 
     converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
-        Path("/nonexistent/kubeconfig"),
+        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
     )
 
 
@@ -2868,5 +2869,54 @@ def test_join_metal_touches_nothing_in_a_dry_run(monkeypatch):
 
     converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
-        Path("/nonexistent/kubeconfig"),
+        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
     )
+
+
+def test_join_metal_skips_a_joined_machine_whose_kube_node_is_missing(
+    monkeypatch, tmp_path, capsys
+):
+    """A redfish machine that answers apid with the cluster's identity but has
+    no kube Node -- an operator deleted the Node object while repairing the
+    machine, say -- looks unjoined to the compute phase. Booting it would
+    force-restart a live node into the install media and wipe it (a control
+    plane's etcd with it), so the probe `metal join` refuses on fires before
+    any BMC action and the machine is skipped instead."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("context: testcluster\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: True)
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _e: "sch")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(
+        converge.metal_redfish,
+        "Redfish",
+        lambda _bmc: pytest.fail("a joined machine must not be driven through its BMC"),
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config_insecure",
+        lambda *_a: pytest.fail("a joined machine must not have a config applied"),
+    )
+
+    converge._join_metal(
+        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        talosconfig, kubeconfig,
+    )
+
+    assert "not reinstalling" in capsys.readouterr().err
+
+
+def test_metal_unjoined_ignores_a_failed_node_query(monkeypatch, tmp_path):
+    """A node query the api cannot answer (5xx, connection refused, an expired
+    kubeconfig) is not an answer: the machine must not read as absent and be
+    installed. Only an api answer that lacks the Node makes it pending."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: None)
+
+    assert converge._metal_unjoined(_pending_metal_cfg(), kubeconfig) == []

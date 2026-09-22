@@ -4,6 +4,7 @@ can tell a timed-out (hung) request apart from an abrupt negative answer."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -110,6 +111,34 @@ def test_node_ready_still_returns_none_on_a_negative_answer(monkeypatch):
     proc.returncode = 1
     monkeypatch.setattr(kubectl, "_run", lambda *a, **k: proc)
     assert kubectl.node_ready(Path("kubeconfig"), "cp-01") is None
+
+
+def test_node_exists_answers_from_the_node_list(monkeypatch):
+    """A successful query is authoritative both ways: the node is in the api's
+    node list or it is not."""
+    proc = _Proc()
+    proc.stdout = json.dumps({"items": [{"metadata": {"name": "cp-01"}}]})
+    monkeypatch.setattr(kubectl, "_run", lambda *a, **k: proc)
+    assert kubectl.node_exists(Path("kubeconfig"), "cp-01") is True
+    assert kubectl.node_exists(Path("kubeconfig"), "rp-01") is False
+
+
+def test_node_exists_still_returns_none_on_a_negative_answer(monkeypatch):
+    """A failed query (api 5xx, connection refused, an expired kubeconfig) says
+    nothing about the node: it must never read as absent."""
+    proc = _Proc()
+    proc.returncode = 1
+    monkeypatch.setattr(kubectl, "_run", lambda *a, **k: proc)
+    assert kubectl.node_exists(Path("kubeconfig"), "cp-01") is None
+
+
+def test_node_exists_does_not_collapse_a_timeout_into_absent(monkeypatch):
+    def hung(*_a, **_k):
+        raise subprocess.TimeoutExpired("kubectl", kubectl.RUN_TIMEOUT)
+
+    monkeypatch.setattr(kubectl, "_run", hung)
+    with pytest.raises(subprocess.TimeoutExpired):
+        kubectl.node_exists(Path("kubeconfig"), "cp-01")
 
 
 def test_server_version_does_not_collapse_a_timeout_into_empty(monkeypatch):

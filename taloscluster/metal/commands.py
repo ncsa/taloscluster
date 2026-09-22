@@ -332,15 +332,12 @@ def _refuse_joined(root: Path, server: MetalServer) -> None:
     talosconfig = root / "talosconfig"
     if not talosconfig.is_file():
         return
-    ip = _cluster_ip(server)
-    if not talosctl.maintenance_reachable(ip) and talosctl.reachable(
-        talosconfig, endpoint=ip, node=ip
-    ):
+    if metal_talos.answers_as_cluster(talosconfig, server):
         raise ReconcileError(
             f"metal server {server.name} already answers apid with this cluster's "
-            f"identity on {ip}; reinstalling it from the install media would wipe "
-            "the machine -- run `taloscluster converge` for a config change, or "
-            "reset the machine first if a re-join is really intended"
+            f"identity on {_cluster_ip(server)}; reinstalling it from the install "
+            "media would wipe the machine -- run `taloscluster converge` for a config "
+            "change, or reset the machine first if a re-join is really intended"
         )
 
 
