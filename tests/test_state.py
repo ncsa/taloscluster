@@ -97,3 +97,20 @@ def test_reset_is_noop_when_files_dont_exist(tmp_path):
     # nothing exists -> reset must not raise
     state.reset()
     assert not (tmp_path / SECRETS_FILE).exists()
+
+
+def test_reset_keeps_the_talosconfig_when_asked(tmp_path):
+    """A destroy that leaves bare-metal machines behind keeps the talosconfig:
+    the operator resets each machine with it after the wipe, so it survives
+    while the secrets and kubeconfig still go."""
+    secrets = tmp_path / SECRETS_FILE
+    talosconfig = tmp_path / "talosconfig"
+    kubeconfig = tmp_path / "kubeconfig"
+    for path in (secrets, talosconfig, kubeconfig):
+        path.write_text("dummy")
+
+    State(tmp_path).reset(keep_talosconfig=True)
+
+    assert not secrets.exists()
+    assert not kubeconfig.exists()
+    assert talosconfig.exists()

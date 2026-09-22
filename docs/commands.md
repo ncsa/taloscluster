@@ -119,7 +119,7 @@ taloscluster destroy [--dry-run] [--yes]
 taloscluster destroy -C mycluster --dry-run
 ```
 
-Run plugin cleanup first, in reverse order, while the cluster is reachable, then delete the cluster’s managed infrastructure resources and local `talossecrets.yaml`, `talosconfig`, and `kubeconfig`. The shared boot image is retained. Destruction requires confirmation unless `--yes` is supplied. Keep any required backups before destroying a cluster. The bare-metal machines of a [`metal`](configuration/metal.md) section are not deleted — no provider manages them — so destroy names each one and the `talosctl reset` its hardware needs before it can join another cluster.
+Run plugin cleanup first, in reverse order, while the cluster is reachable, then delete the cluster’s managed infrastructure resources and local `talossecrets.yaml` and `kubeconfig`. The shared boot image is retained. Destruction requires confirmation unless `--yes` is supplied. Keep any required backups before destroying a cluster. The bare-metal machines of a [`metal`](configuration/metal.md) section are not deleted — no provider manages them — so destroy names each one and the `talosctl reset` its hardware needs before it can join another cluster; a cluster with such a section keeps its `talosconfig` so that reset can run after the destroy, `--yes` included.
 
 ## `plugin`
 

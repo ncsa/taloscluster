@@ -107,7 +107,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Fix Rancher API error messages that were joined character by character.
 - Pass the Proxmox `ingress_pool` to ArgoCD so MetalLB address pools render for both providers.
 - Give the ArgoCD AppProject `user` role the read access its name implies.
-- Reconfigure and upgrade joined metal nodes during converge, and warn that destroy leaves them running the destroyed cluster.
+- Reconfigure and upgrade joined metal nodes during converge, and warn that destroy leaves them running the destroyed cluster, keeping the talosconfig their reset needs.
 - Advertise etcd on a metal control plane's own L2 instead of the cluster network.
 - Give metal nodes the cluster-wide `tags:` and the provider default node labels the VM nodes get.
 - Refuse a `talos.version` older than the running release and a `kubernetes.version` the pinned Talos does not support.

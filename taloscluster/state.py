@@ -69,7 +69,7 @@ class State:
             )
         return self.secrets_path
 
-    def reset(self) -> None:
+    def reset(self, keep_talosconfig: bool = False) -> None:
         """Wipe local state after a destroy: delete the talos machine secrets
         and the client configs derived from them.
         A destroy destroys the cluster, so the next
@@ -80,9 +80,15 @@ class State:
         talosconfig/kubeconfig go too: they carry the destroyed cluster's CA and
         credentials, so keeping them only leaves clients pointing at a cluster
         that no longer exists (and stale contexts accumulating in kubeconfig).
-        Converge rewrites both.
+        Converge rewrites both. A destroy that leaves bare-metal machines behind
+        keeps the talosconfig instead (keep_talosconfig=True): no provider
+        removes those machines, and the operator resets each one with
+        `talosctl --talosconfig talosconfig -n <node> reset` once this has run.
         """
-        for path in (self.secrets_path, *(self.root / f for f in DERIVED_FILES)):
+        derived = list(DERIVED_FILES)
+        if keep_talosconfig:
+            derived.remove("talosconfig")
+        for path in (self.secrets_path, *(self.root / f for f in derived)):
             if not path.exists():
                 continue
             action(f"remove {path.name}")

@@ -1486,7 +1486,46 @@ def test_destroy_warns_that_joined_metal_machines_keep_running(
     err = capsys.readouterr().err
     assert "rp001" in err and "rp002" in err
     assert "talosctl --talosconfig talosconfig -n <node> reset" in err
+    assert "talosconfig is kept" in err
     assert backend.mutations == ["destroy"]
+
+
+def test_destroy_with_metal_machines_keeps_the_talosconfig_for_their_reset(
+    monkeypatch, tmp_path
+):
+    """`destroy --yes` wipes the state in the same run that names the metal
+    reset, so the talosconfig that reset needs must survive the wipe: when
+    bare-metal machines remain, only talossecrets.yaml and kubeconfig go."""
+    cfg = SimpleNamespace(name="testcluster", metal_servers={"rp001": "worker"})
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "backend_for", lambda *_a: FakeBackend())
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_kw: 0)
+    for name in ("talossecrets.yaml", "talosconfig", "kubeconfig"):
+        (tmp_path / name).write_text("dummy")
+
+    assert converge.destroy(tmp_path, assume_yes=True) == 0
+
+    assert (tmp_path / "talosconfig").exists()
+    assert not (tmp_path / "talossecrets.yaml").exists()
+    assert not (tmp_path / "kubeconfig").exists()
+
+
+def test_destroy_without_metal_machines_still_removes_the_talosconfig(
+    monkeypatch, tmp_path
+):
+    """With no bare-metal machines left behind there is no reset to run, so
+    the talosconfig still goes with the rest of the wiped state."""
+    cfg = SimpleNamespace(name="testcluster", metal_servers={})
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "backend_for", lambda *_a: FakeBackend())
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_kw: 0)
+    for name in ("talossecrets.yaml", "talosconfig", "kubeconfig"):
+        (tmp_path / name).write_text("dummy")
+
+    assert converge.destroy(tmp_path, assume_yes=True) == 0
+
+    for name in ("talossecrets.yaml", "talosconfig", "kubeconfig"):
+        assert not (tmp_path / name).exists()
 
 
 def test_destroy_without_metal_machines_makes_no_metal_claim(

@@ -43,7 +43,7 @@ rm -f mycluster/talosconfig mycluster/kubeconfig
 taloscluster converge -C mycluster
 ```
 
-`converge` requires `talossecrets.yaml` to regenerate the `talosconfig` context, so this only works when the Talos identity is present. It also recovers a `kubeconfig` that went missing (for example a lost management machine) by re-fetching it from the cluster through the restored identity, so the cluster is reconciled as existing instead of being misread as a fresh bootstrap. After a `destroy`, converge wipes both derived files along with `talossecrets.yaml` so clients do not point stale credentials at a cluster that no longer exists.
+`converge` requires `talossecrets.yaml` to regenerate the `talosconfig` context, so this only works when the Talos identity is present. It also recovers a `kubeconfig` that went missing (for example a lost management machine) by re-fetching it from the cluster through the restored identity, so the cluster is reconciled as existing instead of being misread as a fresh bootstrap. After a `destroy`, converge wipes both derived files along with `talossecrets.yaml` so clients do not point stale credentials at a cluster that no longer exists — unless the cluster has a `metal` section, where destroy keeps the `talosconfig` for the machine resets it names.
 
 ## etcd snapshot
 

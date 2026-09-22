@@ -2752,25 +2752,33 @@ def destroy(root: Path, assume_yes: bool = False) -> int:
 
     log(f"destroy {cfg.name}: {backend.destroy_summary(inv)}")
     provider_label = "OpenStack" if backend.name == "openstack" else backend.name
+    metal = getattr(cfg, "metal_servers", None)
+    derived = (
+        "kubeconfig derived from it, and keeps the talosconfig so the bare-metal "
+        "machines can still be reset"
+        if metal
+        else "talosconfig/kubeconfig derived from it"
+    )
     warn(
         f"this deletes all taloscluster-managed {provider_label} resources for this cluster "
         "(the shared boot image is NOT deleted), and removes talossecrets.yaml "
-        "-- the cluster identity -- along with the talosconfig/kubeconfig derived "
-        "from it. The next converge will be a brand-new cluster."
+        f"-- the cluster identity -- along with the {derived}. "
+        "The next converge will be a brand-new cluster."
     )
-    if getattr(cfg, "metal_servers", None):
+    if metal:
         # no provider manages the metal machines, so destroy cannot remove or
         # reset them; once the identity is gone they can never join a new
         # cluster and keep running the destroyed one until wiped
         warn(
             "the bare-metal machines "
-            + ", ".join(sorted(cfg.metal_servers))
+            + ", ".join(sorted(metal))
             + " are NOT deleted: no provider manages them, so they keep running "
             "this destroyed cluster under the identity removed here. Reset each "
             "one with `talosctl --talosconfig talosconfig -n <node> reset` from "
-            "the cluster directory while its talosconfig still exists -- or boot "
-            "the machine into maintenance mode and reset it there -- before its "
-            "hardware joins another cluster."
+            "the cluster directory -- this still works after the destroy has "
+            "finished (even with --yes), because the talosconfig is kept -- or "
+            "boot the machine into maintenance mode and reset it there, before "
+            "its hardware joins another cluster."
         )
     if not assume_yes and not dry_run():
         resp = input("type the cluster name to confirm: ").strip()
@@ -2784,9 +2792,10 @@ def destroy(root: Path, assume_yes: bool = False) -> int:
 
     backend.destroy_resources(inv)
 
-    # wipe local state (talossecrets.yaml plus the talosconfig/kubeconfig derived
-    # from it; legacy bootstrapped marker is also cleaned up) so a later converge
-    # starts a fresh cluster with a new identity. reset() honours --dry-run itself
-    # so a plan still lists the files it would remove.
-    State(root).reset()
+    # wipe local state (talossecrets.yaml plus the derived kubeconfig, and the
+    # talosconfig too unless bare-metal machines remain, which still need it to
+    # run the reset named above; legacy bootstrapped marker is also cleaned up)
+    # so a later converge starts a fresh cluster with a new identity. reset()
+    # honours --dry-run itself so a plan still lists the files it would remove.
+    State(root).reset(keep_talosconfig=bool(metal))
     return failed
