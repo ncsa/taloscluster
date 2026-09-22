@@ -1167,6 +1167,42 @@ def test_metal_bmc_scheme_is_checked_at_load(make_config, scheme):
         }}})
 
 
+@pytest.mark.parametrize(
+    ("metal", "message"),
+    [
+        (
+            {"worker": {"role": "worker", "disk": "/dev/sda", "bmc": {"ip": "192.0.2.51/24"}}},
+            r"metal\.worker\.bmc\.ip is invalid: '192\.0\.2\.51/24'",
+        ),
+        (
+            {
+                "phoenix": {
+                    "role": "worker",
+                    "redfish": True,
+                    "disk": "/dev/sda",
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
+                    "servers": {
+                        "rp001": {
+                            "bmc": {
+                                "ip": "192.0.2.51/24",
+                                "username": "root",
+                                "password": "secret",
+                            }
+                        }
+                    },
+                }
+            },
+            r"metal\.phoenix\.servers\.rp001\.bmc\.ip is invalid: '192\.0\.2\.51/24'",
+        ),
+    ],
+)
+def test_metal_bmc_ip_is_a_bare_address(make_config, metal, message):
+    """`bmc.ip` feeds the Redfish URL directly, so a `/prefix` like a link
+    address may carry is refused at load, not at first `metal boot`."""
+    with pytest.raises(ConfigError, match=message):
+        make_config({"metal": metal})
+
+
 @pytest.mark.parametrize("source", ["secrets.yaml", "an include", "cluster.yaml"])
 def test_metal_redfish_credentials_load_from_whichever_file_supplies_them(
     make_config, tmp_path, source

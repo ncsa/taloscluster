@@ -126,7 +126,7 @@ A machine that does not answer within its budget is reported and skipped; the re
 
 Optional · mapping
 
-The Redfish settings every machine in the group starts from: `ip` (the BMC's IPv4 address), `username`, `password` and `scheme` (the Redfish transport, `https` by default). The credentials are ordinary cluster settings: like every other key they may live in `secrets.yaml` or any included file instead of `cluster.yaml` — where `init --metal` scaffolds them. A [`redfish`](#metalgroupredfish) group must end up with an `ip` and a real `username` and `password` for every machine once each server's overrides merge in — a machine without the address, or with an empty or still-scaffolded `CHANGE-ME` credential, refuses to load.
+The Redfish settings every machine in the group starts from: `ip` (the BMC's IPv4 address, written bare — no `/prefix`, since it is the host of the Redfish URL and is refused with one), `username`, `password` and `scheme` (the Redfish transport, `https` by default). The credentials are ordinary cluster settings: like every other key they may live in `secrets.yaml` or any included file instead of `cluster.yaml` — where `init --metal` scaffolds them. A [`redfish`](#metalgroupredfish) group must end up with an `ip` and a real `username` and `password` for every machine once each server's overrides merge in — a machine without the address, or with an empty or still-scaffolded `CHANGE-ME` credential, refuses to load.
 
 `https` is the only transport that protects the BMC password, so there is no automatic plaintext fallback: a controller that serves no TLS opts into `http` per machine or group with `scheme`, knowing the credentials then ride the wire unencrypted.
 

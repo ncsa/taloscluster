@@ -1182,7 +1182,11 @@ def _metal_bmc(raw: dict[str, Any], where: str) -> MetalBmc:
     _reject_unknown_keys(raw, where, _METAL_BMC_KEYS)
     ip = raw.get("ip")
     if ip is not None:
-        ip = _metal_address(ip, f"{where}.ip")
+        # a bare address: the Redfish URL rides it, and _ipv4_address names
+        # cluster.yaml itself, so it takes the path without it
+        ip = str(
+            _ipv4_address(ip, where.removeprefix(f"{CLUSTER_FILE}: ") + ".ip")
+        )
     fields: dict[str, str] = {}
     for key in ("username", "password"):
         value = raw.get(key)
