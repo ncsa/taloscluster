@@ -21,6 +21,8 @@ These tests keep the surviving wording honest so the drift does not resurface:
   token secret is refused when a command needs it rather than "at secrets
   load time", and the one-line descriptions and the quickstart/usage pages
   cover bare metal.
+- The tailscale and OpenStack credential pages state the same access-time
+  refusal contract as the configuration overview, not "at secrets load time".
 """
 
 from __future__ import annotations
@@ -219,6 +221,22 @@ def test_proxmox_token_secret_refusal_is_not_tied_to_a_secrets_load():
     text = (DOCS / "configuration" / "proxmox.md").read_text()
     assert "secrets load time" not in text
     assert "refused when a command needs the credential" in text
+
+
+def test_tailscale_and_openstack_credential_refusals_are_not_tied_to_a_secrets_load():
+    # The tailscale and OpenStack pages drifted back to "at secrets load time"
+    # after the Proxmox page was fixed; _require_secret runs only when the
+    # credential is accessed, as the configuration overview states.
+    tailscale = (DOCS / "configuration" / "tailscale.md").read_text()
+    assert "secrets load time" not in tailscale
+    assert "refused when a command needs the key" in tailscale
+    for path in (
+        DOCS / "configuration" / "openstack.md",
+        DOCS / "providers" / "openstack.md",
+    ):
+        text = path.read_text()
+        assert "secrets load time" not in text
+        assert "when a command needs" in text
 
 
 def test_descriptions_cover_bare_metal():

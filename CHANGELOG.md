@@ -37,7 +37,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Report the firewall a new Proxmox VM would get during `plan`.
 - Print one `ERROR:` line and exit 1 on provider API failures instead of a traceback.
 - Refuse unknown or misspelled keys in every fixed-schema section of `cluster.yaml` and `secrets.yaml`, including plugin and nested Proxmox sections.
-- Refuse null, non-string, empty or scaffolded `CHANGE-ME` secrets at load time.
+- Refuse null, non-string, empty or scaffolded `CHANGE-ME` secrets when a command needs the credential.
 - Run plugin validation for every installed plugin before any cluster mutation, including standalone `plugin NAME` commands.
 - Report plugin work that must wait for the first bootstrap as deferred in `plan` instead of failing.
 - Require the cluster name to confirm `plugin NAME destroy`, matching top-level `destroy`.

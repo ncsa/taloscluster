@@ -50,7 +50,7 @@ openstack:
 
 Required · string
 
-Id of an OpenStack application credential, created with `openstack application credential create taloscluster`. The credential's project name becomes the `ncsa/project` node label. A null, non-string, empty, or still-scaffolded `CHANGE-ME` value is refused at secrets load time instead of failing later as an opaque 401.
+Id of an OpenStack application credential, created with `openstack application credential create taloscluster`. The credential's project name becomes the `ncsa/project` node label. A null, non-string, empty, or still-scaffolded `CHANGE-ME` value is refused when a command needs the credential instead of failing later as an opaque 401.
 
 ### `openstack.credential_secret`
 

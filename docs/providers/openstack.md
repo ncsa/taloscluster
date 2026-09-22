@@ -23,7 +23,7 @@ openstack:
   credential_secret: "CHANGE-ME"
 ```
 
-taloscluster authenticates to the [Keystone identity endpoint](../configuration/openstack.md#openstackurl) with the `v3applicationcredential` auth type (`OS_AUTH_TYPE=v3applicationcredential`). It refuses a null, empty, or still-scaffolded credential at secrets load time instead of failing later as an opaque 401. Create one credential per cluster (or reuse a name); the credential's project is the only project the session can see.
+taloscluster authenticates to the [Keystone identity endpoint](../configuration/openstack.md#openstackurl) with the `v3applicationcredential` auth type (`OS_AUTH_TYPE=v3applicationcredential`). It refuses a null, empty, or still-scaffolded credential when a command needs it instead of failing later as an opaque 401. Create one credential per cluster (or reuse a name); the credential's project is the only project the session can see.
 
 ## Required services
 
