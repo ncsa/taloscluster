@@ -13,20 +13,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Join a configured bare-metal machine missing from the cluster during converge, booting it through its BMC and never reinstalling one that already answers apid with the cluster's identity.
 - Warn when a configured host network overlaps the Kubernetes pod (`10.244.0.0/16`) or service (`10.96.0.0/12`) network, which is what Talos's `address-overlap` diagnostic reports on a node.
 - Add `metal.<group>.boot_timeout` (seconds, default 600) for how long a machine may take to reach maintenance mode, overridable per server, for hardware that is slow from cold.
-
-### Changed
-
-- **Breaking:** require Proxmox 9 or newer, refused during converge's validate phase: VM NICs rely on Proxmox 9 inheriting the bridge MTU from an unset MTU, which Proxmox 8 does not do.
-- Refuse a Proxmox SDN zone MTU below the cluster MTU.
-
-### Fixed
-
-- Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.
-
-## [0.8.0] - 2026-09-20
-
-### Added
-
 - Add `metal` commands that inspect, boot, wait, apply, eject and join bare-metal machines, refusing an already-joined machine and skipping the BMC when redfish is disabled. `metal apply` writes the generated machine config to `.metal/` (which `init` git-ignores) at mode 0600 and warns when the directory is not ignored.
 - Accept a `metal` section defining bare-metal machine groups beside one required VM provider, requiring real BMC credentials for `redfish` groups (https-only unless `bmc.scheme` opts into http) and refusing cabling, BMC and network settings that could never join, including a control plane with no external link while the kubeapi VIP rides the external network.
 - Treat metal machines as cluster nodes throughout: they join at the cluster's running Kubernetes version and the tailnet when tailscale is configured, get the same firewall as VMs with every group's L2 and KubeSpan's UDP port admitted, count as desired nodes in scale-down and `check`, and scale down into maintenance mode keeping the Talos install so the machine can join another cluster.
@@ -61,6 +47,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **Breaking:** require Proxmox 9 or newer, refused during converge's validate phase: VM NICs rely on Proxmox 9 inheriting the bridge MTU from an unset MTU, which Proxmox 8 does not do.
+- Refuse a Proxmox SDN zone MTU below the cluster MTU.
 - **Breaking:** merge `secrets.yaml` into the cluster configuration through the `include` list (the scaffold lists it), so credentials — plugin ones included — can live in any included file; a `cluster.yaml` that does not include it no longer reads it.
 - **Breaking:** the network settings, including a new `mtu` applied to links and the default route, move into `network.cluster` and `network.external`; the old address keys are refused ([old-to-new key table](docs/configuration/network.md#moving-from-the-old-keys)).
 - Delete the legacy `talos-<version>-tailscale` image on `image remove`, refusing while a managed VM still boots it, and converge detaches the boot ISO cdrom once a node boots from disk.
@@ -92,6 +80,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.
 - Parse the `talosctl etcd members` table by column offset so a member with an empty hostname fails closed during scale-down.
 - Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.
 - Abort a control-plane scale-down when the graceful reset fails or times out, and health-check between removals.
