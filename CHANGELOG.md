@@ -85,6 +85,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.
 - Parse the `talosctl etcd members` table by column offset so a member with an empty hostname fails closed during scale-down.
 - Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.
+- Refuse to remove a node dropped from the config during scale-down while etcd membership is unreadable.
 - Abort a control-plane scale-down when the graceful reset fails or times out, and health-check between removals.
 - Boot nodes scaled up in the same run as a Kubernetes upgrade at the upgraded version.
 - Detect Tailscale addresses across the whole `100.64.0.0/10` range.

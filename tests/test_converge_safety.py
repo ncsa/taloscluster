@@ -51,10 +51,17 @@ class FakeBackend:
         self.mutations.append("destroy")
 
 
-def test_scale_down_decline_happens_before_mutation(monkeypatch):
+def test_scale_down_decline_happens_before_mutation(monkeypatch, tmp_path):
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
@@ -63,20 +70,27 @@ def test_scale_down_decline_happens_before_mutation(monkeypatch):
     with pytest.raises(SystemExit, match="aborted"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
-            ABSENT_TALOSCONFIG,
+            talosconfig,
             Path("kubeconfig"), assume_yes=False,
         )
 
     assert mutations == []
 
 
-def test_scale_down_refuses_even_controlplane_count(monkeypatch):
+def test_scale_down_refuses_even_controlplane_count(monkeypatch, tmp_path):
     """Removing a control plane when the desired count is even would break etcd
     quorum, so scale-down must refuse before prompting or mutating."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 2}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(
         converge.kubectl, "node_names", lambda _kc: ["testcluster-controlplane-03"]
+    )
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-03": "8eb052c9"},
     )
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
@@ -88,16 +102,23 @@ def test_scale_down_refuses_even_controlplane_count(monkeypatch):
     ):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
-            ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+            talosconfig, Path("kubeconfig"), assume_yes=True,
         )
 
     assert mutations == []
 
 
-def test_scale_down_yes_skips_prompt_and_deletes(monkeypatch):
+def test_scale_down_yes_skips_prompt_and_deletes(monkeypatch, tmp_path):
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
@@ -114,19 +135,26 @@ def test_scale_down_yes_skips_prompt_and_deletes(monkeypatch):
         }
     )
     converge._scale_down(
-        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), ABSENT_TALOSCONFIG,
+        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), talosconfig,
         Path("kubeconfig"), assume_yes=True,
     )
 
     assert mutations == ["drain", "reset", "delete", "compute"]
 
 
-def test_scale_down_continues_when_drain_fails_on_notready_node(monkeypatch):
+def test_scale_down_continues_when_drain_fails_on_notready_node(monkeypatch, tmp_path):
     """A previous run may have drained and reset the node but not deleted it.
     Re-running converge must skip the failed drain and still delete the node."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: False)
     monkeypatch.setattr(
         converge.kubectl,
@@ -145,18 +173,25 @@ def test_scale_down_continues_when_drain_fails_on_notready_node(monkeypatch):
         }
     )
     converge._scale_down(
-        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), ABSENT_TALOSCONFIG,
+        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), talosconfig,
         Path("kubeconfig"), assume_yes=True,
     )
 
     assert mutations == ["reset", "delete", "compute"]
 
 
-def test_scale_down_aborts_when_drain_fails_on_ready_node(monkeypatch):
+def test_scale_down_aborts_when_drain_fails_on_ready_node(monkeypatch, tmp_path):
     """A PDB or eviction failure on a live node must abort, not delete the node."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: True)
     monkeypatch.setattr(
         converge.kubectl,
@@ -177,18 +212,25 @@ def test_scale_down_aborts_when_drain_fails_on_ready_node(monkeypatch):
     with pytest.raises(ReconcileError, match="drain of old-worker failed"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, inventory, NetworkResult(),
-            ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+            talosconfig, Path("kubeconfig"), assume_yes=True,
         )
 
     assert mutations == []
 
 
-def test_scale_down_deletes_notready_node_with_no_address(monkeypatch):
+def test_scale_down_deletes_notready_node_with_no_address(monkeypatch, tmp_path):
     """A node already shut down by a previous reset has no resolvable address
     and is NotReady in k8s. Scale-down must still delete it."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: False)
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
@@ -196,17 +238,24 @@ def test_scale_down_deletes_notready_node_with_no_address(monkeypatch):
 
     converge._scale_down(
         FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
-        ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+        talosconfig, Path("kubeconfig"), assume_yes=True,
     )
 
     assert mutations == ["delete", "compute"]
 
 
-def test_scale_down_aborts_when_no_address_but_node_ready(monkeypatch):
+def test_scale_down_aborts_when_no_address_but_node_ready(monkeypatch, tmp_path):
     """No address + Ready node means a discovery failure, not an already-reset node."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: True)
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
@@ -215,17 +264,24 @@ def test_scale_down_aborts_when_no_address_but_node_ready(monkeypatch):
     with pytest.raises(ReconcileError, match="no address for old-worker but node is Ready"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
-            ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+            talosconfig, Path("kubeconfig"), assume_yes=True,
         )
 
     assert mutations == []
 
 
-def test_scale_down_aborts_when_drain_fails_and_status_unknown(monkeypatch):
+def test_scale_down_aborts_when_drain_fails_and_status_unknown(monkeypatch, tmp_path):
     """kubectl API failure during drain must not be treated as NotReady."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: None)
     monkeypatch.setattr(
         converge.kubectl,
@@ -246,17 +302,24 @@ def test_scale_down_aborts_when_drain_fails_and_status_unknown(monkeypatch):
     with pytest.raises(ReconcileError, match="drain of old-worker failed"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, inventory, NetworkResult(),
-            ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+            talosconfig, Path("kubeconfig"), assume_yes=True,
         )
 
     assert mutations == []
 
 
-def test_scale_down_aborts_when_no_address_and_status_unknown(monkeypatch):
+def test_scale_down_aborts_when_no_address_and_status_unknown(monkeypatch, tmp_path):
     """No address + unknown node status must not be treated as confirmed down."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker"])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: None)
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
@@ -265,7 +328,7 @@ def test_scale_down_aborts_when_no_address_and_status_unknown(monkeypatch):
     with pytest.raises(ReconcileError, match="no address for old-worker but node is unknown"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
-            ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+            talosconfig, Path("kubeconfig"), assume_yes=True,
         )
 
     assert mutations == []
@@ -346,16 +409,18 @@ def test_scale_down_aborts_addressless_cp_absent_from_discovery_but_in_etcd(monk
     assert mutations == []
 
 
-def test_scale_down_aborts_addressless_control_plane_when_etcd_query_fails(monkeypatch):
-    """Without an etcd member list we cannot positively establish that an
-    addressless control plane left etcd, so relying on NotReady alone must
-    abort (fail closed on missing evidence)."""
+def test_scale_down_refuses_a_removal_when_the_etcd_query_fails(monkeypatch, tmp_path):
+    """A removal is by definition absent from the config, so when the etcd
+    member list cannot be read its role is unknowable and no node name may
+    stand in for the missing evidence -- scale-down must refuse the removal
+    (fail closed) instead of classifying it by name."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(
         converge.kubectl, "node_names", lambda _kc: ["testcluster-controlplane-03"]
     )
-    monkeypatch.setattr(converge.kubectl, "node_ready", lambda _kc, _n: False)
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
@@ -366,10 +431,10 @@ def test_scale_down_aborts_addressless_control_plane_when_etcd_query_fails(monke
         )
     monkeypatch.setattr(converge.talosctl, "etcd_members", fail_etcd)
 
-    with pytest.raises(ReconcileError, match="could not read etcd membership"):
+    with pytest.raises(ReconcileError, match="cannot tell whether testcluster-controlplane-03"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
-            ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+            talosconfig, Path("kubeconfig"), assume_yes=True,
         )
 
     assert mutations == []
@@ -423,12 +488,21 @@ def _cp_inventory(*names):
     )
 
 
-def test_scale_down_aborts_without_deleting_when_control_plane_reset_fails(monkeypatch):
+def test_scale_down_aborts_without_deleting_when_control_plane_reset_fails(
+    monkeypatch, tmp_path
+):
     """A failed graceful reset must not delete the control-plane VM."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(
         converge.kubectl, "node_names", lambda _kc: ["testcluster-controlplane-03"]
+    )
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-03": "8eb052c9"},
     )
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
 
@@ -442,20 +516,32 @@ def test_scale_down_aborts_without_deleting_when_control_plane_reset_fails(monke
     with pytest.raises(ReconcileError, match="control plane"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, _cp_inventory("testcluster-controlplane-03"),
-            NetworkResult(), ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+            NetworkResult(), talosconfig, Path("kubeconfig"), assume_yes=True,
         )
 
     # drained but the VM is NOT deleted once the reset failed
     assert mutations == ["drain"]
 
 
-def test_scale_down_health_checks_between_successive_control_plane_removals(monkeypatch):
+def test_scale_down_health_checks_between_successive_control_plane_removals(
+    monkeypatch, tmp_path
+):
     """Removing one control plane at a time must health-check before the next."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(
         converge.kubectl, "node_names",
         lambda _kc: ["testcluster-controlplane-02", "testcluster-controlplane-03"],
+    )
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {
+            "testcluster-controlplane-02": "8c2aa1e0",
+            "testcluster-controlplane-03": "7d3b99c4",
+        },
     )
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
@@ -469,7 +555,7 @@ def test_scale_down_health_checks_between_successive_control_plane_removals(monk
     converge._scale_down(
         FakeBackend(mutations), cfg, {},
         _cp_inventory("testcluster-controlplane-02", "testcluster-controlplane-03"),
-        NetworkResult(), ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+        NetworkResult(), talosconfig, Path("kubeconfig"), assume_yes=True,
     )
 
     assert mutations == [
@@ -479,13 +565,25 @@ def test_scale_down_health_checks_between_successive_control_plane_removals(monk
     assert len(checks) == 1  # only between the two control-plane removals
 
 
-def test_scale_down_stops_before_second_control_plane_when_unhealthy(monkeypatch):
+def test_scale_down_stops_before_second_control_plane_when_unhealthy(
+    monkeypatch, tmp_path
+):
     """An unhealthy cluster between control-plane removals must abort the rollout."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(
         converge.kubectl, "node_names",
         lambda _kc: ["testcluster-controlplane-02", "testcluster-controlplane-03"],
+    )
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {
+            "testcluster-controlplane-02": "8c2aa1e0",
+            "testcluster-controlplane-03": "7d3b99c4",
+        },
     )
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
@@ -496,7 +594,7 @@ def test_scale_down_stops_before_second_control_plane_when_unhealthy(monkeypatch
         converge._scale_down(
             FakeBackend(mutations), cfg, {},
             _cp_inventory("testcluster-controlplane-02", "testcluster-controlplane-03"),
-            NetworkResult(), ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+            NetworkResult(), talosconfig, Path("kubeconfig"), assume_yes=True,
         )
 
     # first control plane removed, the second one left untouched
@@ -504,7 +602,7 @@ def test_scale_down_stops_before_second_control_plane_when_unhealthy(monkeypatch
 
 
 def test_scale_down_real_health_refuses_fallback_between_control_plane_removals(
-    monkeypatch,
+    monkeypatch, tmp_path
 ):
     """Between control-plane removals the real _health_or_kube_fallback must
     refuse the kube-api fallback: talosctl health fails twice and the VIP
@@ -513,16 +611,23 @@ def test_scale_down_real_health_refuses_fallback_between_control_plane_removals(
     plane instead of trusting kube-api readiness."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(
         converge.kubectl, "node_names",
         lambda _kc: ["testcluster-controlplane-02", "testcluster-controlplane-03"],
     )
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {
+            "testcluster-controlplane-02": "8c2aa1e0",
+            "testcluster-controlplane-03": "7d3b99c4",
+        },
+    )
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
-    monkeypatch.setattr(
-        converge.talosctl, "member_addresses", lambda *_a, **_kw: {},
-    )
     # talosctl health fails twice and the kube-api VIP answers: the health
     # barrier between control-plane removals is exercised for real, not stubbed.
     monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
@@ -538,7 +643,7 @@ def test_scale_down_real_health_refuses_fallback_between_control_plane_removals(
         converge._scale_down(
             FakeBackend(mutations), cfg, {},
             _cp_inventory("testcluster-controlplane-02", "testcluster-controlplane-03"),
-            NetworkResult(), ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+            NetworkResult(), talosconfig, Path("kubeconfig"), assume_yes=True,
         )
 
     # only the first control plane was removed; the second is untouched because
@@ -546,13 +651,17 @@ def test_scale_down_real_health_refuses_fallback_between_control_plane_removals(
     assert mutations == ["drain", "reset", "delete", "compute"]
 
 
-def test_scale_down_rerun_resumes_vm_delete_after_kube_node_already_gone(monkeypatch):
+def test_scale_down_rerun_resumes_vm_delete_after_kube_node_already_gone(
+    monkeypatch, tmp_path
+):
     """A prior run deleted the kube Node but its provider-VM delete failed; the
     rerun sees no Node in `kubectl.get nodes`, so the undesired owned machine
     must be reconciled from the provider inventory and its VM deleted -- not
     ignored forever."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     # the kube Node is gone on the rerun...
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
     # ...and the owned VM is still in the inventory
@@ -574,21 +683,29 @@ def test_scale_down_rerun_resumes_vm_delete_after_kube_node_already_gone(monkeyp
     )
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
 
     converge._scale_down(
-        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), ABSENT_TALOSCONFIG,
+        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), talosconfig,
         Path("kubeconfig"), assume_yes=True,
     )
 
     assert mutations == ["reset", "compute"]
 
 
-def test_scale_down_removes_owned_machine_that_never_joined_kubernetes(monkeypatch):
+def test_scale_down_removes_owned_machine_that_never_joined_kubernetes(
+    monkeypatch, tmp_path
+):
     """An owned undesired provider machine that never registered as a kube Node
     (e.g. a worker whose first boot failed) is invisible to `kubectl.get nodes`
     and must still be removed from the provider inventory."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
     inventory = InfrastructureInventory(
         machines={
@@ -607,9 +724,13 @@ def test_scale_down_removes_owned_machine_that_never_joined_kubernetes(monkeypat
     )
     monkeypatch.setattr(converge.talosctl, "reset", lambda *_a, **_k: mutations.append("reset"))
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
 
     converge._scale_down(
-        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), ABSENT_TALOSCONFIG,
+        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), talosconfig,
         Path("kubeconfig"), assume_yes=True,
     )
 
@@ -617,16 +738,18 @@ def test_scale_down_removes_owned_machine_that_never_joined_kubernetes(monkeypat
 
 
 def test_scale_down_rerun_deletes_cp_with_known_address_whose_reset_fails_and_is_out_of_etcd(
-    monkeypatch,
+    monkeypatch, tmp_path
 ):
     """A control plane whose kube Node is already gone but whose address the
-    provider still knows (a wiped/powered-off VM from a prior reset whose delete
-    failed) must not abort the scale-down forever on a rerun when its reset
-    fails: treat the failure as a request for evidence, fall through to the
-    authoritative etcd-member check, and delete the VM once the node is out of
-    etcd."""
+    provider still knows (a VM left a dead etcd member by an interrupted prior
+    reset whose delete failed) must not abort the scale-down forever on a rerun
+    when its reset fails: treat the failure as a request for evidence, fall
+    through to the authoritative etcd-member check, and delete the VM once the
+    node is out of etcd."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
     monkeypatch.setattr(
         converge.kubectl, "drain", lambda *_a: pytest.fail("must not drain a kube-less CP")
@@ -648,14 +771,20 @@ def test_scale_down_rerun_deletes_cp_with_known_address_whose_reset_fails_and_is
             )
         }
     )
-    # the wiped node is absent from the surviving control plane's etcd member list
-    monkeypatch.setattr(
-        converge.talosctl, "etcd_members",
-        lambda *_a, **_k: {"testcluster-controlplane-02": "8c2aa1e0"},
-    )
+    # the interrupted prior reset left the node a dead etcd member, so role
+    # classification still sees a control plane; by the time the failed reset's
+    # evidence check re-queries, the member has left
+    etcd_reads: list[int] = []
+
+    def etcd_members(*_a, **_k):
+        etcd_reads.append(1)
+        if len(etcd_reads) == 1:
+            return {"testcluster-controlplane-03": "9eb1f01d"}
+        return {"testcluster-controlplane-02": "8c2aa1e0"}
+    monkeypatch.setattr(converge.talosctl, "etcd_members", etcd_members)
 
     converge._scale_down(
-        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), ABSENT_TALOSCONFIG,
+        FakeBackend(mutations), cfg, {}, inventory, NetworkResult(), talosconfig,
         Path("kubeconfig"), assume_yes=True,
     )
 
@@ -843,7 +972,9 @@ def test_scale_down_never_removes_a_joined_metal_node(monkeypatch):
     assert mutations == []
 
 
-def test_scale_down_resets_a_dropped_metal_node_using_its_kube_node_address(monkeypatch):
+def test_scale_down_resets_a_dropped_metal_node_using_its_kube_node_address(
+    monkeypatch, tmp_path
+):
     """A metal machine dropped from the config belongs to no provider inventory,
     so commenting out its config takes its static address with it, and a
     NotReady node is absent from Talos discovery too. The kube Node still
@@ -852,7 +983,14 @@ def test_scale_down_resets_a_dropped_metal_node_using_its_kube_node_address(monk
     kubelet re-registers it seconds later."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["rp002"])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     monkeypatch.setattr(converge.kubectl, "node_addresses", lambda _kc: {"rp002": "172.29.21.6"})
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(
@@ -871,7 +1009,7 @@ def test_scale_down_resets_a_dropped_metal_node_using_its_kube_node_address(monk
 
     converge._scale_down(
         FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
-        ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+        talosconfig, Path("kubeconfig"), assume_yes=True,
     )
 
     assert mutations == ["drain", "reset 172.29.21.6 maintenance=True", "delete", "compute"]
@@ -883,6 +1021,10 @@ def test_scale_down_prefers_discovery_over_the_kube_node_address(monkeypatch):
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["rp002"])
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     monkeypatch.setattr(converge.kubectl, "node_addresses", lambda _kc: {"rp002": "172.29.21.99"})
     monkeypatch.setattr(
         converge.talosctl, "member_addresses", lambda *_a, **_k: {"rp002": "172.29.21.6"}
@@ -904,13 +1046,21 @@ def test_scale_down_prefers_discovery_over_the_kube_node_address(monkeypatch):
     assert mutations == ["reset 172.29.21.6", "compute"]
 
 
-def test_scale_down_wipes_a_vm_completely_and_leaves_metal_reusable(monkeypatch):
+def test_scale_down_wipes_a_vm_completely_and_leaves_metal_reusable(
+    monkeypatch, tmp_path
+):
     """A VM is deleted seconds after its reset, so it is wiped whole and shut
     down. Hardware is deleted by nothing, so only STATE and EPHEMERAL go and it
     reboots into maintenance mode -- reusable, not blank. The provider
     inventory is what tells the two apart, since a removal is by definition
     absent from the config."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
     inv = InfrastructureInventory(
         machines={
             "old-worker": InfrastructureMachine(
@@ -932,7 +1082,7 @@ def test_scale_down_wipes_a_vm_completely_and_leaves_metal_reusable(monkeypatch)
 
     converge._scale_down(
         FakeBackend([]), cfg, {}, inv, NetworkResult(),
-        ABSENT_TALOSCONFIG, Path("kubeconfig"), assume_yes=True,
+        talosconfig, Path("kubeconfig"), assume_yes=True,
     )
 
     assert resets == [("172.29.21.50", False), ("172.29.21.6", True)]
@@ -1049,6 +1199,53 @@ def test_scale_down_refuses_to_remove_a_metal_control_plane_that_would_break_quo
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
             talosconfig, Path("kubeconfig"), assume_yes=True,
+        )
+
+    assert mutations == []
+
+
+def test_scale_down_refuses_a_metal_removal_it_cannot_classify_when_etcd_is_unreadable(
+    monkeypatch, tmp_path
+):
+    """A metal control plane whose server entry left the config carries no role
+    a node name reveals, so when the surviving control plane's etcd member list
+    cannot be read its role is unknowable -- classifying it by name would reset
+    it as a worker, skipping the quorum guard. Scale-down must refuse the
+    removal (fail closed) until etcd answers, before prompting or mutating."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
+    mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["rp001-cp"])
+    monkeypatch.setattr(
+        converge.talosctl, "etcd_members",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            ReconcileError("could not read etcd membership from control plane ep")
+        ),
+    )
+    monkeypatch.setattr(
+        converge.kubectl,
+        "drain",
+        lambda *_a: pytest.fail("an unclassifiable removal must not be drained"),
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "reset",
+        lambda *_a, **_k: pytest.fail("an unclassifiable removal must not be reset"),
+    )
+    monkeypatch.setattr(
+        converge.kubectl,
+        "delete_node",
+        lambda *_a: pytest.fail("an unclassifiable removal must not be deleted"),
+    )
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("must refuse before prompting")
+    )
+
+    with pytest.raises(ReconcileError, match="cannot tell whether rp001-cp"):
+        converge._scale_down(
+            FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
+            talosconfig, Path("kubeconfig"), assume_yes=False,
         )
 
     assert mutations == []

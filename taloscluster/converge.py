@@ -1528,20 +1528,21 @@ def _scale_down(
     )
     # A removal is by definition absent from the config, so its role cannot be
     # read off the desired view -- and a metal server's name never carries the
-    # VM `-controlplane-` pattern. Role evidence therefore falls back to the
+    # VM `-controlplane-` pattern. Role evidence therefore comes from the
     # surviving control plane's AUTHORITATIVE live etcd membership (an etcd
-    # member is a control plane whatever it is called) and, only when that
-    # evidence is unavailable, to the VM naming convention. The query is
-    # best-effort so a worker-only scale-down survives an unreachable apid the
-    # way it always has; every control-plane path below keeps failing closed.
+    # member is a control plane whatever it is called). There is no name-pattern
+    # fallback: when etcd membership cannot be read, a config-less removal's
+    # role is unknowable -- guessing wrong on a metal control plane would skip
+    # the quorum guard and reset it as a worker -- so `is_controlplane` fails
+    # closed and refuses the removal until etcd answers.
     in_etcd: dict[str, str] | None = None
     if talosconfig.is_file():
         try:
             in_etcd = talosctl.etcd_members(talosconfig, endpoint)
         except ReconcileError:
             warn(
-                "could not read etcd membership; classifying removals by the "
-                "config's role view and node names only"
+                "could not read etcd membership; refusing to remove nodes the "
+                "config does not classify"
             )
     roles = {host: machine.role for host, machine in machines.items()} | cfg.metal_servers
 
@@ -1549,9 +1550,13 @@ def _scale_down(
         role = roles.get(node)
         if role is not None:
             return role == "controlplane"
-        if in_etcd is not None:
-            return node in in_etcd
-        return "-controlplane-" in node
+        if in_etcd is None:
+            raise ReconcileError(
+                f"cannot tell whether {node} is a control plane: it is not in the "
+                "config and etcd membership is unreadable; refusing to remove it "
+                "until etcd membership can be read"
+            )
+        return node in in_etcd
 
     for node in removals:
         if is_controlplane(node) and (desired_cp % 2 == 0 or desired_cp < 1):
