@@ -12,7 +12,9 @@ of 1500. A second golden pins the shared stack around the KubeSpan patch:
 opting in with ``talos.kubespan: true`` puts it on every node -- the WireGuard
 MTU (the L2 MTU minus overhead) and, when ``network.external`` exists, its
 networks excluded from endpoint discovery -- while the default (and
-``talos.kubespan: false``) emits none.
+``talos.kubespan: false``) emits none. Control planes end the stack with the
+metadata-policy patch, whose embedded NetworkPolicy manifest is pinned by
+tests/test_openstack_talos.py.
 
 Update the golden only when a machine-config change is intended.
 """
@@ -103,6 +105,7 @@ def _golden(cluster_mtu: int | None) -> dict[str, list]:
             "FIREWALL",
             [_named(TAILSCALE_PATCH, "testcluster-controlplane-01")],
             cp_eth0,
+            [talos.metadata_policy_patch().document],
         ],
         "testcluster-worker-01": [
             [_machine_patch("worker", "worker")],

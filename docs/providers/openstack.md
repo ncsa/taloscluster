@@ -94,6 +94,12 @@ workers:
 
 The configured `flavor` may be a name or an id. `disk` is the boot volume size in GB, which may exceed the flavor's own disk. Servers are create-only: converge refuses a later `flavor`, `disk`, or `availability_zone` change on an existing node (recreate it by scaling its pool down past it and back up) rather than silently ignoring it, and `plan` reports the same refusal.
 
+## Machine configuration and the metadata service
+
+Converge delivers each server's machine configuration as Nova `user_data` alongside the config drive, and the configuration carries the cluster's secrets: the Kubernetes and etcd CA keys, the node join tokens, and the tailscale auth key. Nova keeps `user_data` for the instance's whole lifetime and serves it at the metadata address `http://169.254.169.254/openstack/latest/user_data`. Pod egress to that address is masqueraded behind the node, so an unprivileged pod in the cluster can fetch a control plane's configuration and take over the cluster, and every member of the project can read it through the compute API.
+
+To close the pod path, the control planes' bootstrap manifests embed a NetworkPolicy (`block-cloud-metadata`) that denies pods in the `default` namespace egress to `169.254.169.254` while allowing every other IPv4 destination — the rule matches IPv4 only, so it also denies IPv6 egress, which costs nothing on these IPv4-only clusters. It is applied when the cluster bootstraps; on a cluster bootstrapped before the policy existed, add the same NetworkPolicy to `default` by hand with `kubectl`. Three limits remain, so treat membership of the project as access to the cluster's secrets: the policy does nothing under a CNI that does not enforce NetworkPolicy (the Talos default, Flannel, enforces none), it does not follow namespaces created after bootstrap (copy it into any namespace that runs untrusted pods), and the compute API keeps serving `user_data` to the project regardless.
+
 ## Management access
 
 taloscluster reaches the Talos API on port 50000 of a real node address to bootstrap and manage the cluster, and clients reach the Kubernetes API on the floating IP on port 6443. On OpenStack the nodes sit on the private tenant network with no public address and no SSH, so you must get `taloscluster` to a node address from your management machine — usually through [Tailscale](../concepts/machines.md#reaching-the-nodes):

@@ -28,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Exit nonzero from `check` when version data is incomplete, with `incomplete` and `incomplete_reasons` in the report.
 - Detect extension-only changes from the running schematic so adding or removing an extension reinstalls the node.
 - Refuse OpenStack flavor, disk and availability-zone changes with recreation guidance; update an existing subnet's DNS in place.
+- Deny pods in the default namespace the OpenStack metadata service with a NetworkPolicy shipped in the bootstrap manifests.
 - Warn that `network.dns` is not applied on DHCP-backed Proxmox networks.
 - Create and reconcile Proxmox VM NICs inheriting the bridge MTU (a running VM's NIC is rewritten at its restart, since a live re-plug drops flannel's VXLAN device), and warn when the cluster or external bridge is below it.
 - Refuse duplicate Proxmox VM names that involve a cluster-managed machine.
