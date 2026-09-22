@@ -2452,6 +2452,8 @@ def check(root: Path, output: str = "text") -> int:
     can gate a CI job without passing an unverified cluster.
     """
     cfg = load_config(root)
+    for w in validate_warnings(cfg):
+        warn(w)
     report: dict[str, Any] = {"cluster": cfg.name, "components": [], "nodes": []}
     ctx = Context(root=root, cfg=cfg)
     plugin_reports = plugins.collect(plugins.active(ctx), "check", ctx)

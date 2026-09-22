@@ -92,6 +92,35 @@ def test_up_to_date_exit_0(cluster_dir, upstream, nodes, capsys):
     assert rc == 0
 
 
+def test_host_network_overlap_is_warned(cluster_dir, upstream, nodes, capsys):
+    """The configuration warnings converge's preflight reports -- network.md
+    promises the pod/service overlap one from `check` too -- are emitted here,
+    on stderr, without changing the verdict or the yaml report on stdout."""
+    (cluster_dir / "cluster.yaml").write_text(
+        yaml.safe_dump(
+            {
+                **CLUSTER,
+                "network": {
+                    "cluster": {"cidr": "10.244.7.0/24"},
+                    "dns": ["1.1.1.1"],
+                    "ntp": ["ntp.example.com"],
+                },
+            }
+        )
+    )
+    upstream["talos"] = ["v1.13.8"]
+    upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
+    nodes["nodes"] = [
+        {"name": "testcluster-controlplane-01", "talos": "v1.13.8", "kubernetes": "v1.35.2"}
+    ]
+    rc = converge.check(cluster_dir, output="yaml")
+    err = capsys.readouterr().err
+    assert "network.cluster.cidr (10.244.7.0/24) overlaps the kubernetes pod network" in err
+    assert "address-overlap" in err
+    assert "overlaps the kubernetes service network" not in err
+    assert rc == 0
+
+
 def test_node_behind_configured_is_drift(cluster_dir, upstream, nodes, capsys):
     upstream["talos"] = ["v1.13.8"]
     upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
