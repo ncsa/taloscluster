@@ -83,7 +83,7 @@ Never commit this file. `taloscluster init` writes it with mode 0600 and adds it
 | --- | --- | --- | --- |
 | `openstack` | on OpenStack | Application credential id and secret | [OpenStack](configuration/openstack.md#secretsyaml) |
 | `proxmox` | on Proxmox | API token id and secret | [Proxmox](configuration/proxmox.md#secretsyaml) |
-| `metal` | on bare metal | BMC username and password, per group | [Metal](configuration/metal.md#metalgroupbmc) |
+| `metal` | for `redfish` groups | BMC username and password, per group | [Metal](configuration/metal.md#metalgroupbmc) |
 | `tailscale` | no | Pre-auth key nodes register with | [Tailscale](configuration/tailscale.md#secretsyaml) |
 | `rancher` | no | Rancher server URL and token | [Rancher](configuration/rancher.md#secretsyaml) |
 | `argocd` | no | How to reach the ArgoCD cluster | [ArgoCD](configuration/argocd.md#secretsyaml) |

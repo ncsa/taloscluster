@@ -3324,12 +3324,46 @@ def test_a_clean_nic_is_not_drift_on_pve9(make_config, capsys):
     )
 
 
-def test_an_unreadable_pve_version_assumes_the_modern_semantics(make_config, monkeypatch):
-    """Guessing the sentinel breaks the NIC outright on 9+, while leaving the MTU
-    unset is safe on every release, so an unreadable version must not write it."""
+def test_an_unreadable_pve_version_refuses(proxmox_cfg):
+    """An unreadable release could be an 8 whose NIC convention would be
+    written wrong, so the gate refuses instead of assuming 9."""
     data = _data(pve=9)
     del data["nodes/pve001/version"]
     del data["nodes/pve002/version"]
-    payload = _create_first_vm(_jumbo_cfg(make_config), data, monkeypatch)
+    client = FakeClient(data)
 
-    assert "mtu" not in payload["net0"]
+    with pytest.raises(
+        ReconcileError, match="could not read the Proxmox version from node pve001"
+    ):
+        _backend(proxmox_cfg, client).load_inventory()
+
+
+def test_only_the_first_node_is_checked(proxmox_cfg):
+    """The release is read from the first node: a later node's version must
+    not stand in for an unreadable first node."""
+    data = _data(pve=9)
+    del data["nodes/pve001/version"]
+    client = FakeClient(data)
+
+    with pytest.raises(
+        ReconcileError, match="could not read the Proxmox version from node pve001"
+    ):
+        _backend(proxmox_cfg, client).load_inventory()
+
+    assert ("GET", "nodes/pve002/version") not in client.calls
+
+
+def test_a_failing_version_read_refuses(proxmox_cfg):
+    """A version read the API cannot answer refuses too: the release must be
+    readable to enforce the requirement."""
+
+    class FailingClient(FakeClient):
+        def get(self, path, **kwargs):
+            if path == "nodes/pve001/version":
+                raise ReconcileError("Proxmox API GET nodes/pve001/version failed (500): boom")
+            return super().get(path, **kwargs)
+
+    with pytest.raises(
+        ReconcileError, match="could not read the Proxmox version from node pve001"
+    ):
+        _backend(proxmox_cfg, FailingClient(_data(pve=9))).load_inventory()

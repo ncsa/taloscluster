@@ -384,33 +384,35 @@ class ProxmoxBackend:
         network, so the version is a requirement rather than a branch.
         See https://pve.proxmox.com/wiki/Roadmap#9.0-known-issues
 
-        A version that cannot be read is a warning, not a refusal: converge
-        must not be blocked by one unreadable endpoint on a cluster that is
-        otherwise fine.
+        The release is read from the first compute node and the refusal is
+        unconditional: an unreadable release cannot be told apart from an 8
+        whose NIC convention would be written wrong, so it refuses rather
+        than guess.
         """
         if self._pve_major is not None:
             return
-        for node in self._compute_nodes:
-            try:
-                data = self.client.get(f"nodes/{node}/version")
-            except Exception:  # noqa: BLE001 - reported as unreadable below
-                continue
-            major = str((data or {}).get("version") or "").split(".", 1)[0]
-            if major.isdigit():
-                self._pve_major = int(major)
-                if self._pve_major < MIN_PVE_MAJOR:
-                    raise ReconcileError(
-                        f"Proxmox {self._pve_major} on node {node} is not supported: "
-                        f"taloscluster requires Proxmox {MIN_PVE_MAJOR} or newer, whose VM NICs "
-                        "inherit the bridge MTU from an unset MTU. On 8 and earlier "
-                        "that setting means 1500 and needs the opposite convention. "
-                        "Upgrade the Proxmox cluster, or pin taloscluster to 0.7.x."
-                    )
-                return
-        warn(
-            "could not read the Proxmox version from any node; assuming 9 or newer "
-            "(VM NICs inherit the bridge MTU from an unset MTU)"
-        )
+        node = self._compute_nodes[0]
+        try:
+            data = self.client.get(f"nodes/{node}/version")
+        except Exception as exc:
+            raise ReconcileError(
+                f"could not read the Proxmox version from node {node}: {exc}"
+            ) from exc
+        major = str((data or {}).get("version") or "").split(".", 1)[0]
+        if not major.isdigit():
+            raise ReconcileError(
+                f"could not read the Proxmox version from node {node}: "
+                f"the API returned {data!r}"
+            )
+        self._pve_major = int(major)
+        if self._pve_major < MIN_PVE_MAJOR:
+            raise ReconcileError(
+                f"Proxmox {self._pve_major} on node {node} is not supported: "
+                f"taloscluster requires Proxmox {MIN_PVE_MAJOR} or newer, whose VM NICs "
+                "inherit the bridge MTU from an unset MTU. On 8 and earlier "
+                "that setting means 1500 and needs the opposite convention. "
+                "Upgrade the Proxmox cluster, or pin taloscluster to 0.7.x."
+            )
 
     def _check_bridge_mtu(self) -> None:
         """Warn when a target node's bridges cannot carry their L2's MTU.
