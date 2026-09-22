@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 from taloscluster.config import ConfigError
+from taloscluster.errors import ReconcileError
 from taloscluster.infrastructure import (
     InfrastructureInventory,
     InfrastructureMachine,
@@ -232,3 +233,15 @@ def test_proxmox_backend_contribution_rejects_anchor_collisions(make_config):
 
     with pytest.raises(ConfigError, match="anchor address collision"):
         backend.talos_contribution(machine, Endpoint(vip="203.0.113.10"))
+
+
+def test_backend_raw_helpers_refuse_a_foreign_inventory_with_reconcile_error():
+    """Unwrapping an inventory that carries no provider data fails with the
+    same typed error every provider failure raises, in both backends."""
+    from taloscluster.openstack.backend import OpenStackBackend
+    from taloscluster.proxmox.backend import ProxmoxBackend
+
+    inventory = InfrastructureInventory()
+    for backend in (OpenStackBackend, ProxmoxBackend):
+        with pytest.raises(ReconcileError, match="inventory is unavailable"):
+            backend._raw(inventory)

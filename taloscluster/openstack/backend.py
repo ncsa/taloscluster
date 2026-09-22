@@ -101,7 +101,7 @@ class OpenStackBackend:
     def _raw(inventory: InfrastructureInventory) -> Inventory:
         raw = inventory.provider_data
         if not isinstance(raw, Inventory):
-            raise RuntimeError("OpenStack inventory is unavailable")
+            raise ReconcileError("OpenStack inventory is unavailable")
         return raw
 
     @_reconcile_errors
@@ -250,7 +250,7 @@ class OpenStackBackend:
                 try:
                     self.conn.image.delete_image(img.id)
                 except os_exceptions.SDKException as exc:
-                    raise RuntimeError(
+                    raise ReconcileError(
                         f"could not delete image {img.name}: {exc}\n"
                         "On Ceph-backed clouds (like Radiant) each boot volume is a "
                         "copy-on-write clone of the image, so the image cannot be deleted "

@@ -344,7 +344,7 @@ def test_upgrade_still_raises_on_unclassified_nonzero_exit(monkeypatch):
         lambda *a, **k: (1, "", "failed to pull installer image"),
     )
 
-    with pytest.raises(RuntimeError, match="failed to pull installer image"):
+    with pytest.raises(ReconcileError, match="failed to pull installer image"):
         talosctl.upgrade(Path("talosconfig"), "endpoint", "node", "installer:v1.13.9")
 
 
@@ -1096,7 +1096,7 @@ def test_bootstrap_gives_up_when_etcd_never_becomes_available(tmp_path, monkeypa
     clock = iter([0.0, 1.0, 400.0])
     monkeypatch.setattr(talosctl.time, "monotonic", lambda: next(clock))
 
-    with pytest.raises(RuntimeError, match="not available yet"):
+    with pytest.raises(ReconcileError, match="not available yet"):
         talosctl.bootstrap(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.1", timeout_s=300)
 
 
@@ -1104,6 +1104,17 @@ def test_bootstrap_treats_already_bootstrapped_as_success(tmp_path, monkeypatch)
     monkeypatch.setattr(talosctl, "_run_nocheck",
                         lambda args, timeout=None: (1, "", "etcd data directory is not empty"))
     talosctl.bootstrap(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.1")
+
+
+def test_apply_config_failure_raises_reconcile_error(tmp_path, monkeypatch):
+    """A failed config push raises the same typed error as every other
+    talosctl failure, so callers can catch one reconcile error type."""
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (1, "", "boom"))
+
+    with pytest.raises(ReconcileError, match="apply-config on 10.0.0.5 failed"):
+        talosctl.apply_config(
+            tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}"
+        )
 
 
 # ---------------------------------------------------------------------------

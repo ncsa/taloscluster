@@ -423,7 +423,7 @@ def apply_config(talosconfig: Path, endpoint: str, node: str, config: str,
         if dry_run():
             warn(f"could not diff machine config on {node}: {(err or out).strip()}")
             return False
-        raise RuntimeError(f"apply-config on {node} failed: {(err or out).strip()}")
+        raise ReconcileError(f"apply-config on {node} failed: {(err or out).strip()}")
     if dry_run():
         # talosctl writes the summary and diff to stderr
         for line in _dry_run_summary(out + "\n" + err):
@@ -721,7 +721,7 @@ def bootstrap(talosconfig: Path, endpoint: str, node: str,
             info("bootstrap not available yet, retrying...")
             time.sleep(interval_s)
             continue
-        raise RuntimeError(f"bootstrap failed: {(err or out).strip()}")
+        raise ReconcileError(f"bootstrap failed: {(err or out).strip()}")
 
 
 def kubeconfig(talosconfig: Path, endpoint: str, node: str, out: Path) -> None:
@@ -910,7 +910,7 @@ def upgrade(talosconfig: Path, endpoint: str, node: str, image: str) -> None:
         warn(f"upgrade progress watch dropped for {node} "
              "(client/server version skew); polling for the new version instead")
         return
-    raise RuntimeError(f"upgrade of {node} failed: {msg.strip()}")
+    raise ReconcileError(f"upgrade of {node} failed: {msg.strip()}")
 
 
 def upgrade_k8s(talosconfig: Path, endpoint: str, node: str, version: str) -> None:

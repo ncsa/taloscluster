@@ -306,7 +306,7 @@ class ProxmoxBackend:
     def _raw(inventory: InfrastructureInventory) -> ProxmoxInventory:
         raw = inventory.provider_data
         if not isinstance(raw, ProxmoxInventory):
-            raise RuntimeError("Proxmox inventory is unavailable")
+            raise ReconcileError("Proxmox inventory is unavailable")
         return raw
 
     def ensure_boot_artifact(self) -> str:

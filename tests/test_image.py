@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from taloscluster.errors import ReconcileError
 from taloscluster.openstack import image
 from taloscluster.talos import factory
 
@@ -312,3 +313,23 @@ def test_remove_image_prompts_with_both_names_when_both_exist(monkeypatch):
         "type 'talos-v1.13.9-tailscale-abc123, talos-v1.13.9-tailscale' to confirm: "
     ]
     assert [i.id for i in backend.conn.image.images] == []
+
+
+def test_remove_image_reports_a_failed_delete_as_reconcile_error(monkeypatch):
+    """A cloud that refuses the delete (a Ceph clone of the image's boot volume
+    still exists) fails as a ReconcileError, the same typed error the Proxmox
+    backend and every other converge failure raise."""
+    from openstack import exceptions as os_exceptions
+
+    monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
+    backend = _os_backend(
+        images=[SimpleNamespace(name="talos-v1.13.9-tailscale-abc123", id="img-new")]
+    )
+
+    def refuse(_image_id):
+        raise os_exceptions.SDKException("image in use")
+
+    backend.conn.image.delete_image = refuse
+
+    with pytest.raises(ReconcileError, match="could not delete image"):
+        backend.remove_image(assume_yes=True)
