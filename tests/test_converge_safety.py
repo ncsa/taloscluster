@@ -1816,6 +1816,37 @@ def test_recover_missing_kubeconfig_reports_but_does_not_write_in_dry_run(
     assert not kubeconfig.exists()
 
 
+def test_recover_missing_kubeconfig_timeout_is_not_read_as_fresh(monkeypatch, tmp_path):
+    """A reachability wait that expires (the first control plane never answers
+    apid) cannot tell an interrupted first run from a live-but-unreachable
+    cluster, so recovery must not report False -- the "fresh, bootstrap it"
+    verdict -- but raise the timeout to the caller, which refuses the fresh
+    path instead of bootstrapping a maybe-live cluster."""
+    kubeconfig = tmp_path / "kubeconfig"
+
+    def timeout(*_a, **_k):
+        raise TimeoutError(
+            "phoenix-controlplane-01 -> phoenix-controlplane-01 did not become "
+            "reachable within 15m."
+        )
+
+    monkeypatch.setattr(converge, "_wait_reachable", timeout)
+    monkeypatch.setattr(
+        converge.talosctl, "kubeconfig",
+        lambda *_a: pytest.fail("a node that never answered must not be fetched from"),
+    )
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    with pytest.raises(TimeoutError):
+        converge._recover_missing_kubeconfig(
+            Path("talosconfig"), "phoenix-controlplane-01",
+            "phoenix-controlplane-01", kubeconfig,
+        )
+    assert not kubeconfig.exists()
+    assert "will not bootstrap" in " ".join(warns)
+
+
 def test_resolve_cp1_address_prefers_network_result_then_inventory():
     cfg = SimpleNamespace(name="phoenix")
     host = "phoenix-controlplane-01"
@@ -3127,6 +3158,49 @@ def test_converge_rebootstraps_an_interrupted_first_run(monkeypatch, tmp_path):
     assert "reachable" in events and "bootstrap" in events and "kubeconfig" in events
     joined = " ".join(warns)
     assert "NOT a fresh cluster" not in joined
+
+
+def test_converge_refuses_a_first_run_whose_control_plane_never_answers(
+    monkeypatch, tmp_path
+):
+    """Machines exist but the recovery wait burns its whole budget without cp-01
+    ever answering apid: an interrupted first run and a live-but-unreachable
+    cluster look identical, so converge must refuse the fresh path -- no machine
+    creation, no bootstrap -- defer the plugin hooks and exit nonzero, and it
+    must not wait out bootstrap's reachability budget a second time after the
+    recovery wait already spent the one shared budget."""
+    inventory = _cp_inventory("phoenix-controlplane-01")
+    state = _FakeState(True, tmp_path / "talossecrets.yaml")
+    backend = _ExistingDownBackend(inventory)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    waits: list[str] = []
+
+    def timeout(*_a, **_k):
+        waits.append("wait")
+        raise TimeoutError("did not become reachable within 15m")
+
+    monkeypatch.setattr(converge, "_wait_reachable", timeout)
+    monkeypatch.setattr(
+        converge.talosctl, "bootstrap",
+        lambda *a, **k: pytest.fail("bootstrap must be refused"),
+    )
+    monkeypatch.setattr(
+        converge.talosctl, "kubeconfig",
+        lambda *a, **k: pytest.fail("kubeconfig phase must be skipped"),
+    )
+    warns: list[str] = []
+    monkeypatch.setattr(converge, "warn", warns.append)
+
+    assert _stub_converge_full(
+        monkeypatch, tmp_path, state, backend,
+        {"phoenix-controlplane-01": "config"},
+    ) == 1  # a maybe-live unreachable cluster is an incomplete converge
+
+    assert backend.mutations == []  # reconcile_machines never ran -> no recreate
+    assert backend.plugin_converge == []  # mutating plugin converge hooks deferred
+    assert len(waits) == 1  # one shared reachability budget, not recovery + bootstrap
+    joined = " ".join(warns)
+    assert "cannot be told apart" in joined
 
 
 def test_converge_bootstraps_a_keyless_tailscale_cluster_on_the_real_address(

@@ -205,22 +205,46 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # run -- machines but no kubeconfig -- still bootstraps). A recovered
     # management machine restored the identity but not the derived kubeconfig,
     # so a missing kubeconfig with live machines triggers recovery from the
-    # restored identity before the fresh/up decision is made. The endpoint and
+    # restored identity before the fresh/up decision is made. A recovery whose
+    # reachability wait expires without the node ever answering raises instead:
+    # with machines present an interrupted first run and a live-but-unreachable
+    # cluster look identical, so the run refuses to create machines or bootstrap
+    # rather than wait out bootstrap's reachability budget a second time and
+    # bootstrap a maybe-live cluster. The endpoint and
     # dial target are the same real control plane (`_talos_endpoint` resolves
     # cp-01's tailnet name when tailscale is on, else its real address -- never
     # the kube-api VIP -- since talosctl uses `-n` as the apid dial target).
     cp1_endpoint = _talos_endpoint(cfg, refs, inv, talosconfig_path, required=False)
-    up = _kube_up(
-        kubeconfig_path,
-        inv,
-        recover=state.secrets_exist() and bool(inv.machines),
-        talosconfig=talosconfig_path,
-        endpoint=cp1_endpoint,
-        node=cp1_endpoint,
-    )
+    recovery_unreachable = False
+    try:
+        up = _kube_up(
+            kubeconfig_path,
+            inv,
+            recover=state.secrets_exist() and bool(inv.machines),
+            talosconfig=talosconfig_path,
+            endpoint=cp1_endpoint,
+            node=cp1_endpoint,
+        )
+    except TimeoutError:
+        # the recovery wait spent its whole budget without cp-01 answering apid.
+        # An interrupted first run and a live-but-unreachable cluster share that
+        # look, so the fresh path is refused below -- no machine creation, no
+        # bootstrap against a cluster that may be live, and no second
+        # reachability wait before bootstrap (the one budget was already spent;
+        # a re-run once the node answers sorts it out either way).
+        up = False
+        recovery_unreachable = True
     bootstrapped_before = kubeconfig_path.is_file() and kubeconfig_path.stat().st_size > 0
-    existing_but_down = not up and bool(inv.machines) and bootstrapped_before
-    if existing_but_down:
+    existing_but_down = not up and bool(inv.machines) and (
+        bootstrapped_before or recovery_unreachable
+    )
+    if recovery_unreachable:
+        warn(
+            f"{cp1_endpoint} never answered, so an interrupted first run and a "
+            "live-but-unreachable cluster cannot be told apart -- refusing to "
+            "create machines or bootstrap; make the node reachable and re-run"
+        )
+    elif existing_but_down:
         info("cluster not up: existing but unreachable -- not bootstrapping")
     else:
         info(f"cluster {'UP' if up else 'not up (will bootstrap if needed)'}")
@@ -1030,8 +1054,12 @@ def _kube_up(
       infrastructure machines exist (`recover=True`), the kubeconfig is
       regenerated from the restored identity first (`_recover_missing_kubeconfig`),
       so the probe runs against the real cluster instead of assuming fresh; only
-      if that recovery produces no kubeconfig (a never-bootstrapped first run, or
-      an unreachable node) is the cluster read as never-bootstrapped.
+      if that recovery fails after the node answered -- it serves no kubeconfig,
+      the signature of a never-bootstrapped first run -- is the cluster read as
+      never-bootstrapped. A recovery whose reachability wait expires (the node
+      never answered, which a live cluster with a down control plane also looks
+      like) raises the wait's TimeoutError for the caller to refuse the fresh
+      path instead of bootstrap.
 
     And when a kubeconfig DOES exist yet the API still does not answer after
     every attempt, the operator is warned loudly that this is an existing but
@@ -1048,8 +1076,8 @@ def _kube_up(
                 # bootstrap if needed"
                 return True
             if not recovered:
-                # no kubeconfig was reproduced: a never-bootstrapped first run
-                # (or an unreachable node) -- probe cannot succeed
+                # no kubeconfig was reproduced: the node answered but serves no
+                # kubeconfig -- a never-bootstrapped first run, probe cannot succeed
                 return False
         else:
             # never bootstrapped (no kubeconfig); a probe cannot succeed
@@ -1088,9 +1116,13 @@ def _recover_missing_kubeconfig(
     restored, then let the caller probe it. Returns True only once a non-empty
     kubeconfig was actually written (in dry-run, which writes nothing, True
     reports that a real run would recover it, so the caller reads the cluster
-    as up). A
-    never-bootstrapped first run fails here (the node runs no api-server to serve
-    a kubeconfig) and stays a fresh cluster for the caller to bootstrap.
+    as up). A never-bootstrapped first run fails here (the node runs no
+    api-server to serve a kubeconfig) and stays a fresh cluster for the caller
+    to bootstrap -- but only once the node answered: a reachability wait that
+    expires without apid ever replying raises the TimeoutError instead, because
+    an interrupted first run and a live-but-unreachable cluster are
+    indistinguishable and the caller must refuse the fresh path rather than
+    bootstrap a maybe-live cluster.
 
     The control-plane endpoint is always a real node -- never the kube-api VIP --
     so writing a kubeconfig proves the etcd/control plane behind it is up.
@@ -1110,8 +1142,21 @@ def _recover_missing_kubeconfig(
         _wait_reachable(
             talosconfig, endpoint, node, timeout_s=reachable_timeout_s, interval_s=interval_s
         )
+    except TimeoutError:
+        # the node never answered apid within the budget: an interrupted first
+        # run and a live-but-unreachable cluster look identical, so this must
+        # not read as "fresh, bootstrap it" -- raise and let the caller refuse
+        # the fresh path
+        warn(
+            f"could not reach {node} to recover the kubeconfig: an interrupted "
+            "first run and a live cluster cannot be told apart, so converge "
+            "will not bootstrap or create machines -- make the node reachable "
+            "and re-run"
+        )
+        raise
+    try:
         talosctl.kubeconfig(talosconfig, endpoint, node, kubeconfig)
-    except (TimeoutError, subprocess.CalledProcessError, OSError):
+    except (subprocess.CalledProcessError, OSError):
         if kubeconfig.is_file():
             # a partial/empty fetch must not read as a usable kubeconfig
             try:
