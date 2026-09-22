@@ -26,6 +26,12 @@ from ..output import action, dry_run, info, warn
 
 BIN = "talosctl"
 
+# A node that answers apid at all replies to a `version` probe in well under a
+# second; an unroutable address would otherwise hold the probe open for the OS
+# TCP connect timeout -- minutes, once per probed server. Anything slower than
+# this reads as unreachable, which the poll loops simply retry.
+PROBE_TIMEOUT_S = 15
+
 # Tailscale CGNAT addresses are the full 100.64.0.0/10 (100.64.0.0-100.127.255.255),
 # not just the 100.64.0.0/16 a naive `startswith("100.64.")` would catch.
 TAILSCALE_NET = ipaddress.ip_network("100.64.0.0/10")
@@ -144,8 +150,18 @@ def _talos(talosconfig: Path, endpoint: str, node: str, *cmd: str) -> list[str]:
 
 def reachable(talosconfig: Path, endpoint: str, node: str) -> bool:
     """True if the node's talos apid answers (used to wait for a fresh node to
-    join the tailnet before bootstrap)."""
-    rc, _, _ = _run_nocheck(_talos(talosconfig, endpoint, node, "version"))
+    join the tailnet before bootstrap).
+
+    Bounded by a subprocess timeout: a probe against an unroutable address
+    would otherwise stall for the OS TCP connect timeout, and an expired probe
+    reads as unreachable.
+    """
+    try:
+        rc, _, _ = _run_nocheck(
+            _talos(talosconfig, endpoint, node, "version"), timeout=PROBE_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return rc == 0
 
 
@@ -156,8 +172,17 @@ def maintenance_reachable(node: str) -> bool:
     apid accepts unauthenticated clients (--insecure). A node that runs a
     configuration refuses the insecure API, so this probe tells a
     waiting-to-be-joined machine from one that is already configured.
+
+    Bounded by a subprocess timeout like `reachable`: an unroutable address
+    reads as unreachable instead of stalling the caller for the OS TCP connect
+    timeout.
     """
-    rc, _, _ = _run_nocheck(["version", "--insecure", "-n", node])
+    try:
+        rc, _, _ = _run_nocheck(
+            ["version", "--insecure", "-n", node], timeout=PROBE_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return rc == 0
 
 

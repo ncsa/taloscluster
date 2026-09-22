@@ -1141,12 +1141,47 @@ def test_maintenance_reachable_runs_insecure_behind_the_subcommand(monkeypatch):
 
     def fake_run_nocheck(args, timeout=None):
         seen["args"] = args
+        seen["timeout"] = timeout
         return 0, "", ""
 
     monkeypatch.setattr(talosctl, "_run_nocheck", fake_run_nocheck)
 
     assert talosctl.maintenance_reachable("172.29.21.5") is True
     assert seen["args"] == ["version", "--insecure", "-n", "172.29.21.5"]
+    assert seen["timeout"] == talosctl.PROBE_TIMEOUT_S
+
+
+def test_reachable_passes_a_subprocess_timeout(monkeypatch):
+    seen = {}
+
+    def fake_run_nocheck(args, timeout=None):
+        seen["timeout"] = timeout
+        return 0, "", ""
+
+    monkeypatch.setattr(talosctl, "_run_nocheck", fake_run_nocheck)
+
+    assert talosctl.reachable(Path("talosconfig"), "ep", "172.29.21.5") is True
+    assert seen["timeout"] == talosctl.PROBE_TIMEOUT_S
+
+
+def test_reachable_treats_a_timed_out_probe_as_unreachable(monkeypatch):
+    """The probes run in validate for every unjoined non-redfish server, so an
+    unroutable address must cost the subprocess timeout once, not the OS TCP
+    connect timeout -- and read as unreachable, like any other no-answer."""
+
+    def hangs(args, timeout=None):
+        raise subprocess.TimeoutExpired(talosctl.BIN, timeout)
+
+    monkeypatch.setattr(talosctl, "_run_nocheck", hangs)
+    assert talosctl.reachable(Path("talosconfig"), "ep", "172.29.21.5") is False
+
+
+def test_maintenance_reachable_treats_a_timed_out_probe_as_unreachable(monkeypatch):
+    def hangs(args, timeout=None):
+        raise subprocess.TimeoutExpired(talosctl.BIN, timeout)
+
+    monkeypatch.setattr(talosctl, "_run_nocheck", hangs)
+    assert talosctl.maintenance_reachable("172.29.21.5") is False
 
 
 def test_apply_config_insecure_runs_insecure_behind_the_subcommand(monkeypatch):
