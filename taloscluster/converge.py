@@ -68,8 +68,8 @@ from .talos import factory, machineconfig, talosctl
 def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     """Make the cluster match cluster.yaml. Returns a non-zero exit code when
     an installed plugin failed, when an existing cluster remains unreachable,
-    or when a configured metal machine did not join this run -- an incomplete
-    converge that must not read as a clean no-op. A plugin
+    or when a metal machine it set out to join did not join this run -- an
+    incomplete converge that must not read as a clean no-op. A plugin
     failure happens only once the cluster itself is already built, so a
     downstream registration failure must not look like a converge that did not
     happen; an unreachable existing cluster is the reverse -- nothing was
@@ -304,6 +304,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     log("compute")
     needs_restart: set[str] = set()
     metal_unjoined: set[str] = set()
+    metal_deferred: set[str] = set()
     if existing_but_down and not dry_run():
         warn(
             "skipping compute: machines exist but the kube-api is unreachable -- "
@@ -344,12 +345,15 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
                 )
             )
         needs_restart = backend.reconcile_machines(machines, inv, boot_image, configs) or set()
-        # the bare-metal half of the same phase: a configured machine that is
-        # not in the cluster is brought in here, after the existing nodes were
-        # upgraded, so it never joins newer than the rest. One that could not
-        # be brought in is reported, not fatal -- but it keeps the run from
-        # reading as a clean no-op at the end
-        metal_unjoined = _join_metal(cfg, configs, talosconfig_path, kubeconfig_path)
+        # the bare-metal half of the same phase: a configured machine whose
+        # group opts into auto-join and that is not in the cluster is brought
+        # in here, after the existing nodes were upgraded, so it never joins
+        # newer than the rest. One that could not be brought in is reported,
+        # not fatal -- but it keeps the run from reading as a clean no-op at
+        # the end; a machine auto-join does not cover is left for `metal join`
+        metal_unjoined, metal_deferred = _join_metal(
+            cfg, configs, talosconfig_path, kubeconfig_path
+        )
     else:
         warn("skipping compute: no machine configs (network fip not ready)")
 
@@ -415,9 +419,11 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         _require_final_health(talosconfig_path, cp1, refs.kubernetes.vip, kubeconfig_path)
         # every configured machine must be Ready before the run reads clean --
         # the VM pools and a metal machine joined this run or before alike;
-        # one already reported as not joined can never pass and is left out
+        # one already reported as not joined can never pass and is left out,
+        # and so is one auto-join does not cover -- it is not in the cluster
+        # and converge was never asked to bring it in
         expected = {s.name for s in metal_servers} | set(machines)
-        _wait_nodes_ready(kubeconfig_path, expected - metal_unjoined)
+        _wait_nodes_ready(kubeconfig_path, expected - metal_unjoined - metal_deferred)
         # OpenStack first-boot and scaled-up nodes are created on the shared
         # base image, so re-check every node's running schematic now that it has
         # joined and reinstall any that came up short of its configured
@@ -562,16 +568,18 @@ def _metal_unjoined(cfg: Config, kubeconfig: Path) -> list[MetalServer]:
 
 
 def _validate_metal_joinable(cfg: Config, kubeconfig: Path) -> None:
-    """Refuse a configured metal machine converge could never bring in.
+    """Refuse a metal machine converge is set to join but could never bring in.
 
     The provider backends refuse a change they cannot reconcile in place during
     the validate phase, before any later phase mutates, so a rejected config
-    never leaves a half-applied cluster. A machine the config lists but that is
-    neither in the cluster, waiting in maintenance mode, nor reachable through a
-    BMC converge may power on is exactly such a change: no phase can bring it in
-    and there is nothing to drive. Hardware is physical, so the fix is a person
-    at the rack -- converge says which machine and stops while the cluster is
-    still untouched.
+    never leaves a half-applied cluster. A machine the config lists for
+    auto-join but that is neither in the cluster, waiting in maintenance mode,
+    nor reachable through a BMC converge may power on is exactly such a change:
+    no phase can bring it in and there is nothing to drive. Hardware is
+    physical, so the fix is a person at the rack -- converge says which machine
+    and stops while the cluster is still untouched. A machine auto-join does
+    not cover is never converge's to bring in -- joining it is `metal join`'s
+    job -- so its absence is the operator's business and is not checked here.
 
     With no kubeconfig the kube phase has not yet recovered a lost one or
     bootstrapped a fresh cluster, so a joined machine cannot be told from a
@@ -583,7 +591,9 @@ def _validate_metal_joinable(cfg: Config, kubeconfig: Path) -> None:
     stuck = [
         s
         for s in _metal_unjoined(cfg, kubeconfig)
-        if not s.redfish and not talosctl.maintenance_reachable(metal_talos.cluster_ip(s))
+        if s.auto_join
+        and not s.redfish
+        and not talosctl.maintenance_reachable(metal_talos.cluster_ip(s))
     ]
     if not stuck:
         return
@@ -787,7 +797,7 @@ def _join_metal(
     configs: dict[str, str],
     talosconfig: Path,
     kubeconfig: Path,
-) -> set[str]:
+) -> tuple[set[str], set[str]]:
     """Bring every configured-but-unjoined metal machine into the cluster.
 
     The bare-metal half of the compute phase, and deliberately in it: a VM pool
@@ -797,6 +807,13 @@ def _join_metal(
     generated, which carries the running Kubernetes version -- or the upgrade
     target when this run is also stepping a `kubernetes.version` bump, since a
     machine joining mid-upgrade has no prior minor to step either.
+
+    Only a machine whose group (or its own override) opts in with `auto_join`
+    is brought in: the join pushes the machine config -- the cluster's
+    credentials with it -- to whatever answers at the machine's address in
+    maintenance mode, an unauthenticated apply by design, so converge does it
+    implicitly only where the config asks for it. Everyone else is left for an
+    explicit `metal join` and reported as deferred.
 
     A machine already waiting in maintenance mode is applied straight away. One
     with a BMC converge may drive is booted from the install ISO and waited out
@@ -812,12 +829,15 @@ def _join_metal(
     Returns the names of the machines that did not join this run -- one that
     never answered the maintenance apid within its budget, and one left alone
     above -- so the caller can leave them out of the Ready wait and report an
-    incomplete converge instead of a clean exit.
+    incomplete converge instead of a clean exit; and the deferred names, the
+    machines auto-join does not cover, which are likewise out of the Ready wait
+    but are an expected absence, not an incomplete run.
     """
     unjoined: set[str] = set()
+    deferred: set[str] = set()
     pending = _metal_unjoined(cfg, kubeconfig)
     if not pending:
-        return unjoined
+        return unjoined, deferred
     # the metal base set: the VM providers' image carries qemu-guest-agent,
     # whose service never starts on bare metal and would leave the machine
     # blocked in startAllServices short of the maintenance apid
@@ -826,6 +846,13 @@ def _join_metal(
     )
     for server in sorted(pending, key=lambda s: 0 if s.role == "controlplane" else 1):
         ip = metal_talos.cluster_ip(server)
+        if not server.auto_join:
+            info(
+                f"metal {server.name} ({ip}) is not in the cluster and its group "
+                "does not auto-join; join it with `metal join`"
+            )
+            deferred.add(server.name)
+            continue
         config_yaml = configs.get(server.name)
         if not config_yaml:
             # no machine config this run (no secrets, or no advertised endpoint
@@ -861,7 +888,7 @@ def _join_metal(
         if not dry_run():
             talosctl.apply_config_insecure(ip, config_yaml)
             info(f"metal {server.name}: config applied; it installs to {server.disk} and reboots")
-    return unjoined
+    return unjoined, deferred
 
 
 def _boot_metal(server: MetalServer, iso_url: str) -> None:

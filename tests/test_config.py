@@ -1048,6 +1048,52 @@ def test_metal_boot_timeout_defaults_to_ten_minutes(make_config):
     assert cfg.metal.groups["phoenix"].servers["rp001"].boot_timeout == 600
 
 
+def test_metal_auto_join_defaults_to_off(make_config):
+    """Converge joins an unjoined machine only where the configuration opts in,
+    so a group that says nothing about it is left to `metal join`."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
+    }}})
+    group = cfg.metal.groups["phoenix"]
+    assert group.auto_join is False
+    assert group.servers["rp001"].auto_join is False
+
+
+def test_metal_auto_join_is_a_group_default_one_server_may_opt_out_of(make_config):
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "auto_join": True,
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "servers": {
+            "rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}},
+            "rp002": {
+                "auto_join": False,
+                "interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}},
+            },
+        },
+    }}})
+    group = cfg.metal.groups["phoenix"]
+    assert group.auto_join is True
+    assert group.servers["rp001"].auto_join is True
+    assert group.servers["rp002"].auto_join is False
+
+
+@pytest.mark.parametrize("bad", [0, 1, "true"])
+def test_metal_auto_join_must_be_a_boolean(make_config, bad):
+    with pytest.raises(ConfigError, match="auto_join must be true or false"):
+        make_config({"metal": {"phoenix": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "auto_join": bad,
+            "interfaces": {"enp1s0f0": {"role": "cluster"}},
+            "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
+        }}})
+
+
 # not None: the loader strips null keys at group and server level, so
 # `boot_timeout:` with no value means unset and takes the default
 @pytest.mark.parametrize("bad", [0, -60, True, "30m", 1.5])

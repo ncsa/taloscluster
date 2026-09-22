@@ -70,7 +70,7 @@ _PROXMOX_EXTERNAL_KEYS = {"bridge"}
 #: Direct keys a `metal` group accepts. A group is the defaults its `servers`
 #: start from: each server carries the same keys and overrides its own.
 _METAL_GROUP_KEYS = {"role", "redfish", "disk", "network", "interfaces", "bmc",
-                     "boot_timeout", "servers"}
+                     "boot_timeout", "auto_join", "servers"}
 #: Direct keys one `metal.<group>.servers` entry accepts: the group settings it
 #: may override, minus the servers list itself.
 _METAL_SERVER_KEYS = _METAL_GROUP_KEYS - {"servers"}
@@ -317,6 +317,7 @@ class MetalGroup:
     disk: str                          # install disk device
     network: L2Network                 # the group's node L2
     redfish: bool = False
+    auto_join: bool = False            # converge may join unjoined machines itself
     boot_timeout: int = DEFAULT_METAL_BOOT_TIMEOUT_S   # seconds to maintenance mode
     interfaces: dict[str, MetalInterface] = field(default_factory=dict)
     bmc: MetalBmc = field(default_factory=MetalBmc)
@@ -333,6 +334,7 @@ class MetalServer:
     disk: str                          # install disk device
     network: L2Network                 # the machine's node L2
     redfish: bool = False
+    auto_join: bool = False            # converge may join this machine itself
     boot_timeout: int = DEFAULT_METAL_BOOT_TIMEOUT_S   # seconds to maintenance mode
     interfaces: dict[str, MetalInterface] = field(default_factory=dict)
     bmc: MetalBmc = field(default_factory=MetalBmc)
@@ -1039,6 +1041,7 @@ def _metal_fields(
         "role": _metal_role(require(raw, "role", where=where), f"{where}.role"),
         "disk": _metal_disk(require(raw, "disk", where=where), f"{where}.disk"),
         "redfish": _metal_flag(raw.get("redfish", False), f"{where}.redfish"),
+        "auto_join": _metal_flag(raw.get("auto_join", False), f"{where}.auto_join"),
         "boot_timeout": _metal_boot_timeout(
             raw.get("boot_timeout", DEFAULT_METAL_BOOT_TIMEOUT_S), f"{where}.boot_timeout"
         ),

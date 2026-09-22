@@ -41,7 +41,7 @@ metal:
       password: CHANGE-ME
 ```
 
-A group states the defaults every machine in `servers` starts from, and each server overrides them for its own machine: plain settings (`role`, `redfish`, `disk`, `network`) are replaced when the server sets one, while `bmc` merges key by key and `interfaces` merge per interface, so the group can carry the credentials and the cabling plan and each server adds only its own addresses. The [`metal` commands](../commands.md#metal) then join the machines: they boot them from the Talos install ISO (through the BMC's virtual media, or served over the LAN with `--serve`), push the generated machine configuration to each machine in maintenance mode, and verify it came back with it.
+A group states the defaults every machine in `servers` starts from, and each server overrides them for its own machine: plain settings (`role`, `redfish`, `disk`, `network`) are replaced when the server sets one, while `bmc` merges key by key and `interfaces` merge per interface, so the group can carry the credentials and the cabling plan and each server adds only its own addresses. The [`metal` commands](../commands.md#metal) then join the machines: they boot them from the Talos install ISO (through the BMC's virtual media, or served over the LAN with `--serve`), push the generated machine configuration to each machine in maintenance mode, and verify it came back with it. Converge brings the machines of an [`auto_join`](#metalgroupauto_join) group in the same way during its compute phase; without the opt-in, joining is the `metal` commands' job alone.
 
 ### `metal.<group>.role`
 
@@ -109,7 +109,7 @@ The VLAN id tagged on an `external` link's VLAN child, instead of the external n
 
 Optional · seconds · default `600`
 
-How long a machine is given to answer the maintenance-mode apid after it is booted, for both `metal wait`/`metal join` and the converge phase that joins configured machines. Cold hardware can spend many minutes in POST, firmware and NIC initialisation before Talos starts, so a group of slow machines raises this once for every machine in it and a single slow machine overrides it further:
+How long a machine is given to answer the maintenance-mode apid after it is booted, for both `metal wait`/`metal join` and the converge phase that joins the machines of an [`auto_join`](#metalgroupauto_join) group. Cold hardware can spend many minutes in POST, firmware and NIC initialisation before Talos starts, so a group of slow machines raises this once for every machine in it and a single slow machine overrides it further:
 
 ```yaml
 metal:
@@ -121,6 +121,14 @@ metal:
 ```
 
 A machine that does not answer within its budget is reported and skipped; the rest of the converge is unaffected and the next run picks it up, but the run exits nonzero — the converge is incomplete, not a clean no-op.
+
+### `metal.<group>.auto_join`
+
+Optional · boolean · default `false`
+
+Whether converge may join the group's unjoined machines itself. A machine the section lists that the cluster does not have is brought in by converge's compute phase when this is `true` — applied in maintenance mode straight away, or booted from the install media and waited out first when [`redfish`](#metalgroupredfish) allows, exactly the flow [`metal join`](../commands.md#metal) runs for one machine — and left alone when it is `false`, so joining stays with an explicit `metal join` and the machine's absence reads as expected rather than as an incomplete converge. A server may override the group for its own machine, and a machine that does not answer within its [`boot_timeout`](#metalgroupboot_timeout) is reported and skipped as before.
+
+The opt-in is deliberate: a machine in maintenance mode runs no configuration yet, so its API accepts any client, and the apply sends the full machine configuration — the cluster's credentials with it — to whatever answers at the machine's cluster address. `metal join` does this once, to the machine the operator pointed it at; converge doing it on every run would hand the configuration to anything that answers on the group's L2, so it only happens where the configuration asks for it. See [Metal setup](../providers/metal.md) for the trust this puts in the metal network.
 
 ### `metal.<group>.bmc`
 

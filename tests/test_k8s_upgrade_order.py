@@ -547,6 +547,7 @@ def test_converge_joins_metal_at_the_upgraded_version(make_config, monkeypatch, 
             "worker": {
                 "role": "worker",
                 "disk": "/dev/sda",
+                "auto_join": True,
                 "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
                 "servers": {"rp001": {}},
             },

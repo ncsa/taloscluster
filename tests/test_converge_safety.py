@@ -3215,7 +3215,8 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     metal = SimpleNamespace(
         groups={"site": SimpleNamespace(
             servers={"rp001": SimpleNamespace(
-                name="rp001", role="worker", redfish=False, disk="/dev/sda"
+                name="rp001", role="worker", redfish=False, disk="/dev/sda",
+                auto_join=True,
             )}
         )}
     )
@@ -3325,7 +3326,7 @@ def test_converge_reports_a_failed_metal_join_as_incomplete(monkeypatch, tmp_pat
         groups={"site": SimpleNamespace(
             servers={"rp001": SimpleNamespace(
                 name="rp001", role="worker", redfish=True, disk="/dev/sda",
-                boot_timeout=600, bmc=SimpleNamespace(ip="192.0.2.61"),
+                auto_join=True, boot_timeout=600, bmc=SimpleNamespace(ip="192.0.2.61"),
             )}
         )}
     )
@@ -3393,6 +3394,87 @@ def test_converge_reports_a_failed_metal_join_as_incomplete(monkeypatch, tmp_pat
     assert waited == [{"phoenix-controlplane-01"}]
 
 
+def test_converge_leaves_a_machine_without_auto_join_to_metal_join(monkeypatch, tmp_path):
+    """A machine whose group does not opt into auto-join is not converge's to
+    join: it is neither probed nor applied to -- even waiting in maintenance
+    mode -- and its BMC is never touched. Its absence is expected, so it stays
+    out of the Ready wait and the run exits clean instead of incomplete."""
+    inventory = _cp_inventory("phoenix-controlplane-01")
+    state = _FakeState(True, tmp_path / "talossecrets.yaml")
+    backend = _MetalConfigBackend(inventory)
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+    metal = SimpleNamespace(
+        groups={"site": SimpleNamespace(
+            servers={"rp001": SimpleNamespace(
+                name="rp001", role="worker", redfish=True, disk="/dev/sda",
+                auto_join=False, boot_timeout=600, bmc=SimpleNamespace(ip="192.0.2.61"),
+            )}
+        )}
+    )
+    cfg = SimpleNamespace(
+        name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+        extension_sets=lambda: [()],
+        machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+        tailscale_enabled=True,
+        tailscale_auth_key=None,
+        metal_servers={"rp001": "worker"},
+        metal=metal,
+    )
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge.talosctl, "gen_talosconfig", lambda *a, **k: "talosconfig")
+    monkeypatch.setattr(
+        converge.machineconfig, "build_configs",
+        lambda *a, **k: {"phoenix-controlplane-01": "vm-config"},
+    )
+    monkeypatch.setattr(
+        converge.metal_talos, "installer",
+        lambda _cfg: ("m-sch", "factory.talos.dev/metal-installer/m-sch:v1.13.0"),
+    )
+    monkeypatch.setattr(
+        converge.metal_talos, "build_config",
+        lambda _s, *_a, **_k: "metal-config:rp001",
+    )
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.31.0")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
+    monkeypatch.setattr(converge, "_require_final_health", lambda *a, **k: None)
+    waited: list[set[str]] = []
+
+    def fake_wait(_kubeconfig, nodes, *_a, **_k):
+        waited.append(set(nodes))
+
+    monkeypatch.setattr(converge, "_wait_nodes_ready", fake_wait)
+    monkeypatch.setattr(converge.kubectl, "get_nodes_wide", lambda _kc: "")
+    monkeypatch.setattr(converge, "_reconcile_joined", lambda *a, **k: inventory)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *a, **kw: 0)
+    # the machine is even sitting in maintenance mode -- still not converge's
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: True)
+    monkeypatch.setattr(
+        converge.metal_redfish,
+        "Redfish",
+        lambda _bmc: pytest.fail("a machine without auto-join must not be driven through its BMC"),
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config_insecure",
+        lambda *_a: pytest.fail("a machine without auto-join must not be applied to"),
+    )
+
+    assert converge.converge(tmp_path) == 0
+    # the deferred machine is out of the Ready wait; the control plane stays in
+    assert waited == [{"phoenix-controlplane-01"}]
+
+
 def test_converge_leaves_a_plan_clean_when_no_metal_config_exists(monkeypatch, tmp_path):
     """Plan never joins (no secrets -> no machine configs), so the pending
     machines must not turn the plan's exit nonzero."""
@@ -3401,7 +3483,8 @@ def test_converge_leaves_a_plan_clean_when_no_metal_config_exists(monkeypatch, t
     metal = SimpleNamespace(
         groups={"site": SimpleNamespace(
             servers={"rp001": SimpleNamespace(
-                name="rp001", role="worker", redfish=False, disk="/dev/sda"
+                name="rp001", role="worker", redfish=False, disk="/dev/sda",
+                auto_join=True,
             )}
         )}
     )
@@ -3442,7 +3525,7 @@ def _pending_metal_cfg(**server_kw):
     """A cfg whose one metal server is configured but not in the cluster."""
     fields = {
         "name": "rp001", "role": "worker", "disk": "/dev/sda", "redfish": False,
-        "boot_timeout": 600, "bmc": SimpleNamespace(ip="172.28.50.5"),
+        "auto_join": True, "boot_timeout": 600, "bmc": SimpleNamespace(ip="172.28.50.5"),
     }
     server = SimpleNamespace(**{**fields, **server_kw})
     return SimpleNamespace(
@@ -3479,6 +3562,24 @@ def test_validate_allows_a_redfish_machine_that_is_not_in_maintenance(monkeypatc
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
 
     converge._validate_metal_joinable(_pending_metal_cfg(redfish=True), kubeconfig)
+
+
+def test_validate_ignores_a_machine_auto_join_does_not_cover(monkeypatch, tmp_path):
+    """A machine whose group does not opt into auto-join is never converge's to
+    bring in -- joining it is `metal join`'s job -- so being absent from the
+    cluster, unreachable in maintenance mode and BMC-less must not refuse the
+    run: its absence is the operator's business."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "maintenance_reachable",
+        lambda _ip: pytest.fail("a machine without auto-join must not be probed"),
+    )
+
+    converge._validate_metal_joinable(_pending_metal_cfg(auto_join=False), kubeconfig)
 
 
 def test_validate_skips_the_joinable_check_without_a_kubeconfig(monkeypatch):
@@ -3679,7 +3780,7 @@ def test_join_metal_applies_the_config_to_a_machine_in_maintenance(monkeypatch):
             _pending_metal_cfg(), {"rp001": "rp001-config"},
             ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
         )
-        == set()
+        == (set(), set())
     )
 
     assert applied == [("192.0.2.61", "rp001-config")]
@@ -3767,7 +3868,7 @@ def test_join_metal_skips_a_machine_that_never_reaches_maintenance(monkeypatch):
     assert converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
         ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
-    ) == {"rp001"}
+    ) == ({"rp001"}, set())
 
 
 def test_join_metal_touches_nothing_in_a_dry_run(monkeypatch):
@@ -3824,7 +3925,7 @@ def test_join_metal_skips_a_joined_machine_whose_kube_node_is_missing(
         lambda *_a: pytest.fail("a joined machine must not have a config applied"),
     )
 
-    unjoined = converge._join_metal(
+    unjoined, _deferred = converge._join_metal(
         _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
         talosconfig, kubeconfig,
     )
@@ -3833,6 +3934,35 @@ def test_join_metal_skips_a_joined_machine_whose_kube_node_is_missing(
     # the machine is named back so it stays out of the Ready wait and the run
     # reports incomplete instead of a clean exit
     assert unjoined == {"rp001"}
+
+
+def test_join_metal_leaves_a_machine_without_auto_join_alone(monkeypatch):
+    """The apply-config --insecure a join performs is unauthenticated by design:
+    a maintenance-mode apid accepts any client, so whatever answers at the
+    machine's address receives the machine config -- the cluster's credentials
+    with it. A machine whose group does not opt into auto-join is therefore
+    neither probed nor applied to; joining it stays with `metal join`, and the
+    machine is reported as deferred -- an expected absence, out of the Ready
+    wait but not an incomplete run."""
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "maintenance_reachable",
+        lambda _ip: pytest.fail("a machine without auto-join must not be probed"),
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config_insecure",
+        lambda *_a: pytest.fail("a machine without auto-join must not be applied to"),
+    )
+
+    unjoined, deferred = converge._join_metal(
+        _pending_metal_cfg(auto_join=False), {"rp001": "rp001-config"},
+        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
+    )
+
+    assert unjoined == set()
+    assert deferred == {"rp001"}
 
 
 def test_metal_unjoined_ignores_a_failed_node_query(monkeypatch, tmp_path):
