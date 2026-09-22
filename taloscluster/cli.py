@@ -90,6 +90,7 @@ def _cmd_destroy(args, root):
 
 
 def _cmd_metal(args, root):
+    set_dry_run(bool(args.dry_run))
     if args.serve and args.action not in ("boot", "join"):
         raise Die(f"--serve only applies to 'boot' and 'join', not {args.action!r}")
     if args.action == "inspect":
@@ -293,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         help="show managed resources and nodes",
         description="Print the infrastructure provider and endpoint this cluster "
                     "uses (never the credential), provider-owned resources, the "
+                    "bare-metal machines a metal: section configures, the "
                     "kube-api and ingress endpoints and, if reachable, "
                     "`kubectl get nodes`. `-o yaml` prints the same information "
                     "as a yaml document instead.",
@@ -411,6 +413,11 @@ def main(argv: list[str] | None = None) -> int:
         "--serve", action="store_true",
         help="boot/join: download the install ISO and serve it from this "
              "machine over the LAN, for a BMC with no internet egress",
+    )
+    p_metal.add_argument(
+        "--dry-run", action="store_true",
+        help="print the state-changing actions without doing them "
+             "(inspect and wait only look, so the flag changes nothing)",
     )
     p_metal.set_defaults(func=_cmd_metal)
 

@@ -36,7 +36,7 @@ from ..config import Config, ConfigError, MetalServer, load_config
 from ..converge import _config_kubernetes_version
 from ..errors import ReconcileError
 from ..infrastructure import Endpoint, backend_for
-from ..output import action, info, report, warn
+from ..output import action, dry_run, info, report, warn
 from ..state import State
 from ..talos import talosctl
 from . import redfish
@@ -154,6 +154,15 @@ def boot(root: Path, name: str, *, serve: bool = False, foreground: bool = True)
         return
     _refuse_joined(root, server)
     iso_url = _iso_url(cfg)
+    if dry_run():
+        # no ISO download and no BMC call: the factory url is shown as the
+        # media source even though a --serve run would hand out a LAN url
+        if serve:
+            info("the ISO would be served from this machine over the LAN")
+        action(f"mount {iso_url} as the virtual media of {server.bmc.ip}")
+        action(f"one-time boot {server.bmc.ip} from the virtual media")
+        action(f"power on {server.bmc.ip}")
+        return
     if rf.eject_media():
         info(f"ejected the media already mounted on {server.bmc.ip}")
     if serve:
@@ -260,9 +269,13 @@ def apply(root: Path, name: str) -> None:
         kubernetes_version=_config_kubernetes_version(cfg, kubeconfig, bootstrapped),
     )
     out_dir = root / ".metal"
+    path = out_dir / f"{name}-{server.role}.yaml"
+    if dry_run():
+        action(f"write the machine config to {path}")
+        action(f"push it to the maintenance-mode node at {_cluster_ip(server)}")
+        return
     _warn_unignored(root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{name}-{server.role}.yaml"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write(config_yaml)
@@ -278,6 +291,8 @@ def eject(root: Path, name: str) -> None:
     if rf is None:
         return
     action(f"eject the virtual media of {server.bmc.ip}")
+    if dry_run():
+        return
     if rf.eject_media():
         info(f"virtual media ejected from {server.bmc.ip}")
     else:
@@ -343,6 +358,16 @@ def join(root: Path, name: str, *, serve: bool = False) -> None:
         boot(root, name, serve=serve, foreground=False)
     else:
         _no_bmc(server)
+    ip = _cluster_ip(server)
+    if dry_run():
+        # nothing was booted, so the polling steps would only run out their
+        # timeouts: the rest of the flow is listed, not waited out
+        action(f"wait for the maintenance apid on {ip}")
+        action(f"generate the machine config for {server.name} and push it to {ip}")
+        if server.redfish:
+            action(f"eject the virtual media of {server.bmc.ip}")
+        action(f"wait for {server.name} to come back with its configuration")
+        return
     wait(root, name)
     apply(root, name)
     if server.redfish:

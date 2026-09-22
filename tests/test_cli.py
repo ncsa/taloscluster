@@ -389,6 +389,14 @@ def test_metal_serve_is_rejected_for_the_bmc_free_actions(tmp_path, capsys):
     assert "--serve" in capsys.readouterr().err
 
 
+def test_metal_dry_run_sets_the_global_flag(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(cli, "set_dry_run", lambda enabled: seen.update(dry_run=enabled))
+    monkeypatch.setattr(cli._metal, "inspect", lambda root, name: None)
+    assert cli.main(["metal", "inspect", "rp001", "-C", str(tmp_path), "--dry-run"]) == 0
+    assert seen == {"dry_run": True}
+
+
 # -- metal-only configs are refused by every command -------------------------
 
 def _metal_only_dir(tmp_path, monkeypatch):

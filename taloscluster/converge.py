@@ -2377,6 +2377,9 @@ def status_report(root: Path) -> dict[str, Any]:
         "kubernetes": kubeapi,
         "ingress": ingress,
         "resources": inv.resources,
+        # no provider manages the metal machines, so they are reported straight
+        # from cluster.yaml -- the same map check verifies the cluster against
+        "metal": dict(sorted(cfg.metal_servers.items())),
         "nodes": kubectl.node_summary(kubeconfig_path) if up else [],
     }
 
@@ -2409,6 +2412,10 @@ def status(root: Path, output: str = "text") -> None:
         info(f"{kind}: {len(names)}")
         for n in names:
             info(f"    {n}")
+    if report["metal"]:
+        log("metal")
+        for name, role in report["metal"].items():
+            info(f"{name}: {role}")
     log("endpoints")
     info(f"kube api: {api_url or '(pending)'} (vip {kubeapi['vip'] or '(pending)'})")
     info(f"ingress:  {ingress['floating_ip'] or '(pending)'} (vip {ingress['vip'] or '(pending)'})")

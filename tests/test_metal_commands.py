@@ -19,6 +19,7 @@ from taloscluster.errors import ReconcileError
 from taloscluster.infrastructure import Endpoint
 from taloscluster.k8s import kubectl
 from taloscluster.metal import commands, redfish
+from taloscluster.output import set_dry_run
 
 VIP = "172.29.21.200"
 ISO_URL = "https://factory.talos.dev/image/abc123/v1.13.9/nocloud-amd64.iso"
@@ -730,6 +731,99 @@ def test_join_without_a_talosconfig_has_nothing_to_refuse(
         monkeypatch.setattr(commands, step, lambda root, name: None)
     commands.join(tmp_path, "rp001")
     assert joined == ["rp001"]
+
+
+# -- dry-run --------------------------------------------------------------------
+
+
+@pytest.fixture
+def dry_run_mode():
+    """Set the global dry-run flag for the test, resetting it afterwards."""
+    set_dry_run(True)
+    yield
+    set_dry_run(False)
+
+
+def test_boot_dry_run_prints_the_actions_without_touching_the_bmc(
+    make_config, tmp_path, fake_redfish, monkeypatch, stub_factory, capsys, dry_run_mode
+):
+    _cfg(make_config)
+    monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
+    commands.boot(tmp_path, "rp001")
+    # the client is constructed (the redfish-off check needs it) but never used
+    assert fake_redfish[-1].calls == []
+    out = capsys.readouterr().out
+    assert f"[dry-run] mount {ISO_URL} as the virtual media of 198.51.100.10" in out
+    assert "[dry-run] one-time boot 198.51.100.10 from the virtual media" in out
+    assert "[dry-run] power on 198.51.100.10" in out
+
+
+def test_boot_dry_run_serve_never_downloads_or_serves(
+    make_config, tmp_path, fake_redfish, monkeypatch, stub_factory, capsys, dry_run_mode
+):
+    _cfg(make_config)
+    monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
+    monkeypatch.setattr(
+        commands, "_ServedIso", lambda url: pytest.fail("no ISO must be downloaded")
+    )
+    commands.boot(tmp_path, "rp001", serve=True)
+    assert fake_redfish[-1].calls == []
+    assert "served from this machine" in capsys.readouterr().out
+
+
+def test_apply_dry_run_writes_and_pushes_nothing(
+    make_config, tmp_path, monkeypatch, stub_factory, cluster_endpoint, capsys,
+    dry_run_mode,
+):
+    _cfg(make_config)
+    (tmp_path / "talossecrets.yaml").write_text("dummy")
+    monkeypatch.setattr(
+        commands.metal_talos, "build_config", lambda *_a, **_k: "# config for rp001\n"
+    )
+    monkeypatch.setattr(
+        commands.talosctl, "apply_config_insecure",
+        lambda node, config: pytest.fail("no config must be pushed"),
+    )
+
+    commands.apply(tmp_path, "rp001")
+
+    assert not (tmp_path / ".metal").exists()
+    out = capsys.readouterr().out
+    assert "[dry-run] write the machine config to" in out
+    assert "[dry-run] push it to the maintenance-mode node at 172.29.21.5" in out
+
+
+def test_eject_dry_run_skips_the_bmc(
+    make_config, tmp_path, fake_redfish, capsys, dry_run_mode
+):
+    _cfg(make_config)
+    commands.eject(tmp_path, "rp001")
+    assert fake_redfish[-1].calls == []
+    assert "[dry-run] eject the virtual media of 198.51.100.10" in capsys.readouterr().out
+
+
+def test_join_dry_run_lists_the_flow_without_polling(
+    make_config, tmp_path, fake_redfish, monkeypatch, stub_factory, capsys, dry_run_mode
+):
+    """A dry-run join must not poll: nothing was booted, so wait and verify
+    would only run out their timeouts."""
+    _cfg(make_config)
+    polled = []
+    monkeypatch.setattr(
+        commands.talosctl, "maintenance_reachable",
+        lambda ip: polled.append(ip) or True,
+    )
+
+    commands.join(tmp_path, "rp001")
+
+    assert polled == []
+    assert fake_redfish[-1].calls == []
+    out = capsys.readouterr().out
+    assert "[dry-run] mount" in out
+    assert "[dry-run] wait for the maintenance apid on 172.29.21.5" in out
+    assert "[dry-run] generate the machine config for rp001 and push it to 172.29.21.5" in out
+    assert "[dry-run] eject the virtual media of 198.51.100.10" in out
+    assert "[dry-run] wait for rp001 to come back with its configuration" in out
 
 
 # -- the Redfish client ----------------------------------------------------------
