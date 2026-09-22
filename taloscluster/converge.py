@@ -523,7 +523,14 @@ def _validate_metal_joinable(cfg: Config, kubeconfig: Path) -> None:
     and there is nothing to drive. Hardware is physical, so the fix is a person
     at the rack -- converge says which machine and stops while the cluster is
     still untouched.
+
+    With no kubeconfig the kube phase has not yet recovered a lost one or
+    bootstrapped a fresh cluster, so a joined machine cannot be told from a
+    pending one here; the check waits and the compute phase decides once the
+    kubeconfig is settled.
     """
+    if not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
+        return
     stuck = [
         s
         for s in _metal_unjoined(cfg, kubeconfig)

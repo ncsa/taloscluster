@@ -2707,26 +2707,62 @@ def _pending_metal_cfg(**server_kw):
     )
 
 
-def test_validate_refuses_a_metal_machine_converge_can_neither_reach_nor_boot(monkeypatch):
+def test_validate_refuses_a_metal_machine_converge_can_neither_reach_nor_boot(
+    monkeypatch, tmp_path
+):
     """A machine the config lists, that is not in the cluster, does not answer
     the maintenance apid and has no BMC to power on, is a change converge can
     never reconcile -- refused in validate while the cluster is untouched,
     like an unsupported provider change."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
 
     with pytest.raises(ReconcileError, match="not joinable: rp001"):
-        converge._validate_metal_joinable(_pending_metal_cfg(), Path("/nonexistent/kubeconfig"))
+        converge._validate_metal_joinable(_pending_metal_cfg(), kubeconfig)
 
 
-def test_validate_allows_a_redfish_machine_that_is_not_in_maintenance(monkeypatch):
+def test_validate_allows_a_redfish_machine_that_is_not_in_maintenance(monkeypatch, tmp_path):
     """Converge can power this one on itself, so the compute phase handles it."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
 
-    converge._validate_metal_joinable(
-        _pending_metal_cfg(redfish=True), Path("/nonexistent/kubeconfig")
+    converge._validate_metal_joinable(_pending_metal_cfg(redfish=True), kubeconfig)
+
+
+def test_validate_skips_the_joinable_check_without_a_kubeconfig(monkeypatch):
+    """A missing kubeconfig means the kube phase has not yet told a fresh
+    cluster from a live one whose kubeconfig was lost, so a joined machine
+    cannot be told from a pending one and must not abort the run as
+    unjoinable -- the kube phase recovers or bootstraps first."""
+    monkeypatch.setattr(
+        converge.talosctl,
+        "maintenance_reachable",
+        lambda _ip: pytest.fail("nothing to decide before the kubeconfig is settled"),
     )
+
+    converge._validate_metal_joinable(_pending_metal_cfg(), Path("/nonexistent/kubeconfig"))
+
+
+def test_validate_ignores_a_failed_node_query(monkeypatch, tmp_path):
+    """A node query the api cannot answer (5xx, connection refused, an expired
+    kubeconfig) leaves the machine's presence unknown: it must not read as
+    unjoined and be refused as unjoinable."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: None)
+    monkeypatch.setattr(
+        converge.talosctl,
+        "maintenance_reachable",
+        lambda _ip: pytest.fail("an unknown presence must not be probed"),
+    )
+
+    converge._validate_metal_joinable(_pending_metal_cfg(), kubeconfig)
 
 
 def test_validate_allows_a_joined_metal_machine(monkeypatch, tmp_path):

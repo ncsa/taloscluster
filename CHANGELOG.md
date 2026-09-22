@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Add the `charts` plugin (`taloscluster[charts]`): install Helm charts and manifests (Gateway API, MetalLB, Traefik, cert-manager, sealed-secrets, NFS and Ceph CSI) into the cluster during converge, drift-driven, with the `charts:` section (including the `charts.ceph` credentials) read from the merged configuration.
 - Add `show_yaml`/`redact` to `taloscluster.output` so plugin dry-run previews mask credential-looking keys and every value of a Kubernetes Secret.
-- Join a configured bare-metal machine missing from the cluster during converge, booting it through its BMC and never reinstalling one that already answers apid with the cluster's identity.
+- Join a bare-metal machine missing from the cluster during converge, booting it through its BMC and never reinstalling or refusing one that already answers apid with the cluster's identity.
 - Warn when a configured host network overlaps the Kubernetes pod (`10.244.0.0/16`) or service (`10.96.0.0/12`) network, which is what Talos's `address-overlap` diagnostic reports on a node.
 - Add `metal.<group>.boot_timeout` (seconds, default 600) for how long a machine may take to reach maintenance mode, overridable per server, for hardware that is slow from cold.
 - Add `metal` commands that inspect, boot, wait, apply, eject and join bare-metal machines, refusing an already-joined machine and skipping the BMC when redfish is disabled. `metal apply` generates the machine config against the cluster endpoint the provider resolved — refusing until converge has run — writes it to `.metal/` (which `init` git-ignores) at mode 0600 and warns when the directory is not ignored.
