@@ -23,6 +23,24 @@ SECRETS_FILE = "talossecrets.yaml"
 DERIVED_FILES = ("talosconfig", "kubeconfig")
 
 
+def write_private(path: Path, contents: str) -> None:
+    """Write text to path as mode 0600.
+
+    Open with the mode up front (subject to umask, which only tightens) rather
+    than write-then-chmod, so a fresh file is never briefly open to the world
+    between creation and a chmod; fchmod still forces 0600 when the file
+    already exists with a broader mode.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except BaseException:
+        os.close(fd)
+        raise
+    with os.fdopen(fd, "w") as f:
+        f.write(contents)
+
+
 class State:
     def __init__(self, root: Path):
         self.root = root
@@ -35,18 +53,7 @@ class State:
 
     def write_secrets(self, contents: str) -> None:
         """Persist the raw output of `talosctl gen secrets` (mode 0600)."""
-        # open with the mode up front (subject to umask, which only tightens)
-        # rather than write-then-chmod, so a fresh file is never briefly open
-        # to the world between creation and a chmod; fchmod still forces 0600
-        # when the file already exists with a broader mode.
-        fd = os.open(self.secrets_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except BaseException:
-            os.close(fd)
-            raise
-        with os.fdopen(fd, "w") as f:
-            f.write(contents)
+        write_private(self.secrets_path, contents)
 
     def require_secrets(self) -> Path:
         """Return the secrets path, or fail hard if it is missing.

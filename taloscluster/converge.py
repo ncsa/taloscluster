@@ -28,7 +28,6 @@ safe to re-run.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -62,7 +61,7 @@ from .metal import talos as metal_talos
 from .naming import METAL_BASE_EXTENSIONS
 from .output import action, dry_run, info, log, warn
 from .output import report as print_report
-from .state import State
+from .state import State, write_private
 from .talos import factory, machineconfig, talosctl
 
 
@@ -1140,15 +1139,15 @@ def _finish_endpoint_move(
 def _write_talosconfig(
     path: Path, cfg: Config, refs: NetworkResult, secrets_path: Path, client_endpoint: str
 ) -> None:
-    path.write_text(
+    write_private(
+        path,
         talosctl.gen_talosconfig(
             cfg.name,
             refs.kubernetes.advertised_address,
             secrets_path,
             client_endpoint=client_endpoint,
-        )
+        ),
     )
-    os.chmod(path, 0o600)
 
 
 def _tailscale_active(cfg: Config) -> bool:

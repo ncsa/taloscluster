@@ -111,6 +111,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Wait out control-plane reboots through the control-plane endpoint so an unroutable node address no longer stalls the rollout.
 - Generate metal machine configs with the same hostname document as VM nodes on every supported Talos version.
 - Refuse a joined metal machine's changed `disk` or cluster address during validate, before any phase mutates.
+- Create the `talosconfig` and scaffolded `secrets.yaml` with mode 0600 from the start.
 
 ## [0.7.0] - 2026-09-06
 

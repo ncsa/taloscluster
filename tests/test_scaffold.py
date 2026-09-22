@@ -73,6 +73,23 @@ def test_secrets_yaml_is_valid_and_mode_0600(tmp_path):
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
 
+def test_secrets_yaml_is_created_private(tmp_path, monkeypatch):
+    """Even carrying only placeholders, the secrets file must be born 0600:
+    opened with the mode up front, never written under the umask first and
+    tightened by a chmod afterwards."""
+    opened: list[int] = []
+    real_open = os.open
+
+    def spy_open(path, flags, mode=0o666, *args, **kwargs):
+        if os.fspath(path).endswith("secrets.yaml"):
+            opened.append(mode)
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", spy_open)
+    init(tmp_path, name="demo")
+    assert opened == [0o600]
+
+
 def test_proxmox_templates_are_valid_and_provider_specific(tmp_path):
     init(tmp_path, name="demo", provider="proxmox")
 

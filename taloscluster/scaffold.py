@@ -11,13 +11,12 @@ with entries it is missing.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from . import plugins as _plugins
 from .config import CLUSTER_FILE, SECRETS_FILE, read_yaml
 from .output import Die, info, log
-from .state import DERIVED_FILES
+from .state import DERIVED_FILES, write_private
 from .state import SECRETS_FILE as TALOS_SECRETS_FILE
 
 CLUSTER_TEMPLATE = """\
@@ -245,10 +244,9 @@ def init(
     if secrets.exists():
         info(f"{SECRETS_FILE} exists, keeping existing content")
     else:
-        secrets.write_text(SECRETS_TEMPLATE.format(
+        write_private(secrets, SECRETS_TEMPLATE.format(
             provider_section=template["secrets"],
         ))
-        os.chmod(secrets, 0o600)
         info(f"wrote {SECRETS_FILE} (mode 0600)")
 
     if metal:

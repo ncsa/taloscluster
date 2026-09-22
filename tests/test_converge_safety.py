@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -3842,3 +3844,32 @@ def test_metal_unjoined_ignores_a_failed_node_query(monkeypatch, tmp_path):
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: None)
 
     assert converge._metal_unjoined(_pending_metal_cfg(), kubeconfig) == []
+
+
+def test_write_talosconfig_creates_the_file_private(monkeypatch, tmp_path):
+    """The talosconfig carries the cluster's client cert and key, so it must be
+    born 0600: opened with the mode up front, never written under the umask
+    first and tightened by a chmod afterwards."""
+    monkeypatch.setattr(
+        converge.talosctl, "gen_talosconfig", lambda *a, **k: "context: phoenix\n"
+    )
+    opened: list[tuple[str, int]] = []
+    real_open = os.open
+
+    def spy_open(path, flags, mode=0o666, *args, **kwargs):
+        opened.append((os.fspath(path), mode))
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", spy_open)
+    path = tmp_path / "talosconfig"
+    converge._write_talosconfig(
+        path,
+        SimpleNamespace(name="phoenix"),
+        SimpleNamespace(kubernetes=SimpleNamespace(advertised_address="192.0.2.5")),
+        tmp_path / "talossecrets.yaml",
+        "phoenix-controlplane-01",
+    )
+
+    assert opened == [(str(path), 0o600)]
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert path.read_text() == "context: phoenix\n"

@@ -12,7 +12,7 @@ import stat
 import pytest
 
 from taloscluster.errors import StateError
-from taloscluster.state import DERIVED_FILES, SECRETS_FILE, State
+from taloscluster.state import DERIVED_FILES, SECRETS_FILE, State, write_private
 
 
 def test_secrets_exist_false_when_missing(tmp_path):
@@ -46,6 +46,21 @@ def test_write_secrets_tightens_a_pre_existing_world_readable_file(tmp_path):
     path.write_text("old")            # born 0644 under a default umask
     os.chmod(path, 0o644)
     State(tmp_path).write_secrets("dummy secrets")
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
+def test_write_private_sets_mode_0600(tmp_path):
+    path = tmp_path / "talosconfig"
+    write_private(path, "dummy config")
+    assert path.read_text() == "dummy config"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
+def test_write_private_tightens_a_pre_existing_world_readable_file(tmp_path):
+    path = tmp_path / "talosconfig"
+    path.write_text("old")
+    os.chmod(path, 0o644)
+    write_private(path, "dummy config")
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
 
