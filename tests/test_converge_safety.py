@@ -3895,6 +3895,34 @@ def test_join_metal_touches_nothing_in_a_dry_run(monkeypatch):
     )
 
 
+def test_join_metal_lists_the_join_in_a_plan_without_configs(monkeypatch, capsys):
+    """Plan never writes secrets, so a first-run plan reaches the compute phase
+    with no machine configs at all. The pending joins are what a real converge
+    would perform, so plan lists each one as an action instead of warning per
+    server that there is no config to join with."""
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _e: "sch")
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(
+        converge.talosctl,
+        "maintenance_reachable",
+        lambda _ip: pytest.fail("a plan without configs must not probe the machines"),
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config_insecure",
+        lambda *_a: pytest.fail("a plan must not apply a config"),
+    )
+
+    assert converge._join_metal(
+        _pending_metal_cfg(), {}, ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"),
+    ) == (set(), set())
+
+    out = capsys.readouterr()
+    assert "join metal rp001 (192.0.2.61)" in out.out
+    assert "no machine config this run" not in out.err
+
+
 def test_join_metal_skips_a_joined_machine_whose_kube_node_is_missing(
     monkeypatch, tmp_path, capsys
 ):

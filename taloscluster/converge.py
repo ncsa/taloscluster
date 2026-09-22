@@ -856,7 +856,12 @@ def _join_metal(
         config_yaml = configs.get(server.name)
         if not config_yaml:
             # no machine config this run (no secrets, or no advertised endpoint
-            # yet) -- the same condition that skips the VM half of compute
+            # yet) -- the same condition that skips the VM half of compute. A
+            # plan never writes secrets, so a first-run plan always lands here:
+            # list the join a real run would perform instead of warning.
+            if dry_run():
+                action(f"join metal {server.name} ({ip})")
+                continue
             warn(f"metal {server.name}: no machine config this run; not joining")
             unjoined.add(server.name)
             continue
