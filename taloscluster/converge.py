@@ -124,6 +124,10 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # reach in maintenance mode nor power on through a BMC is refused here,
     # while the cluster is still untouched, not skipped silently mid-run
     _validate_metal_joinable(cfg, kubeconfig_path)
+    # a tailscale section added or removed after the first converge switches
+    # every node's schematic and deadlocks the upgrade rollout; refuse it here,
+    # while the cluster is still untouched
+    _validate_tailscale_toggle(cfg, machines, talosconfig_path)
     # Validate configured plugin sections ahead of any cluster change, so a
     # malformed or contradictory plugin configuration stops the run here -- not
     # as a late plugin failure once the image, network and machines mutated.
@@ -552,6 +556,103 @@ def _validate_metal_joinable(cfg: Config, kubeconfig: Path) -> None:
         "disabled, so converge cannot boot it. Boot the machine into maintenance "
         "mode (its group is `redfish: false`, so PXE or media by hand), or "
         "comment its entry out of the metal section to stop expecting it."
+    )
+
+
+def _validate_tailscale_toggle(
+    cfg: Config, machines: dict[str, Machine], talosconfig: Path
+) -> None:
+    """Refuse switching tailscale on or off for a cluster that already runs.
+
+    The switch changes every node's schematic, so `_reconcile_talos` would
+    reinstall every node through a `talosctl upgrade` -- and the rollout
+    deadlocks in both directions: with the section removed the reinstalled node
+    loses the tailscale address its upgrade is polled on, and with it added the
+    endpoint is the MagicDNS name of a cp-01 that has not joined the tailnet
+    yet, so no member addresses resolve and the config push fails. Deciding
+    tailscale before the first converge is the supported path.
+
+    Adding the extension without an auth key, or removing a keyless one, only
+    changes the installer image: the extension idles either way and management
+    stays on real addresses, so those edits pass. Moving the auth key itself --
+    onto a keyless section, or off a keyed one -- reinstalls nothing, so the
+    extension comparison below sees no change, but it moves management between
+    cp-01's MagicDNS name and its real address: forward, the name does not
+    resolve until cp-01 registers under the new key, and back, discovery keeps
+    reporting the tailnet addresses the nodes are about to lose. That switch is
+    refused here from the endpoint the last converge recorded -- its shape (the
+    MagicDNS name, or a real address) says which way the cluster ran -- before
+    anything is probed. A keyless removal passes only when discovery reports no
+    tailnet address either: the recorded shape cannot tell that case, because
+    converge records cp-01's real address as soon as the section goes keyless,
+    while nodes registered under an earlier key keep their tailnet registration
+    until they are reinstalled. An empty discovery reads as never registered --
+    the rollout would fall back to real addresses in that state too. The probe
+    reads the running extensions through the endpoint the last converge
+    recorded -- never the kube-api VIP -- and stays silent when the node does
+    not answer: an unreachable cluster fails on its own later, without this
+    check guessing.
+    """
+    host = f"{cfg.name}-controlplane-01"
+    if host not in machines:
+        return
+    # duck-typed configs (test fixtures, older plugins) may not carry the
+    # resolved set; without it there is nothing to compare against
+    extensions = getattr(machines[host], "extensions", None)
+    if extensions is None:
+        return
+    want = "siderolabs/tailscale" in extensions
+    endpoint = _talosconfig_endpoint(talosconfig, cfg.name)
+    if not endpoint:
+        return
+    active = _tailscale_active(cfg)
+    if (endpoint == host) != active:
+        if active:
+            detail = (
+                f"{host} has never registered with the tailnet, so the "
+                "MagicDNS name this configuration points talosctl at does "
+                "not resolve"
+            )
+        else:
+            detail = (
+                "the nodes are registered on the tailnet, and dropping the "
+                "key leaves discovery reporting tailnet addresses the nodes "
+                "lose -- the rollout addresses nodes through it"
+            )
+        raise ReconcileError(
+            f"toggling tailscale on a live cluster is unsupported: {detail}. "
+            "Restore the previous tailscale settings, or destroy the cluster "
+            "and converge it fresh with the new ones."
+        )
+    try:
+        running = talosctl.running_extensions(talosconfig, endpoint, endpoint)
+    except (OSError, subprocess.CalledProcessError):
+        return
+    have = any("tailscale" in name for name in running)
+    if have == want:
+        return
+    if have and not want:
+        # a keyless section installed the extension without registering, so
+        # dropping it only reinstalls the node in place, which the rollout
+        # survives -- unless the nodes are still registered: an auth_key
+        # removed on a live cluster leaves the registration behind until the
+        # nodes are reinstalled, and discovery then still hands the rollout
+        # the tailnet address the reinstalled node is about to lose
+        if not talosctl.tailnet_member_addresses(talosconfig, endpoint):
+            return
+    elif not active:
+        # adding the extension keyless leaves it idle -- no registration, no
+        # endpoint change, just a new installer image
+        return
+    change = "removes" if have else "adds"
+    raise ReconcileError(
+        f"toggling tailscale on a live cluster is unsupported: {host} is "
+        f"running {'with' if have else 'without'} the tailscale extension and "
+        f"the configuration {change} it, which would reinstall every node and "
+        "deadlock the rollout (the reinstalled nodes lose, or have not yet "
+        "joined, the tailnet management talks through). Restore the previous "
+        "tailscale settings, or destroy the cluster and converge it fresh with "
+        "the new ones."
     )
 
 

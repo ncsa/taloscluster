@@ -244,6 +244,25 @@ def member_addresses(
     }
 
 
+def tailnet_member_addresses(talosconfig: Path, endpoint: str) -> dict[str, str]:
+    """hostname -> tailscale (100.64/10) address, for the members discovery
+    reports one for.
+
+    A registered cluster keeps reporting these until its nodes are reinstalled
+    without the extension -- the registration outlives an auth key removed from
+    the configuration -- and they are exactly the addresses a rollout polls, so
+    this is the signal that dropping the extension would deadlock the rollout
+    (see converge._reconcile_talos). An empty dict covers both a cluster that
+    never registered and discovery that answers nothing, where the rollout
+    falls back to real addresses either way.
+    """
+    return {
+        host: m.address
+        for host, m in members(talosconfig, endpoint).items()
+        if _is_tailscale(m.address)
+    }
+
+
 def etcd_members(talosconfig: Path, endpoint: str) -> dict[str, str]:
     """Authoritative live etcd membership (hostname -> member id), from
     `talosctl etcd members` against a surviving real control plane.
@@ -749,6 +768,29 @@ def running_schematic(talosconfig: Path, endpoint: str, node: str) -> str:
         if meta.get("name") == "schematic" or ident.get("id") == "schematic":
             return str(meta.get("version") or "")
     return ""
+
+
+def running_extensions(talosconfig: Path, endpoint: str, node: str) -> list[str]:
+    """The names of the extensions the node is currently RUNNING.
+
+    The same `get extensions` stream `running_schematic` reads: one document
+    per installed extension, named in spec.metadata (the resource id when the
+    document carries no spec name). Raises when the node does not answer, so a
+    caller that must tell "unreachable" from "no extensions" can catch it.
+    """
+    out = _run(
+        _talos(talosconfig, endpoint, node, "get", "extensions", "-o", "yaml"),
+        capture=True,
+    )
+    names: list[str] = []
+    for doc in _resource_docs(out):
+        spec = doc.get("spec") or {}
+        meta = spec.get("metadata") or {}
+        ident = doc.get("metadata") or {}
+        name = str(meta.get("name") or ident.get("id") or "")
+        if name:
+            names.append(name)
+    return names
 
 
 def _resource_docs(out: str) -> list[dict]:

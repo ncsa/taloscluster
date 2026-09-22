@@ -1835,6 +1835,202 @@ def test_talos_endpoint_duck_typed_section_without_active_attr_still_registers()
     assert converge._talos_endpoint(cfg) == "phoenix-controlplane-01"
 
 
+# ---- validate phase: a live tailscale toggle is refused ---------------------
+
+def _recorded_talosconfig(tmp_path, endpoint):
+    """A talosconfig as a previous converge wrote it: the context endpoint is
+    cp-01's MagicDNS name on a registered cluster, its real address without."""
+    path = tmp_path / "talosconfig"
+    path.write_text(
+        "context: testcluster\ncontexts:\n  testcluster:\n    endpoints:\n"
+        f"    - {endpoint}\n"
+    )
+    return path
+
+
+def test_removing_tailscale_from_a_registered_cluster_is_refused(
+    monkeypatch, make_config, tmp_path
+):
+    """The cluster registered (discovery reports tailnet addresses), so
+    dropping the section reinstalls every node onto a schematic without the
+    extension -- and the rollout then polls the tailscale address the upgraded
+    node just lost. Refused in validate, before anything mutates."""
+    cfg = make_config()
+    assert "siderolabs/tailscale" not in cfg.machines["testcluster-controlplane-01"].extensions
+    talosconfig = _recorded_talosconfig(tmp_path, "testcluster-controlplane-01")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "running_extensions",
+        lambda *_a: ["schematic", "siderolabs/tailscale"],
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "tailnet_member_addresses",
+        lambda *_a: {"testcluster-controlplane-01": "100.64.0.68"},
+    )
+    with pytest.raises(ReconcileError, match="toggling tailscale on a live cluster"):
+        converge._validate_tailscale_toggle(cfg, cfg.machines, talosconfig)
+
+
+def test_removing_tailscale_after_a_live_key_removal_is_refused(
+    monkeypatch, make_config, tmp_path
+):
+    """A keyed section whose auth_key was removed on a live cluster: converge
+    rewrote the recorded endpoint to cp-01's real address, but the nodes kept
+    their tailnet registration -- discovery still reports it, so the removal
+    would deadlock the rollout exactly like a registered cluster. Refused even
+    though the section being removed is keyless and the endpoint is a real
+    address."""
+    cfg = make_config()
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "running_extensions",
+        lambda *_a: ["schematic", "siderolabs/tailscale"],
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "tailnet_member_addresses",
+        lambda *_a: {"testcluster-controlplane-01": "100.64.0.68"},
+    )
+    with pytest.raises(ReconcileError, match="toggling tailscale on a live cluster"):
+        converge._validate_tailscale_toggle(cfg, cfg.machines, talosconfig)
+
+
+def test_adding_a_keyed_tailscale_section_to_a_live_cluster_is_refused(
+    monkeypatch, make_config, tmp_path
+):
+    """With a key the endpoint becomes cp-01's MagicDNS name, which does not
+    resolve until the reinstalled nodes have joined the tailnet -- discovery
+    comes back empty and the config push fails. Refused in validate."""
+    cfg = make_config({"tailscale": {"auth_key": "tskey-auth-abc123"}})
+    assert cfg.tailscale_active
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+    monkeypatch.setattr(converge.talosctl, "running_extensions", lambda *_a: ["schematic"])
+    with pytest.raises(ReconcileError, match="toggling tailscale on a live cluster"):
+        converge._validate_tailscale_toggle(cfg, cfg.machines, talosconfig)
+
+
+def test_adding_a_key_to_a_live_keyless_section_is_refused(monkeypatch, make_config, tmp_path):
+    """A keyless section already installed the extension, so adding the
+    auth_key changes no schematic and the extension comparison would wave the
+    run through -- but management would move to cp-01's MagicDNS name, which
+    does not resolve because cp-01 never registered. Refused from the recorded
+    endpoint's shape alone, without probing."""
+    cfg = make_config({"tailscale": {"auth_key": "tskey-auth-abc123"}})
+    assert cfg.tailscale_active
+    assert "siderolabs/tailscale" in cfg.machines["testcluster-controlplane-01"].extensions
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "running_extensions",
+        lambda *_a: pytest.fail("the shape check must refuse without probing"),
+    )
+    with pytest.raises(ReconcileError, match="toggling tailscale on a live cluster"):
+        converge._validate_tailscale_toggle(cfg, cfg.machines, talosconfig)
+
+
+def test_removing_the_key_from_a_live_keyed_section_is_refused(monkeypatch, make_config, tmp_path):
+    """Dropping the auth_key keeps the extension installed, so no schematic
+    changes and the extension comparison would wave the run through -- but
+    management would move off cp-01's MagicDNS name while the nodes keep their
+    tailnet registration, and discovery keeps handing the rollout addresses the
+    nodes are about to lose. Refused from the recorded endpoint's shape alone,
+    without probing."""
+    cfg = make_config({"tailscale": {}})
+    assert cfg.tailscale_active is False
+    assert "siderolabs/tailscale" in cfg.machines["testcluster-controlplane-01"].extensions
+    talosconfig = _recorded_talosconfig(tmp_path, "testcluster-controlplane-01")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "running_extensions",
+        lambda *_a: pytest.fail("the shape check must refuse without probing"),
+    )
+    with pytest.raises(ReconcileError, match="toggling tailscale on a live cluster"):
+        converge._validate_tailscale_toggle(cfg, cfg.machines, talosconfig)
+
+
+def test_removing_a_keyless_tailscale_section_is_allowed(monkeypatch, make_config, tmp_path):
+    """A keyless section never registered the nodes: discovery reports no
+    tailnet address, so dropping the extension reinstalls the node in place
+    and the rollout survives on real addresses."""
+    cfg = make_config()
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "running_extensions",
+        lambda *_a: ["schematic", "siderolabs/tailscale"],
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "tailnet_member_addresses",
+        lambda *_a: {},
+    )
+    converge._validate_tailscale_toggle(cfg, cfg.machines, talosconfig)
+
+
+def test_adding_a_keyless_tailscale_section_is_allowed(monkeypatch, make_config, tmp_path):
+    """Adding the extension without a key only changes the installer image: it
+    idles and management stays on real addresses."""
+    cfg = make_config({"tailscale": {}})
+    assert cfg.tailscale_active is False
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+    monkeypatch.setattr(converge.talosctl, "running_extensions", lambda *_a: ["schematic"])
+    converge._validate_tailscale_toggle(cfg, cfg.machines, talosconfig)
+
+
+def test_the_toggle_check_passes_a_matching_schematic(monkeypatch, make_config, tmp_path):
+    cfg = make_config({"tailscale": {"auth_key": "tskey-auth-abc123"}})
+    talosconfig = _recorded_talosconfig(tmp_path, "testcluster-controlplane-01")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "running_extensions",
+        lambda *_a: ["schematic", "siderolabs/tailscale"],
+    )
+    converge._validate_tailscale_toggle(cfg, cfg.machines, talosconfig)
+
+
+def test_the_toggle_check_skips_an_unreachable_node(monkeypatch, make_config, tmp_path):
+    """An unreachable cluster fails on its own later; the check must not guess
+    from a node it cannot read. The recorded endpoint and the configuration
+    agree on the real-address path, so only the probe could decide."""
+    cfg = make_config()
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+
+    def unreachable(*_a):
+        raise subprocess.CalledProcessError(1, "talosctl")
+
+    monkeypatch.setattr(converge.talosctl, "running_extensions", unreachable)
+    converge._validate_tailscale_toggle(cfg, cfg.machines, talosconfig)
+
+
+def test_the_toggle_check_skips_without_a_recorded_endpoint(monkeypatch, make_config, tmp_path):
+    """No talosconfig from a previous run -- a first converge -- has no running
+    state to compare against."""
+    cfg = make_config()
+    monkeypatch.setattr(
+        converge.talosctl,
+        "running_extensions",
+        lambda *_a: pytest.fail("must not probe without a recorded endpoint"),
+    )
+    converge._validate_tailscale_toggle(cfg, cfg.machines, tmp_path / "none")
+
+
+def test_the_toggle_check_skips_a_duck_typed_machine(monkeypatch, make_config, tmp_path):
+    """Test fixtures and older plugins hand in machines without the resolved
+    extension set; without it there is nothing to compare against."""
+    cfg = make_config()
+    talosconfig = _recorded_talosconfig(tmp_path, "testcluster-controlplane-01")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "running_extensions",
+        lambda *_a: pytest.fail("must not probe a machine with no extension set"),
+    )
+    converge._validate_tailscale_toggle(
+        cfg, {"testcluster-controlplane-01": SimpleNamespace(role="controlplane")}, talosconfig
+    )
+
+
 # ---- --reboot: one node at a time, control planes first ------------------
 
 def test_reboot_nodes_is_serial_controlplanes_first_and_health_checked(monkeypatch, tmp_path):

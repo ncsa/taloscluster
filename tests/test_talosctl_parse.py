@@ -60,7 +60,8 @@ SCHEMATIC = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d
 
 # A realistic `get extensions -o yaml` stream: `node:` header lines interleaved
 # with `---`-separated resource documents, one per extension. The Image Factory
-# bakes a `schematic` extension whose manifest version is the running schematic.
+# bakes a `schematic` extension whose manifest version is the running schematic,
+# and a tailscale-using node also reports the `siderolabs/tailscale` extension.
 EXTENSIONS_OUTPUT = (
     f"node: 192.0.2.10\n"
     "metadata:\n"
@@ -87,6 +88,18 @@ EXTENSIONS_OUTPUT = (
     "    image: ghcr.io/siderolabs/qemu-guest-agent:1.0.0\n"
     "    metadata:\n"
     "        name: qemu-guest-agent\n"
+    f"        version: {SCHEMATIC}\n"
+    "---\n"
+    f"node: 192.0.2.10\n"
+    "metadata:\n"
+    "    namespace: runtime\n"
+    "    type: ExtensionStatuses.runtime.talos.dev\n"
+    "    id: siderolabs-tailscale-v1.86.0\n"
+    "    version: 1\n"
+    "spec:\n"
+    "    image: ghcr.io/siderolabs/tailscale:1.0.0\n"
+    "    metadata:\n"
+    "        name: siderolabs/tailscale\n"
     f"        version: {SCHEMATIC}\n"
 )
 
@@ -116,6 +129,38 @@ def test_running_schematic_empty_when_no_factory_schematic(monkeypatch):
 def test_running_schematic_empty_on_empty_output(monkeypatch):
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: "")
     assert talosctl.running_schematic(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
+
+
+# ---------------------------------------------------------------------------
+# running_extensions
+# ---------------------------------------------------------------------------
+
+
+def test_running_extensions_lists_every_extension_name(monkeypatch):
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: EXTENSIONS_OUTPUT)
+    got = talosctl.running_extensions(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    assert got == ["schematic", "qemu-guest-agent", "siderolabs/tailscale"]
+
+
+def test_running_extensions_falls_back_to_the_resource_id(monkeypatch):
+    out = (
+        "node: 192.0.2.10\n"
+        "metadata:\n"
+        "    namespace: runtime\n"
+        "    type: ExtensionStatuses.runtime.talos.dev\n"
+        "    id: siderolabs-tailscale-v1.86.0\n"
+        "    version: 1\n"
+        "spec:\n"
+        "    image: ghcr.io/siderolabs/tailscale:1.0.0\n"
+    )
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: out)
+    got = talosctl.running_extensions(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    assert got == ["siderolabs-tailscale-v1.86.0"]
+
+
+def test_running_extensions_empty_on_empty_output(monkeypatch):
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: "")
+    assert talosctl.running_extensions(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == []
 
 
 # A realistic `get members -o json` stream: separate JSON objects, NOT an array.
@@ -159,6 +204,29 @@ def test_member_addresses_still_returns_plain_addresses(monkeypatch):
         "quad-controlplane-01": "100.64.0.68",
         "quad-worker-01": "100.64.0.70",
     }
+
+
+def test_tailnet_member_addresses_keeps_only_tailnet_members(monkeypatch):
+    """A member still registered on the tailnet reports a 100.64/10 address;
+    one that never registered reports only real addresses and is filtered out
+    -- the difference a tailscale-removal refusal decides on."""
+    stream = (
+        '{"metadata": {"id": "quad-controlplane-01"}, "spec": {"addresses": '
+        '["10.0.0.236", "100.64.0.68"], "operatingSystem": "Talos (v1.13.9)"}}\n'
+        '{"metadata": {"id": "quad-worker-01"}, "spec": {"addresses": '
+        '["192.168.0.42"], "operatingSystem": "Talos (v1.13.8)"}}\n'
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (0, stream, ""))
+    assert talosctl.tailnet_member_addresses(Path("talosconfig"), "e") == {
+        "quad-controlplane-01": "100.64.0.68",
+    }
+
+
+def test_tailnet_member_addresses_empty_when_discovery_is_unreachable(monkeypatch):
+    """Discovery that answers nothing reads as never registered -- a rollout in
+    that state falls back to real addresses too."""
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (1, "", "no route"))
+    assert talosctl.tailnet_member_addresses(Path("talosconfig"), "e") == {}
 
 
 def test_members_empty_when_discovery_is_unreachable(monkeypatch):
