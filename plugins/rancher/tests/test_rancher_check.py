@@ -46,6 +46,7 @@ def binding(pid, role, bid="b-1"):
 def cluster_dir(tmp_path):
     (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({
         "name": "testcluster",
+        "include": ["secrets.yaml"],
         "rancher": {"admins": ["alice"], "users": ["carol"]},
     }))
     (tmp_path / "secrets.yaml").write_text(yaml.safe_dump({
@@ -270,6 +271,7 @@ def test_netid_listed_as_both_admin_and_user_is_rejected(cluster_dir, wire):
     """Membership under two tiers is ambiguous and would flap; refuse to load."""
     (cluster_dir / "cluster.yaml").write_text(yaml.safe_dump({
         "name": "testcluster",
+        "include": ["secrets.yaml"],
         "rancher": {"admins": ["alice", "bob"], "users": ["carol", "bob"]},
     }))
     with pytest.raises(ConfigError, match="'admins' and 'users'"):
@@ -281,6 +283,7 @@ def test_alias_that_resolves_to_same_principal_is_rejected(cluster_dir, wire):
     check but strip to the same Rancher principal, which would flap; refuse it."""
     (cluster_dir / "cluster.yaml").write_text(yaml.safe_dump({
         "name": "testcluster",
+        "include": ["secrets.yaml"],
         "rancher": {"admins": ["alice"], "users": ["alice@example.com"]},
     }))
     wire(FakeClient(

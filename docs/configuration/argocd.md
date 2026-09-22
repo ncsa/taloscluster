@@ -96,7 +96,7 @@ When `cinder.enabled` is true on an OpenStack cluster, the OpenStack application
 
 ## secrets.yaml
 
-Use `kubeconfig` and `context` for the plugin activation. Like every credential, they and the `git` credentials below may live in `cluster.yaml` or an included file instead of `secrets.yaml` — the files merge before the section is read. A `url`/`token` pair alone is not a supported apply target and does not activate the plugin.
+Use `kubeconfig` and `context` for the plugin activation. Like every credential, they and the `git` credentials below may live in `cluster.yaml`, `secrets.yaml` or any other included file — `cluster.yaml` merges the files it lists before the section is read. A `url`/`token` pair alone is not a supported apply target and does not activate the plugin.
 
 ```yaml
 argocd:

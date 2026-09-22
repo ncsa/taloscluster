@@ -69,6 +69,11 @@ def make_config(tmp_path: Path):
             for p in parts[:-1]:
                 d = d.get(p, {})
             d.pop(parts[-1], None)
+        # secrets.yaml is merged only when cluster.yaml lists it (as the
+        # scaffold does), so a directory with the file models the scaffolded
+        # layout; an explicit `include` override wins.
+        if "include" not in merged and (tmp_path / "secrets.yaml").is_file():
+            merged["include"] = ["secrets.yaml"]
         (tmp_path / "cluster.yaml").write_text(yaml.safe_dump(merged))
         return load_config(tmp_path)
 

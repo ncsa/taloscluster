@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Make the Redfish transport https-only unless `bmc.scheme` opts into http, and trim the virtual-media insert body to the image URL.
 - `init` adds `.metal/` to `.gitignore` and `metal apply` writes the generated machine config there at mode 0600.
 - Warn when applying a metal machine config into a cluster directory whose gitignore does not ignore the generated configs.
-- Leave Tailscale off when a `tailscale:` section appears only in `secrets.yaml`.
+- **Breaking:** merge `secrets.yaml` only when `cluster.yaml` lists it under `include` (the scaffold does), and let a section in it opt its feature in.
 - Use placeholder machine and network names in the bare-metal examples and the init scaffold.
 
 ### Fixed
@@ -32,7 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Reset a node dropped from the config at the address its kube Node reports when no other source knows it, so a metal machine removed by commenting out its config leaves the cluster instead of re-registering.
 - Scale a bare-metal machine down into maintenance mode: wipe only `STATE` and `EPHEMERAL` and reboot, keeping the Talos install, so the machine is ready to join another cluster instead of wiped whole and powered off like a VM.
 - Refuse an `include` entry naming `cluster.yaml` itself.
-- Refuse an `include` entry naming `secrets.yaml`, a nested include, and a value set in two files.
+- Refuse a nested include, and a value set in two files.
 - Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.
 - Correct the stale docs wording around the cluster gateway, the placeholder-credential refusal and bare-metal support.
 

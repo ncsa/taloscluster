@@ -395,19 +395,19 @@ def test_metal_no_tailscale_patch_without_a_key(make_config, monkeypatch, tmp_pa
     )
 
 
-def test_metal_secrets_only_tailscale_key_stays_idle(
+def test_metal_secrets_yaml_tailscale_key_opts_in(
     make_config, monkeypatch, tmp_path
 ):
-    """A secrets.yaml-only auth key is a leftover credential, not an opt-in:
-    cluster.yaml has no tailscale section, no extension is baked and no patch
-    is emitted -- the same rule build_configs applies to the VM machines."""
+    """secrets.yaml is an included file, so its `tailscale:` section opts the
+    cluster in: the extension is baked and the patch is emitted, the same rule
+    build_configs applies to the VM machines."""
     (tmp_path / "secrets.yaml").write_text(yaml.safe_dump(
         {"tailscale": {"auth_key": "tskey-secret"}}
     ))
     stack, _ = _build(make_config, monkeypatch, tmp_path)
 
-    assert all(
-        doc.get("kind") != "ExtensionServiceConfig"
+    assert any(
+        doc.get("kind") == "ExtensionServiceConfig"
         for group in stack
         for doc in group
     )

@@ -3,8 +3,8 @@
 The `rancher:` section is read from the merged configuration -- cluster.yaml,
 secrets.yaml or any included file -- so moving url/token out of secrets.yaml
 must keep the plugin configured, its validation working and its credentials
-loadable, while a section that only secrets.yaml carries stays a credential,
-not an activation.
+loadable, while a section carried only by secrets.yaml activates the plugin
+like any other included file's section would.
 """
 
 from __future__ import annotations
@@ -18,7 +18,9 @@ from taloscluster_rancher.config import Config, rancher_configured, validate_ran
 
 def _write(root, cluster=None, secrets=None, include_files=None):
     root.mkdir(parents=True, exist_ok=True)
-    (root / "cluster.yaml").write_text(yaml.safe_dump(cluster or {}))
+    merged = {"include": ["secrets.yaml"]}
+    merged.update(cluster or {})
+    (root / "cluster.yaml").write_text(yaml.safe_dump(merged))
     (root / "secrets.yaml").write_text(yaml.safe_dump(secrets or {}))
     for name, data in (include_files or {}).items():
         (root / name).write_text(yaml.safe_dump(data))
@@ -41,7 +43,8 @@ def test_url_and_token_in_cluster_yaml_activate_and_load(tmp_path):
 
 def test_url_and_token_in_an_included_file_activate_and_load(tmp_path):
     _write(tmp_path, cluster={
-        "name": "testcluster", "include": ["creds.yaml"], "rancher": {"admins": ["alice"]},
+        "name": "testcluster", "include": ["creds.yaml", "secrets.yaml"],
+        "rancher": {"admins": ["alice"]},
     }, include_files={
         "creds.yaml": {"rancher": {"url": "https://rancher.example.edu",
                                    "token": "token-x:y"}},
@@ -62,13 +65,13 @@ def test_the_scaffolded_split_still_activates(tmp_path):
     assert secrets.rancher_token == "token-x:y"
 
 
-def test_a_section_only_in_secrets_yaml_supplies_credentials_without_activating(tmp_path):
-    """secrets.yaml holds credentials, not the decision to manage the cluster:
-    removing the `rancher:` section from cluster.yaml stops the plugin even
-    when the credentials are still parked in secrets.yaml."""
+def test_a_secrets_yaml_section_activates_like_any_include(tmp_path):
+    """secrets.yaml is an included file, so its `rancher:` section opts the
+    cluster into management exactly as one in cluster.yaml or another include
+    does."""
     _write(tmp_path, cluster={"name": "testcluster"},
            secrets={"rancher": {"url": "https://rancher.example.edu", "token": "token-x:y"}})
-    assert rancher_configured(tmp_path) is False
+    assert rancher_configured(tmp_path) is True
 
 
 def test_null_credentials_in_secrets_never_activate(tmp_path):

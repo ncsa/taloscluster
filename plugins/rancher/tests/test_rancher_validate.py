@@ -22,7 +22,7 @@ from taloscluster_rancher.config import validate_rancher
 
 def _write(root, rancher_cluster=None, rancher_secrets=None, name="testcluster"):
     root.mkdir(parents=True, exist_ok=True)
-    cluster = {"name": name}
+    cluster = {"name": name, "include": ["secrets.yaml"]}
     if rancher_cluster is not None:
         cluster["rancher"] = rancher_cluster
     (root / "cluster.yaml").write_text(yaml.safe_dump(cluster))

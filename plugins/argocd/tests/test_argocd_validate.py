@@ -20,7 +20,7 @@ from taloscluster_argocd.config import validate_argocd
 
 def _write(root, argocd_cluster=None, argocd_secrets=None, name="testcluster"):
     root.mkdir(parents=True, exist_ok=True)
-    cluster = {"name": name}
+    cluster = {"name": name, "include": ["secrets.yaml"]}
     if argocd_cluster is not None:
         cluster["argocd"] = argocd_cluster
     (root / "cluster.yaml").write_text(yaml.safe_dump(cluster))
@@ -188,7 +188,9 @@ def test_secret_git_credential_type_must_be_a_string(tmp_path, key):
 
 @pytest.mark.parametrize("key", ["credential_id", "credential_secret"])
 def test_openstack_credential_must_be_a_string(tmp_path, key):
-    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({"name": "testcluster"}))
+    (tmp_path / "cluster.yaml").write_text(
+        yaml.safe_dump({"name": "testcluster", "include": ["secrets.yaml"]})
+    )
     (tmp_path / "secrets.yaml").write_text(yaml.safe_dump({"openstack": {key: 123}}))
     with pytest.raises(ConfigError, match=f"openstack\\.{key}.*string"):
         validate_argocd(tmp_path)

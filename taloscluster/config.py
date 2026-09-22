@@ -178,8 +178,9 @@ class OpenStackConfig:
     external_net: str
     # Default region; override in cluster.yaml with `openstack.region`.
     region: str = "RegionOne"
-    # application credential; scaffolded into secrets.yaml, which is merged in.
-    # kept out of the repr so a traceback or a debug print cannot leak it
+    # application credential; scaffolded into secrets.yaml, which cluster.yaml
+    # includes; kept out of the repr so a traceback or a debug print cannot leak
+    # it
     credential_id: str = field(default="", repr=False)
     credential_secret: str = field(default="", repr=False)
 
@@ -201,8 +202,8 @@ class ProxmoxConfig:
     nodes: tuple[str, ...] = ()
     tls_verify: bool | str = True
     network: dict[str, Any] = field(default_factory=dict)
-    # api token; scaffolded into secrets.yaml, which is merged in; kept out of
-    # the repr so a traceback or a debug print cannot leak it
+    # api token; scaffolded into secrets.yaml, which cluster.yaml includes;
+    # kept out of the repr so a traceback or a debug print cannot leak it
     token_id: str = field(default="", repr=False)
     token_secret: str = field(default="", repr=False)
 
@@ -677,10 +678,6 @@ def _include_paths(d: dict[str, Any], root: Path, where: str) -> list[Path]:
             raise ConfigError(
                 f"{where}: include {entry!r} must be a path inside the cluster directory"
             )
-        if path.resolve() == (root / SECRETS_FILE).resolve():
-            raise ConfigError(
-                f"{where}: {SECRETS_FILE} is always included; do not list it"
-            )
         if path.resolve() == (root / CLUSTER_FILE).resolve():
             raise ConfigError(
                 f"{where}: {CLUSTER_FILE} is the cluster file itself; do not list it"
@@ -703,8 +700,8 @@ def _apply_includes(
     """Merge every `include:` file into the `cluster.yaml` tree.
 
     Returns the merged tree and the top-level sections the cluster opted into
-    by hand -- everything but the ones only `secrets.yaml` contributes, which
-    holds credentials for features, not the choice to use them.
+    by hand -- every top-level key any merged file carries, since a section is
+    itself a setting wherever it is written.
 
     Included files carry the same keys as `cluster.yaml` and are merged before
     validation, so where a value lives is the user's choice and the schema is
@@ -712,15 +709,17 @@ def _apply_includes(
     file are attributed to it; once merged there is one tree and one schema, so
     an unknown or moved key deeper in a section is reported against
     `cluster.yaml` whichever file supplied it.
+
+    `secrets.yaml` is an ordinary include: cluster.yaml must list it (the
+    scaffold writes `include: [secrets.yaml]`), and a section it carries opts
+    its feature in like any other included file's. A `secrets.yaml` no include
+    names is refused rather than silently dropped, so an existing cluster
+    directory cannot lose its credentials when the contract changed.
     """
     origins: dict[str, str] = {}
     opted_in = set(d)
-    # secrets.yaml is always included first when it exists, so credentials are
-    # ordinary cluster keys that happen to live in a gitignored file
-    secrets = root / SECRETS_FILE
-    sources = ([secrets] if secrets.is_file() else []) + _include_paths(
-        d, root, CLUSTER_FILE
-    )
+    secrets = (root / SECRETS_FILE).resolve()
+    sources = _include_paths(d, root, CLUSTER_FILE)
     for path in sources:
         if path.exists() and not path.is_file():
             raise ConfigError(f"{CLUSTER_FILE}: include {path.name} is not a file")
@@ -731,24 +730,29 @@ def _apply_includes(
                 "included files cannot include further files"
             )
         _reject_unknown_keys(extra, path.name, known - {"include"})
-        if path != secrets:
-            opted_in.update(extra)
+        opted_in.update(extra)
         _merge_yaml(d, extra, path.name, origins, CLUSTER_FILE)
+    if secrets.is_file() and secrets not in {path.resolve() for path in sources}:
+        raise ConfigError(
+            f"{SECRETS_FILE} exists but {CLUSTER_FILE} does not include it; "
+            f"add include: [{SECRETS_FILE}] to {CLUSTER_FILE} so its "
+            "credentials are merged (it is no longer merged automatically)"
+        )
     return d, opted_in
 
 
 def load_raw(root: Path) -> tuple[dict[str, Any], set[str]]:
-    """The merged cluster.yaml + secrets.yaml + include tree, unvalidated, plus
-    the top-level sections the cluster opted into outside secrets.yaml.
+    """The merged cluster.yaml + include tree, unvalidated, plus the top-level
+    sections the cluster opted into.
 
     Merges the files exactly as :func:`load_config` does, but without the
     schema checks, so a caller that only needs one section -- a plugin reading
     the credentials it owns -- finds a value wherever the include contract lets
-    it live. The opted-in set is what keeps a section that only secrets.yaml
-    carries (leftover credentials, not a decision to use a feature) from
-    switching anything on. A missing cluster.yaml reads as an empty tree;
-    a listed include that is missing, or an unparsable file, raises ConfigError
-    like core.
+    it live. Every merged file opts its top-level sections in, so a `rancher:`
+    block in secrets.yaml (an included file like any other) switches the plugin
+    on. A missing cluster.yaml reads as an empty tree; a listed include that is
+    missing, an unparsable file, or a secrets.yaml no include names, raises
+    ConfigError like core.
     """
     d = read_yaml(root / CLUSTER_FILE) if (root / CLUSTER_FILE).is_file() else {}
     return _apply_includes(d, root, _CLUSTER_KEYS | _plugin_config_sections())
@@ -1455,8 +1459,8 @@ def load_config(root: Path) -> Config:
         security=_security_rules(security, where),
         login_server=tailscale.get("login_server"),
         auth_key=tailscale.get("auth_key"),
-        # a `tailscale:` section that only secrets.yaml carries is a leftover
-        # credential, not a decision to run tailscale on the nodes
+        # a `tailscale:` section in any merged file -- secrets.yaml included --
+        # opts the installed system into the tailscale extension
         tailscale_enabled="tailscale" in opted_in,
         # an explicit null is the same as an absent key, as everywhere else
         kubespan=False if kubespan is None else kubespan,

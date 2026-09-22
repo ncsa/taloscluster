@@ -34,6 +34,7 @@ class FakeClient:
 def cluster_dir(tmp_path):
     (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({
         "name": "testcluster",
+        "include": ["secrets.yaml"],
         "rancher": {"admins": ["alice"], "users": ["carol"]},
     }))
     (tmp_path / "secrets.yaml").write_text(yaml.safe_dump({

@@ -2058,7 +2058,7 @@ def test_proxmox_external_section_rejects_invalid_fields(make_config, overrides,
 
 
 def _write_secrets(root: Path, secrets: dict) -> None:
-    """Write the gitignored secrets.yaml the loader includes implicitly."""
+    """Write the gitignored secrets.yaml; `make_config` lists it in `include`."""
     (root / SECRETS_FILE).write_text(yaml.safe_dump(secrets))
 
 
@@ -2831,6 +2831,8 @@ def test_proxmox_only_network_keys_are_rejected_on_openstack(make_config, block,
 _PRE_REDESIGN_CLUSTER_YAML = """\
 name: farmcluster
 
+include: [secrets.yaml]
+
 talos:
   version: v1.13.10
   config_patches:
@@ -2903,6 +2905,8 @@ security:
 # only the plumbing.
 _REDESIGNED_CLUSTER_YAML = """\
 name: farmcluster
+
+include: [secrets.yaml]
 
 talos:
   version: v1.13.10
@@ -3140,7 +3144,8 @@ def test_load_raw_merges_secrets_and_includes(tmp_path):
         yaml.safe_dump({"rancher": {"url": "https://rancher.example.edu"}})
     )
     (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({
-        "name": "testcluster", "include": ["creds.yaml"], "rancher": {"admins": ["alice"]},
+        "name": "testcluster", "include": ["creds.yaml", "secrets.yaml"],
+        "rancher": {"admins": ["alice"]},
     }))
     _write_secrets(tmp_path, {"rancher": {"token": "token-x:y"}})
 
@@ -3154,25 +3159,37 @@ def test_load_raw_merges_secrets_and_includes(tmp_path):
     assert "rancher" in opted_in
 
 
-def test_load_raw_does_not_opt_in_a_secrets_only_section(tmp_path):
-    """A section only secrets.yaml carries is credentials, not the decision to
-    use a feature -- the set core uses to keep it from switching one on."""
-    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({"name": "testcluster"}))
+def test_load_raw_opts_in_a_secrets_yaml_section(tmp_path):
+    """secrets.yaml is an included file like any other: a section only it
+    carries opts its feature in, the same contract core applies."""
+    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({
+        "name": "testcluster", "include": ["secrets.yaml"],
+    }))
     _write_secrets(tmp_path, {"rancher": {"url": "https://rancher.example.edu",
                                           "token": "token-x:y"}})
 
     raw, opted_in = load_raw(tmp_path)
 
     assert raw["rancher"] == {"url": "https://rancher.example.edu", "token": "token-x:y"}
-    assert "rancher" not in opted_in
+    assert "rancher" in opted_in
+
+
+def test_load_raw_refuses_secrets_yaml_that_is_not_included(tmp_path):
+    """Migration: a directory from before secrets.yaml became an ordinary
+    include must be told the fix instead of silently losing its credentials."""
+    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({"name": "testcluster"}))
+    _write_secrets(tmp_path, {"rancher": {"token": "token-x:y"}})
+
+    with pytest.raises(
+        ConfigError, match=r"add include: \[secrets.yaml\] to cluster.yaml"
+    ):
+        load_raw(tmp_path)
 
 
 def test_load_raw_tolerates_a_missing_cluster_yaml(tmp_path):
-    _write_secrets(tmp_path, {"rancher": {"url": "https://rancher.example.edu"}})
-
     raw, opted_in = load_raw(tmp_path)
 
-    assert raw == {"rancher": {"url": "https://rancher.example.edu"}}
+    assert raw == {}
     assert opted_in == set()
 
 
@@ -3192,28 +3209,14 @@ def test_credentials_stay_out_of_the_config_repr(make_config, tmp_path):
     assert cfg.openstack_credentials == ("id", "super-secret")
 
 
-def test_a_tailscale_section_only_in_secrets_does_not_enable_tailscale(make_config, tmp_path):
-    """secrets.yaml holds credentials, not the decision to run tailscale."""
+def test_a_tailscale_section_in_secrets_yaml_enables_tailscale(make_config, tmp_path):
+    """secrets.yaml is an included file, so its `tailscale:` section opts the
+    cluster in exactly as one in cluster.yaml does."""
     _write_secrets(
         tmp_path,
         {"openstack": dict(OPENSTACK_CREDENTIALS), "tailscale": {"auth_key": "tskey-x"}},
     )
     cfg = make_config()
-
-    assert cfg.tailscale_enabled is False
-    for machine in cfg.machines.values():
-        assert "siderolabs/tailscale" not in machine.extensions
-
-
-def test_a_tailscale_section_in_an_include_enables_tailscale(make_config, tmp_path):
-    (tmp_path / "ts.yaml").write_text(
-        yaml.safe_dump({"tailscale": {"login_server": "https://hs.example"}})
-    )
-    _write_secrets(
-        tmp_path,
-        {"openstack": dict(OPENSTACK_CREDENTIALS), "tailscale": {"auth_key": "tskey-x"}},
-    )
-    cfg = make_config({"include": ["ts.yaml"]})
 
     assert cfg.tailscale_enabled is True
     assert cfg.tailscale_auth_key == "tskey-x"
@@ -3221,10 +3224,37 @@ def test_a_tailscale_section_in_an_include_enables_tailscale(make_config, tmp_pa
         assert "siderolabs/tailscale" in machine.extensions
 
 
-def test_include_may_not_list_secrets_yaml(make_config, tmp_path):
+def test_a_tailscale_section_in_another_include_enables_tailscale(make_config, tmp_path):
+    (tmp_path / "ts.yaml").write_text(
+        yaml.safe_dump({"tailscale": {"login_server": "https://hs.example"}})
+    )
+    _write_secrets(
+        tmp_path,
+        {"openstack": dict(OPENSTACK_CREDENTIALS), "tailscale": {"auth_key": "tskey-x"}},
+    )
+    cfg = make_config({"include": ["ts.yaml", "secrets.yaml"]})
+
+    assert cfg.tailscale_enabled is True
+    assert cfg.tailscale_auth_key == "tskey-x"
+    for machine in cfg.machines.values():
+        assert "siderolabs/tailscale" in machine.extensions
+
+
+def test_include_may_list_secrets_yaml(make_config, tmp_path):
     _write_secrets(tmp_path, {"openstack": dict(OPENSTACK_CREDENTIALS)})
-    with pytest.raises(ConfigError, match="secrets.yaml is always included"):
-        make_config({"include": ["secrets.yaml"]})
+    cfg = make_config({"include": ["secrets.yaml"]})
+
+    assert cfg.openstack_credentials == ("id", "secret")
+
+
+def test_secrets_yaml_without_an_include_is_refused(make_config, tmp_path):
+    """Migration: an existing cluster directory without the include line must
+    be told the fix instead of silently losing its credentials."""
+    _write_secrets(tmp_path, {"openstack": dict(OPENSTACK_CREDENTIALS)})
+    with pytest.raises(
+        ConfigError, match=r"add include: \[secrets.yaml\] to cluster.yaml"
+    ):
+        make_config({"include": []})
 
 
 def test_include_may_not_list_cluster_yaml(make_config):

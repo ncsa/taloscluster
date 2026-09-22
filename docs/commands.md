@@ -23,7 +23,7 @@ taloscluster init [--openstack | --proxmox] [--metal] [-C DIR] [NAME]
 taloscluster init --proxmox -C mycluster mycluster
 ```
 
-Scaffold `cluster.yaml`, `secrets.yaml`, and `.gitignore`. The provider defaults to OpenStack and the name defaults to `mycluster`. `NAME` sets the name inside the configuration; `-C DIR` selects the directory and creates it if needed.
+Scaffold `cluster.yaml`, `secrets.yaml`, and `.gitignore`. The scaffolded `cluster.yaml` lists `secrets.yaml` under [`include`](configuration/general.md#include), which is how the credentials merge in. The provider defaults to OpenStack and the name defaults to `mycluster`. `NAME` sets the name inside the configuration; `-C DIR` selects the directory and creates it if needed.
 
 `--metal` appends a `metal:` example group with one server to `cluster.yaml` and the group's BMC credentials as `CHANGE-ME` placeholders to `secrets.yaml` ([Metal](configuration/metal.md)); it requires one of the provider flags, since bare-metal machines join a cluster a provider manages. The scaffolded group has `redfish: false`, so the pair loads until the credentials are real. A long machine list can move into a file [`include`](configuration/general.md#include) names.
 

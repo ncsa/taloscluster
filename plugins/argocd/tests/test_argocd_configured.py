@@ -14,6 +14,7 @@ from taloscluster_argocd.config import argocd_configured
 
 def _write_secrets(root, argocd):
     root.mkdir(parents=True, exist_ok=True)
+    (root / "cluster.yaml").write_text(yaml.safe_dump({"include": ["secrets.yaml"]}))
     (root / "secrets.yaml").write_text(yaml.safe_dump({"argocd": argocd}))
 
 

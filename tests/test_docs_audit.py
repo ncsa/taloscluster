@@ -162,6 +162,7 @@ def test_metal_documented_example_loads(tmp_path):
 
     cluster.update({
         "name": "mycluster",
+        "include": ["secrets.yaml"],
         "talos": {"version": "v1.13.8", "kubespan": True},
         "kubernetes": {"version": "v1.36.1"},
         "controlplane": {"count": 3, "cores": 4, "memory": 8, "disk": 40},

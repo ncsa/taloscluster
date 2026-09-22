@@ -121,12 +121,12 @@ def test_openstack_sdk_error_exits_cleanly_through_cli_main(
     from taloscluster.openstack.session import Inventory
     from taloscluster.output import set_dry_run
 
-    make_config()  # a valid cluster.yaml in tmp_path
     (tmp_path / "secrets.yaml").write_text(
         "openstack:\n"
         "  credential_id: cred-id\n"
         "  credential_secret: cred-secret\n"
     )
+    make_config()  # a valid cluster.yaml in tmp_path, including secrets.yaml
     # reach backend.load_inventory without real auth, then make the first SDK
     # call fail like a Neutron 409. Don't POST to the talos image factory for a
     # schematic id (pure unit test: no cloud access).
@@ -163,12 +163,12 @@ def test_openstack_transport_error_exits_cleanly_through_cli_main(
     from taloscluster.openstack.session import Inventory
     from taloscluster.output import set_dry_run
 
-    make_config()  # a valid cluster.yaml in tmp_path
     (tmp_path / "secrets.yaml").write_text(
         "openstack:\n"
         "  credential_id: cred-id\n"
         "  credential_secret: cred-secret\n"
     )
+    make_config()  # a valid cluster.yaml in tmp_path, including secrets.yaml
     monkeypatch.setattr("taloscluster.converge.preflight_tools", lambda: None)
     monkeypatch.setattr(cli._converge.factory, "schematic_id", lambda _s: "scheme-a-01")
     monkeypatch.setattr(os_backend, "connect", lambda cfg: object())

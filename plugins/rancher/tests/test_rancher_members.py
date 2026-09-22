@@ -54,6 +54,7 @@ PRINCIPALS = {"alice": ALICE, "carol": CAROL}
 def _cfg(root, admins, users):
     (root / "cluster.yaml").write_text(yaml.safe_dump({
         "name": "testcluster",
+        "include": ["secrets.yaml"],
         "rancher": {"admins": admins, "users": users},
     }))
     (root / "secrets.yaml").write_text(yaml.safe_dump({
@@ -165,6 +166,7 @@ def test_converge_refuses_when_downstream_id_matches_no_rancher_cluster(tmp_path
     monkeypatch.setattr(reconcile, "downstream_rancher_id", lambda root: "c-old")
     (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({
         "name": "testcluster",
+        "include": ["secrets.yaml"],
         "rancher": {"admins": ["alice"], "users": ["carol"]},
     }))
     (tmp_path / "secrets.yaml").write_text(yaml.safe_dump({

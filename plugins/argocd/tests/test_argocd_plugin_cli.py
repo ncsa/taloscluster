@@ -34,6 +34,7 @@ MINIMAL = {
 
 def _write(root, argocd_cluster, argocd_secrets=None):
     cluster = dict(MINIMAL)
+    cluster["include"] = ["secrets.yaml"]
     cluster["argocd"] = argocd_cluster
     root.mkdir(parents=True, exist_ok=True)
     (root / "cluster.yaml").write_text(yaml.safe_dump(cluster))

@@ -1,11 +1,12 @@
 """`taloscluster init`: scaffold a new cluster directory.
 
 Writes the two files a cluster needs before the first converge — cluster.yaml
-(desired state, committable) and secrets.yaml (credentials, gitignored, 0600) —
-plus a .gitignore that keeps the secret/derived files out of git. Existing
-cluster.yaml / secrets.yaml keep their content and receive only missing sections
-from installed plugins (and, with --metal, the bare-metal section); an existing
-.gitignore is appended to only with entries it is missing.
+(desired state, committable; it lists secrets.yaml under `include:`) and
+secrets.yaml (credentials, gitignored, 0600) — plus a .gitignore that keeps the
+secret/derived files out of git. Existing cluster.yaml / secrets.yaml keep their
+content and receive only missing sections from installed plugins (and, with
+--metal, the bare-metal section); an existing .gitignore is appended to only
+with entries it is missing.
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ CLUSTER_TEMPLATE = """\
 # allowlists reveal which source addresses may reach your apis).
 # Edit and run `taloscluster plan` / `taloscluster converge`.
 name: {name}
+
+# secrets.yaml (gitignored, mode 0600) is merged in through this include;
+# keep the line or the loader refuses to merge the credentials
+include: [secrets.yaml]
 
 # extra tags exposed by talos as kubernetes node labels (machine.nodeLabels);
 # every node also gets ncsa/role and ncsa/pool; OpenStack adds ncsa/project
@@ -85,7 +90,7 @@ tailscale:
 
 SECRETS_TEMPLATE = """\
 # Secrets for this cluster — never commit (gitignored by `taloscluster init`).
-# This file is merged into cluster.yaml before validation, so these are ordinary
+# cluster.yaml lists this file under `include:`, so these are ordinary
 # cluster.yaml keys that happen to live here; you may move them to any file
 # `include:` names, or into cluster.yaml itself.
 {provider_section}

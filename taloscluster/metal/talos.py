@@ -469,8 +469,8 @@ def build_config(
             )
         # the metal installer bakes the tailscale extension whenever the
         # cluster opts in, so the node is told how to join the tailnet exactly
-        # as `build_configs` tells the VM machines (a cluster.yaml-only
-        # `tailscale:` section; a secrets.yaml-only key is a leftover credential)
+        # as `build_configs` tells the VM machines (the `tailscale:` section
+        # may live in any merged file, secrets.yaml included)
         auth_key = cfg.tailscale_auth_key
         if auth_key and cfg.tailscale_enabled:
             patches.append(

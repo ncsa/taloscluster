@@ -10,8 +10,9 @@ secrets.yaml (gitignored):
       url:   https://rancher.example.edu
       token: token-xxxxx:yyyyyyyyyyyy
 
-The two files (plus any `include:`) are merged before the section is read, so a
-value may live in any of them; the split above is only the scaffolded default.
+cluster.yaml and the files it lists under `include:` (secrets.yaml among them)
+are merged before the section is read, so a value may live in any of them; the
+split above is only the scaffolded default.
 """
 
 from __future__ import annotations
@@ -37,13 +38,11 @@ _RANCHER_KEYS = {"admins", "users", "url", "token"}
 
 def rancher_configured(root: Path) -> bool:
     """True only when the cluster opts into Rancher management -- a `rancher:`
-    section in cluster.yaml or an included file -- and the merged configuration
-    carries url + token, wherever they were written.
+    section in cluster.yaml or an included file (secrets.yaml included) -- and
+    the merged configuration carries url + token, wherever they were written.
 
-    A section that only secrets.yaml carries supplies credentials but does not
-    switch the feature on, matching how core treats credentials-only sections;
-    without the opt-in or the credentials this cluster is not managed by Rancher
-    and the tool should do nothing."""
+    Without the opt-in or the credentials this cluster is not managed by
+    Rancher and the tool should do nothing."""
     try:
         raw, opted_in = load_raw(root)
     except ConfigError:

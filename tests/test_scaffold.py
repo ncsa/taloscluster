@@ -53,6 +53,8 @@ def test_cluster_yaml_is_valid_and_uses_name(tmp_path):
     init(tmp_path, name="demo")
     d = yaml.safe_load((tmp_path / "cluster.yaml").read_text())
     assert d["name"] == "demo"
+    # the scaffold lists secrets.yaml, so the credentials merge in
+    assert d["include"] == ["secrets.yaml"]
     # every key load_config requires must be present in the template
     assert d["talos"]["version"]
     assert d["kubernetes"]["version"]

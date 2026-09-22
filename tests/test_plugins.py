@@ -352,6 +352,7 @@ def test_real_rancher_and_argocd_check_hand_off_the_downstream_id_on_a_mismatch(
 
     (tmp_path / "cluster.yaml").write_text(
         "name: testcluster\n"
+        "include: [secrets.yaml]\n"
         "rancher:\n  admins: []\n  users: []\n"
         "argocd:\n  admins: []\n  users: []\n"
     )
