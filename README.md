@@ -52,7 +52,7 @@ Edit the generated templates for your environment before converging. Back up `ta
 Install the working tree in editable mode:
 
 ```bash
-uv sync --extra dev --extra all --editable
+uv sync --extra dev
 ```
 
 Or install it as an editable tool with all plugins:

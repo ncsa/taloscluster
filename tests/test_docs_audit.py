@@ -29,6 +29,10 @@ tests so the drift they caught cannot come back silently:
   at a file that exists in the repo (for the CHANGELOG, with a fragment, at a
   real heading too) -- ``todo.md`` is gitignored, so a link to it 404s on a
   fresh clone.
+- Every documented ``uv sync`` command (``README.md`` and ``docs/``) must use
+  flags ``uv sync`` actually offers: it has no ``--editable`` (installing
+  editable is the default, ``--no-editable`` the opt-out), so a command
+  carrying it errors instead of setting the checkout up.
 """
 
 from __future__ import annotations
@@ -389,3 +393,24 @@ def test_changelog_relative_links_point_at_existing_files():
         if anchor and anchor not in _headers(resolved):
             broken.append(f"{filepart}#{anchor} (missing anchor)")
     assert not broken, "CHANGELOG links to missing files or anchors: " + "; ".join(broken)
+
+
+# --------------------------------------------------------------------------- #
+# 5. Documented `uv sync` commands must use flags `uv sync` actually has.
+# --------------------------------------------------------------------------- #
+
+
+def test_uv_sync_commands_use_supported_flags():
+    # `uv sync` installs the workspace projects in editable mode by default and
+    # offers no `--editable` flag (its opt-out is `--no-editable`), so the
+    # `uv sync --extra dev --extra all --editable` the README once documented
+    # for the development checkout errored out instead of installing; the
+    # development instructions must stick to the form the installation page
+    # documents.
+    offenders = [
+        f"{path.relative_to(ROOT)}: {line.strip()}"
+        for path in (README, *sorted(DOCS.rglob("*.md")))
+        for line in path.read_text().splitlines()
+        if line.strip().startswith("uv sync") and "--editable" in line
+    ]
+    assert not offenders, "`uv sync` has no --editable flag: " + "; ".join(offenders)
