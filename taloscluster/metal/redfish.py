@@ -2,11 +2,13 @@
 
 Talks basic auth to a controller on the scheme its `bmc.scheme` names -- https
 by default, so the BMC password never rides an unencrypted link unless the
-configuration opts into plain http for a BMC that serves no TLS. Verification
-is off either way (BMC certificates are self-signed). Only what the commands
-use is implemented: the power state and reset actions, the one-time boot
-override, virtual media insert/eject, and the NIC/disk summaries `inspect`
-prints.
+configuration opts into plain http for a BMC that serves no TLS. The BMC's
+certificate is not verified unless `bmc.tls_verify` says otherwise: `true`
+checks it against the system trust store and a path pins the CA bundle to
+trust, which a management network where the BMC could be impersonated needs.
+Only what the commands use is implemented: the power state and reset actions,
+the one-time boot override, virtual media insert/eject, and the NIC/disk
+summaries `inspect` prints.
 
 Deliberately absent: BIOS attribute changes and persistent boot-order
 manipulation. The flow mounts media, one-time boots it and manages power;
@@ -21,9 +23,6 @@ import urllib3
 
 from ..config import MetalBmc
 from ..errors import ReconcileError
-
-# the BMC controllers this tool talks to ship self-signed certificates
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TIMEOUT = 30.0
 
@@ -40,7 +39,11 @@ class Redfish:
         self.timeout = timeout
         self.session = requests.Session()
         self.session.auth = (bmc.username, bmc.password)
-        self.session.verify = False
+        self.session.verify = bmc.tls_verify
+        if not bmc.tls_verify:
+            # the default trusts the BMC's self-signed certificate; the pinning
+            # `tls_verify` asks for must not be muted with it
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         self._base: str = ""
         self._system_path: str = ""
 
@@ -58,7 +61,9 @@ class Redfish:
         try:
             # the service discovery endpoint proves the scheme and host
             # answer; it needs no authentication
-            requests.get(f"{base}/redfish/", timeout=self.timeout, verify=False).close()
+            requests.get(
+                f"{base}/redfish/", timeout=self.timeout, verify=self.bmc.tls_verify
+            ).close()
         except requests.RequestException as e:
             raise RedfishError(
                 f"could not reach a Redfish controller at {self.bmc.ip}: {e}"

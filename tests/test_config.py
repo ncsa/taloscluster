@@ -1167,6 +1167,86 @@ def test_metal_bmc_scheme_is_checked_at_load(make_config, scheme):
         }}})
 
 
+def test_metal_bmc_tls_verify_merges_like_the_credentials(make_config):
+    """The BMC certificate is not verified unless `bmc.tls_verify` says so, and
+    the setting merges key by key like the rest of the `bmc` block."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "redfish": True,
+        "disk": "/dev/sda",
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "bmc": {
+            "username": "root",
+            "password": "secret",
+            "tls_verify": "/etc/ssl/certs/bmc-ca.pem",
+        },
+        "servers": {
+            "rp001": {
+                "bmc": {"ip": "172.28.50.5"},
+                "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
+            },
+            "rp002": {
+                "bmc": {"ip": "172.28.50.6", "tls_verify": False},
+                "interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}},
+            },
+        },
+    }}})
+    servers = cfg.metal.groups["phoenix"].servers
+    # the group's CA bundle with the server's own BMC address merged in
+    assert servers["rp001"].bmc == MetalBmc(
+        ip="172.28.50.5",
+        username="root",
+        password="secret",
+        tls_verify="/etc/ssl/certs/bmc-ca.pem",
+    )
+    # a server override puts its own machine back on unverified
+    assert servers["rp002"].bmc == MetalBmc(
+        ip="172.28.50.6", username="root", password="secret", tls_verify=False
+    )
+
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "redfish": True,
+        "disk": "/dev/sda",
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "servers": {
+            "rp001": {
+                "bmc": {"ip": "172.28.50.5", "username": "root", "password": "secret"},
+                "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
+            },
+        },
+    }}})
+    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
+    assert rp001.bmc.tls_verify is False
+
+
+@pytest.mark.parametrize("tls_verify", [1, "", [], None])
+def test_metal_bmc_tls_verify_is_checked_at_load(make_config, tls_verify):
+    """`tls_verify` is a boolean or a CA bundle path, checked when the
+    configuration loads like the scheme -- anything else could silently
+    disable the verification it asks for."""
+    with pytest.raises(
+        ConfigError, match=r"bmc\.tls_verify must be true, false, or a CA bundle path"
+    ):
+        make_config({"metal": {"phoenix": {
+            "role": "worker",
+            "redfish": True,
+            "disk": "/dev/sda",
+            "interfaces": {"enp1s0f0": {"role": "cluster"}},
+            "servers": {
+                "rp001": {
+                    "bmc": {
+                        "ip": "172.28.50.5",
+                        "username": "root",
+                        "password": "secret",
+                        "tls_verify": tls_verify,
+                    },
+                    "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
+                },
+            },
+        }}})
+
+
 @pytest.mark.parametrize(
     ("metal", "message"),
     [

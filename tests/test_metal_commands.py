@@ -1006,3 +1006,32 @@ def test_base_never_falls_back_to_http_when_https_fails(monkeypatch):
         redfish.RedfishError, match="could not reach a Redfish controller"
     ):
         _ = rf.base
+
+
+def test_tls_verify_reaches_the_session_and_the_discovery_probe(monkeypatch):
+    """The session and the discovery probe verify the BMC certificate the way
+    `bmc.tls_verify` says: off by default, the system store on `true`, and a
+    named CA bundle pinned by path."""
+    seen = []
+
+    def fake_get(url, **kw):
+        seen.append(kw.get("verify"))
+        return StubResponse({"v1": "/redfish/v1/"})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    rf = redfish.Redfish(MetalBmc(ip="198.51.100.10", username="u", password="p"))
+    assert rf.session.verify is False
+    _ = rf.base
+    rf = redfish.Redfish(
+        MetalBmc(ip="198.51.100.10", username="u", password="p", tls_verify=True)
+    )
+    assert rf.session.verify is True
+    _ = rf.base
+    bundle = "/etc/ssl/certs/bmc-ca.pem"
+    rf = redfish.Redfish(
+        MetalBmc(ip="198.51.100.10", username="u", password="p", tls_verify=bundle)
+    )
+    assert rf.session.verify == bundle
+    _ = rf.base
+    assert seen == [False, True, bundle]
