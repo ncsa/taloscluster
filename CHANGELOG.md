@@ -49,7 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- **Breaking:** require Proxmox 9 or newer, read from the first compute node and refused when unreadable, during converge's validate phase: VM NICs rely on Proxmox 9 inheriting the bridge MTU from an unset MTU, which Proxmox 8 does not do.
+- **Breaking:** require Proxmox 9 or newer (refusing `destroy` as well as converge); pin 0.7.x to tear down a Proxmox 8 cluster.
 - Refuse a Proxmox SDN zone MTU below the cluster MTU.
 - **Breaking:** merge `secrets.yaml` into the cluster configuration through the `include` list (the scaffold lists it), so credentials — plugin ones included — can live in any included file; a `cluster.yaml` that does not include it no longer reads it.
 - **Breaking:** the network settings, including a new `mtu` applied to links and the default route, move into `network.cluster` and `network.external`; the old address keys are refused ([old-to-new key table](docs/configuration/network.md#moving-from-the-old-keys)).

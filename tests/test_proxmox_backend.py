@@ -920,6 +920,26 @@ def test_proxmox_8_is_refused(proxmox_cfg):
         _backend(proxmox_cfg, client).load_inventory()
 
 
+def test_destroy_refuses_proxmox_8_before_any_teardown(proxmox_cfg, monkeypatch, tmp_path):
+    """The release check sits in the inventory load that destroy performs
+    first, so an upgraded taloscluster cannot tear down a Proxmox 8 cluster
+    either -- the error's pin-to-0.7.x advice is the only way out, and the
+    cluster identity must survive the refused run untouched."""
+    secrets = tmp_path / "talossecrets.yaml"
+    secrets.write_text("identity")
+    monkeypatch.setattr(converge, "load_config", lambda _root: proxmox_cfg)
+    client = FakeClient(_data(pve=8))
+    monkeypatch.setattr(
+        converge, "backend_for", lambda _cfg: ProxmoxBackend(proxmox_cfg, client=client)
+    )
+
+    with pytest.raises(ReconcileError, match="pin taloscluster to 0.7"):
+        converge.destroy(tmp_path, assume_yes=True)
+
+    assert client.mutations == []
+    assert secrets.exists()
+
+
 def test_vm_create_omits_mtu_on_a_jumbo_cluster(make_config, monkeypatch):
     """Proxmox 9 inherits the bridge MTU from an unset NIC MTU, and reads
     `mtu=1` as a literal MTU of 1 -- so the sentinel must not be written."""
