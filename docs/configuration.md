@@ -23,6 +23,7 @@ All example addresses and hostnames in these pages are placeholders: RFC 5737 do
 | `tailscale` | no | Opt into the tailscale extension, login server | [Tailscale](configuration/tailscale.md) |
 | `rancher` | no | Rancher plugin: members to grant access | [Rancher](configuration/rancher.md) |
 | `argocd` | no | ArgoCD plugin: project roles, repositories, per-app settings | [ArgoCD](configuration/argocd.md) |
+| `charts` | no | Charts plugin: Helm charts and manifests installed into the cluster | [Charts](configuration/charts.md) |
 
 At most one of `openstack` or `proxmox` may be present, and one of them is required: a [`metal`](configuration/metal.md) section may accompany it, but a cluster whose machines are all bare metal is refused at load. The VM provider selects the backend and decides which pool sizing keys are required.
 
@@ -86,6 +87,7 @@ Never commit this file. `taloscluster init` writes it with mode 0600 and adds it
 | `tailscale` | no | Pre-auth key nodes register with | [Tailscale](configuration/tailscale.md#secretsyaml) |
 | `rancher` | no | Rancher server URL and token | [Rancher](configuration/rancher.md#secretsyaml) |
 | `argocd` | no | How to reach the ArgoCD cluster | [ArgoCD](configuration/argocd.md#secretsyaml) |
+| `charts` | no | Charts plugin: CephX credentials for the ceph-csi Secrets | [Charts](configuration/charts.md#secretsyaml) |
 
 ```yaml
 proxmox:

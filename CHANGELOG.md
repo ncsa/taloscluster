@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Add the `charts` plugin (`taloscluster[charts]`): install Helm charts and manifests (Gateway API, MetalLB, Traefik, cert-manager, sealed-secrets, NFS and Ceph CSI) into the cluster during converge, drift-driven, with the `charts:` section (including the `charts.ceph` credentials) read from the merged configuration.
 - Document that DHCP links keep a single default route with the 1500 MTU clamp over the lease's route.
 - Join a configured bare-metal machine missing from the cluster during converge, booting it through its BMC and never reinstalling one that already answers apid with the cluster's identity.
 - Warn when a configured host network overlaps the Kubernetes pod (`10.244.0.0/16`) or service (`10.96.0.0/12`) network, which is what Talos's `address-overlap` diagnostic reports on a node.

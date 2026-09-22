@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taloscluster-charts"
+version = "0.1.0"
+description = "taloscluster plugin: install helm charts (and manifests) into the cluster on sync"
+requires-python = ">=3.10"
+# PyYAML comes in via taloscluster; helm/kubectl are external binaries
+dependencies = [
+    "taloscluster",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.10", "types-PyYAML"]
+
+# how taloscluster finds this plugin; the value is the module that re-exports the
+# plugin protocol (configured/converge/destroy/status/check + CONFIG_SECTIONS)
+[project.entry-points."taloscluster.plugins"]
+charts = "taloscluster_charts"
+
+# taloscluster is the workspace root; resolve it from the checkout, not PyPI
+[tool.uv.sources]
+taloscluster = { workspace = true }
+
+[tool.setuptools.packages.find]
+include = ["taloscluster_charts*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

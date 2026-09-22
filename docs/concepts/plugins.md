@@ -3,16 +3,17 @@
 Optional integrations live in plugins. taloscluster builds the machines, bootstraps Kubernetes and writes the kubeconfig; plugins can register the cluster with other services and install platform applications. Core taloscluster also installs metrics-server and the kubelet serving certificate approver through Talos bootstrap manifests. Plugins are separate Python packages that live in the `plugins/` folder of the repository and are installed only when you want them:
 
 ```bash
-uv tool install "taloscluster[argocd,rancher] @ git+https://github.com/ncsa/taloscluster"
+uv tool install "taloscluster[argocd,charts,rancher] @ git+https://github.com/ncsa/taloscluster"
 uv tool install "taloscluster[all] @ git+https://github.com/ncsa/taloscluster"
 ```
 
-Two plugins ship today:
+Three plugins ship today:
 
 | Plugin | What it does | Configuration |
 | --- | --- | --- |
 | `rancher` | Imports the cluster into a Rancher server, installs the cluster agent, and keeps the owner and member lists in sync | [rancher](../configuration/rancher.md) |
 | `argocd` | Registers the cluster with an ArgoCD instance and hands it an app-of-apps that installs the platform applications | [argocd](../configuration/argocd.md) |
+| `charts` | Installs Helm charts and manifests (MetalLB, Traefik, cert-manager, sealed-secrets, NFS and Ceph storage) directly into the cluster, drift-driven, without a GitOps server | [charts](../configuration/charts.md) |
 
 ## How plugins run
 

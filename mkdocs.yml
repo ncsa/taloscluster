@@ -60,6 +60,7 @@ nav:
       - Tailscale: configuration/tailscale.md
       - Rancher plugin: configuration/rancher.md
       - ArgoCD plugin: configuration/argocd.md
+      - Charts plugin: configuration/charts.md
   - Plugins: concepts/plugins.md
   - Backup and recovery: backup.md
   - Troubleshooting: troubleshooting.md

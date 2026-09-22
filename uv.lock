@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "taloscluster",
     "taloscluster-argocd",
+    "taloscluster-charts",
     "taloscluster-rancher",
 ]
 
@@ -2243,10 +2244,14 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "taloscluster-argocd" },
+    { name = "taloscluster-charts" },
     { name = "taloscluster-rancher" },
 ]
 argocd = [
     { name = "taloscluster-argocd" },
+]
+charts = [
+    { name = "taloscluster-charts" },
 ]
 dev = [
     { name = "mkdocs-material" },
@@ -2256,6 +2261,7 @@ dev = [
     { name = "pytest-timeout" },
     { name = "ruff" },
     { name = "taloscluster-argocd" },
+    { name = "taloscluster-charts" },
     { name = "taloscluster-rancher" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
@@ -2284,6 +2290,9 @@ requires-dist = [
     { name = "taloscluster-argocd", marker = "extra == 'all'", editable = "plugins/argocd" },
     { name = "taloscluster-argocd", marker = "extra == 'argocd'", editable = "plugins/argocd" },
     { name = "taloscluster-argocd", marker = "extra == 'dev'", editable = "plugins/argocd" },
+    { name = "taloscluster-charts", marker = "extra == 'all'", editable = "plugins/charts" },
+    { name = "taloscluster-charts", marker = "extra == 'charts'", editable = "plugins/charts" },
+    { name = "taloscluster-charts", marker = "extra == 'dev'", editable = "plugins/charts" },
     { name = "taloscluster-rancher", marker = "extra == 'all'", editable = "plugins/rancher" },
     { name = "taloscluster-rancher", marker = "extra == 'dev'", editable = "plugins/rancher" },
     { name = "taloscluster-rancher", marker = "extra == 'rancher'", editable = "plugins/rancher" },
@@ -2291,12 +2300,38 @@ requires-dist = [
     { name = "types-requests", marker = "extra == 'dev'" },
     { name = "urllib3", specifier = ">=2.0" },
 ]
-provides-extras = ["openstack", "argocd", "rancher", "all", "dev"]
+provides-extras = ["openstack", "argocd", "charts", "rancher", "all", "dev"]
 
 [[package]]
 name = "taloscluster-argocd"
 version = "0.1.0"
 source = { editable = "plugins/argocd" }
+dependencies = [
+    { name = "taloscluster" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "types-pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+    { name = "taloscluster", editable = "." },
+    { name = "types-pyyaml", marker = "extra == 'dev'" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "taloscluster-charts"
+version = "0.1.0"
+source = { editable = "plugins/charts" }
 dependencies = [
     { name = "taloscluster" },
 ]

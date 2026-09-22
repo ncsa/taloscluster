@@ -11,7 +11,7 @@ uv tool install git+https://github.com/ncsa/taloscluster   # install
 uv tool upgrade taloscluster                                # update
 ```
 
-Add the optional [plugins](concepts/plugins.md) with an extra — `[argocd]`, `[rancher]` or `[all]`:
+Add the optional [plugins](concepts/plugins.md) with an extra — `[argocd]`, `[charts]`, `[rancher]` or `[all]`:
 
 ```bash
 uv tool install "taloscluster[all] @ git+https://github.com/ncsa/taloscluster"

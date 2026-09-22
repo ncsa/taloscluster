@@ -1,0 +1,419 @@
+"""Converge/check decision logic, with helm and kubectl stubbed out."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import yaml
+from taloscluster import output
+from taloscluster.errors import ConfigError, ReconcileError
+
+from taloscluster_charts import reconcile
+from taloscluster_charts.config import Config
+
+
+@dataclass
+class Ctx:
+    """Duck-typed stand-in for taloscluster.context.Context."""
+
+    root: Path
+    ingress: dict = field(default_factory=dict)
+    cfg: object = field(default_factory=lambda: SimpleNamespace(name="test"))
+
+    @property
+    def kubeconfig(self) -> Path:
+        return self.root / "kubeconfig"
+
+
+def _root(tmp_path, charts) -> Path:
+    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({"name": "t", "charts": charts}))
+    return tmp_path
+
+
+def _pool_ctx(tmp_path, charts) -> Ctx:
+    return Ctx(root=_root(tmp_path, charts), ingress={"metallb": ["192.0.2.190-192.0.2.199"]})
+
+
+@dataclass
+class FakeHelm:
+    """Replaces taloscluster_charts.helm for converge decision tests."""
+
+    installed: dict[str, str] = field(default_factory=dict)  # release -> chart version
+    latest: dict[str, str] = field(default_factory=dict)
+    values: dict[str, dict] = field(default_factory=dict)  # release -> last applied values
+    upgrades: list = field(default_factory=list)
+    uninstalls: list = field(default_factory=list)
+
+    def release(self, kubeconfig, name, namespace):
+        if name not in self.installed:
+            return None
+        return {"name": name, "status": "deployed", "chart": f"{name}-{self.installed[name]}"}
+
+    def latest_version(self, chart, repo):
+        return self.latest.get(chart)
+
+    def get_values(self, kubeconfig, name, namespace):
+        return self.values.get(name, {})
+
+    def upgrade_install(self, kubeconfig, name, chart, repo, namespace, version, values_yaml):
+        self.upgrades.append((name, values_yaml))
+        self.values[name] = yaml.safe_load(values_yaml)
+
+    def uninstall(self, kubeconfig, name, namespace):
+        self.uninstalls.append(name)
+
+
+@pytest.fixture
+def fake_helm(monkeypatch):
+    fake = FakeHelm()
+    for attr in ("release", "latest_version", "upgrade_install", "uninstall", "get_values"):
+        monkeypatch.setattr(reconcile.helm, attr, getattr(fake, attr))
+    return fake
+
+
+@pytest.fixture
+def no_kube(monkeypatch):
+    """Stub kubectl; by default everything matches (nothing to apply)."""
+    calls = {"apply": [], "delete": [], "matches": True}
+    monkeypatch.setattr(reconcile.kube, "matches", lambda *a, **k: calls["matches"])
+    monkeypatch.setattr(
+        reconcile.kube, "apply", lambda root, target, **k: calls["apply"].append(target)
+    )
+    monkeypatch.setattr(
+        reconcile.kube, "delete", lambda root, target, **k: calls["delete"].append(target)
+    )
+    monkeypatch.setattr(reconcile.kube, "exists", lambda root, target, **k: False)
+    monkeypatch.setattr(reconcile.kube, "wait_deployment_available", lambda *a, **k: True)
+    monkeypatch.setattr(reconcile, "preflight_tools", lambda tools=None: None)
+    return calls
+
+
+def test_first_install(tmp_path, fake_helm, no_kube):
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert result["entries"]["metallb"]["action"] == "installed"
+    assert fake_helm.upgrades and fake_helm.upgrades[0][0] == "metallb"
+
+
+def test_pool_applied_when_drifted(tmp_path, fake_helm, no_kube):
+    no_kube["matches"] = False
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.14.9"
+    reconcile.converge(_pool_ctx(tmp_path, {"metallb": {}}))
+    # namespace + pool resources both drift when matches is False
+    assert no_kube["apply"] == ["-", "-"]
+
+
+def test_latest_up_to_date(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.14.9"
+    fake_helm.values["metallb"] = {  # matches the merged common values
+        "speaker": {"frr": {"enabled": False}},
+        "frrk8s": {"enabled": False},
+    }
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert result["entries"]["metallb"]["action"] == "up_to_date"
+    assert not fake_helm.upgrades
+
+
+@pytest.fixture(autouse=True)
+def _reset_dry_run():
+    output.set_dry_run(False)
+    yield
+    output.set_dry_run(False)
+
+
+@pytest.fixture
+def dry():
+    output.set_dry_run(True)
+
+
+def test_plan_hides_values_when_up_to_date(tmp_path, fake_helm, no_kube, dry, capsys):
+    (tmp_path / "kubeconfig").write_text("")
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.14.9"
+    fake_helm.values["metallb"] = {
+        "speaker": {"frr": {"enabled": False}},
+        "frrk8s": {"enabled": False},
+    }
+    reconcile.converge(_pool_ctx(tmp_path, {"metallb": {}}))
+    out = capsys.readouterr().out
+    assert "metallb: chart 0.14.9 up to date" in out
+    assert "metallb: values" not in out
+
+
+def test_plan_shows_values_when_changing(tmp_path, fake_helm, no_kube, dry, capsys):
+    (tmp_path / "kubeconfig").write_text("")
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.14.9"
+    fake_helm.values["metallb"] = {"stale": True}
+    reconcile.converge(_pool_ctx(tmp_path, {"metallb": {}}))
+    out = capsys.readouterr().out
+    assert "metallb: values" in out
+    assert "frrk8s" in out
+
+
+def test_values_change_triggers_upgrade(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.14.9"
+    fake_helm.values["metallb"] = {"stale": True}
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert result["entries"]["metallb"]["action"] == "upgraded"
+
+
+def test_latest_upgrades_when_newer_exists(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.15.0"
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert result["entries"]["metallb"]["action"] == "upgraded"
+
+
+def test_pinned_version_mismatch_upgrades(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["metallb"] = "0.14.9"
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {"version": "0.13.0"}}))
+    assert result["entries"]["metallb"]["action"] == "upgraded"
+
+
+def test_disabled_entry_uninstalls(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["metallb"] = "0.14.9"
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {"enabled": False}}))
+    assert result["entries"]["metallb"]["action"] == "removed"
+    assert fake_helm.uninstalls == ["metallb"]
+
+
+def test_disabled_absent_entry_is_a_noop(tmp_path, fake_helm, no_kube):
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {"enabled": False}}))
+    assert result["entries"]["metallb"]["action"] == "absent"
+    assert not fake_helm.uninstalls
+
+
+def test_disabled_metallb_deletes_pool_before_uninstall(tmp_path, monkeypatch):
+    log = []
+    _stub(monkeypatch, log, releases=("metallb",), exists=True)
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {"enabled": False}}))
+    assert result["entries"]["metallb"]["action"] == "removed"
+    assert log == ["delete metallb pool resources", "uninstall metallb"]
+
+
+def _stub(monkeypatch, log, releases=(), exists=True):
+    """Wire helm/kubectl stubs that append human-readable steps to `log`."""
+
+    def release(kubeconfig, name, namespace):
+        if name in releases:
+            return {"name": name, "status": "deployed", "chart": f"{name}-1.0.0"}
+        return None
+
+    monkeypatch.setattr(reconcile, "preflight_tools", lambda tools=None: None)
+    monkeypatch.setattr(reconcile.helm, "release", release)
+    monkeypatch.setattr(
+        reconcile.helm, "uninstall", lambda kc, name, ns: log.append(f"uninstall {name}")
+    )
+    monkeypatch.setattr(reconcile.kube, "exists", lambda root, target, **k: exists)
+    monkeypatch.setattr(
+        reconcile.kube,
+        "delete",
+        lambda root, target, label="", input=None: log.append(f"delete {label}"),
+    )
+
+
+def log_stub(monkeypatch, exists=True, matches=True):
+    """Stub the read-only kubectl probes `check` uses."""
+    monkeypatch.setattr(reconcile, "preflight_tools", lambda tools=None: None)
+    monkeypatch.setattr(reconcile.kube, "exists", lambda root, target, **k: exists)
+    monkeypatch.setattr(reconcile.kube, "matches", lambda root, target, **k: matches)
+
+
+def test_destroy_order(tmp_path, monkeypatch):
+    log = []
+    _stub(monkeypatch, log, releases=("traefik", "metallb"), exists=True)
+    charts = {
+        "gateway": {"version": "v1.6.2"},
+        "metallb": {},
+        "traefik": {},
+    }
+    reconcile.destroy(_pool_ctx(tmp_path, charts))
+    assert log == [
+        "uninstall traefik",
+        "delete namespace traefik",
+        "delete metallb pool resources",  # before the chart: helm uninstall removes the CRDs
+        "uninstall metallb",
+        "delete namespace metallb-system",
+        "delete https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2"
+        "/standard-install.yaml",
+    ]
+
+
+def test_destroy_skips_pool_when_chart_gone(tmp_path, monkeypatch):
+    log = []
+    _stub(monkeypatch, log, releases=(), exists=False)
+    reconcile.destroy(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert log == ["delete namespace metallb-system"]
+
+
+def test_destroy_skips_manifest_when_gone(tmp_path, monkeypatch):
+    log = []
+    _stub(monkeypatch, log, releases=(), exists=False)
+    reconcile.destroy(_pool_ctx(tmp_path, {"gateway": {"version": "v1.6.2"}}))
+    assert log == []
+
+
+def test_traefik_without_gateway_warns(tmp_path, fake_helm, no_kube, capsys):
+    charts = {
+        "gateway": {"enabled": False, "version": "v1.3.1"},
+        "traefik": {},
+    }
+    reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert "Gateway API is already installed" in capsys.readouterr().err
+
+
+def test_traefik_values_carry_pool_ip(tmp_path, fake_helm, no_kube):
+    ctx = _pool_ctx(tmp_path, {"traefik": {}})
+    reconcile.converge(ctx)
+    values = yaml.safe_load(fake_helm.upgrades[0][-1])
+    assert values["service"]["loadBalancerIP"] == "192.0.2.190"
+
+
+def test_check_reports_upgrade_available(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.15.0"
+    report = reconcile.check(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert report["ok"] is True
+    assert report["entries"]["metallb"] == "ok"
+    assert report["upgrade_available"] == {"metallb": "0.15.0"}
+
+
+def test_check_fails_on_missing_release(tmp_path, fake_helm, no_kube):
+    report = reconcile.check(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert report["ok"] is False
+    assert report["entries"]["metallb"] == "not_installed"
+
+
+def test_check_fails_when_pool_drifted(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["metallb"] = "0.14.9"
+    no_kube["matches"] = False
+    report = reconcile.check(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert report["ok"] is False
+    assert report["entries"]["metallb"] == "drifted"
+
+
+def test_check_gateway_not_installed(tmp_path, monkeypatch, no_kube):
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: "v1.6.2")
+    report = reconcile.check(_pool_ctx(tmp_path, {"gateway": {"version": "v1.6.2"}}))
+    assert report["ok"] is False
+    assert report["entries"]["gateway"] == "not_installed"
+    assert report["upgrade_available"] == {}
+
+
+def test_check_reports_newer_gateway_release(tmp_path, monkeypatch):
+    log_stub(monkeypatch, exists=True, matches=True)
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: "v1.7.0")
+    report = reconcile.check(_pool_ctx(tmp_path, {"gateway": {"version": "v1.6.2"}}))
+    assert report["ok"] is True
+    assert report["entries"]["gateway"] == "ok"
+    assert report["upgrade_available"] == {"gateway": "v1.7.0"}
+
+
+def test_check_current_gateway_release_has_no_note(tmp_path, monkeypatch):
+    log_stub(monkeypatch, exists=True, matches=True)
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: "v1.6.2")
+    report = reconcile.check(_pool_ctx(tmp_path, {"gateway": {"version": "v1.6.2"}}))
+    assert report["upgrade_available"] == {}
+
+
+def test_check_latest_gateway_tracks_upstream_without_note(tmp_path, monkeypatch):
+    log_stub(monkeypatch, exists=True, matches=True)
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: "v1.7.0")
+    report = reconcile.check(_pool_ctx(tmp_path, {"gateway": {"version": "latest"}}))
+    assert report["ok"] is True
+    assert report["entries"]["gateway"] == "ok"
+    assert report["upgrade_available"] == {}  # a new release shows up as drift instead
+
+
+def test_converge_resolves_latest_gateway(tmp_path, fake_helm, no_kube, monkeypatch):
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: "v1.7.0")
+    reconcile.converge(_pool_ctx(tmp_path, {"gateway": {"version": "latest"}}))
+    assert no_kube["apply"] == [
+        "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.7.0"
+        "/standard-install.yaml"
+    ]
+
+
+def test_converge_latest_gateway_unresolvable(tmp_path, fake_helm, no_kube, monkeypatch):
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: None)
+    with pytest.raises(ReconcileError, match="cannot resolve the latest release"):
+        reconcile.converge(_pool_ctx(tmp_path, {"gateway": {"version": "latest"}}))
+
+
+def test_config_load_error_surfaces(tmp_path, fake_helm, no_kube):
+    _root(tmp_path, {"mystery": {}})
+    with pytest.raises(ConfigError):
+        reconcile.converge(Ctx(root=tmp_path))
+
+
+def test_ordered_puts_gateway_first(tmp_path):
+    charts = {
+        "traefik": {},
+        "gateway": {"version": "v1"},
+        "metallb": {},
+        "sealed-secrets": {},
+        "cert-manager": {"email": "a@b"},
+        "ceph": {"enabled": False},
+        "nfs": {"enabled": False},
+        "zcustom": {"repo": "https://x"},
+    }
+    cfg = Config.load(_root(tmp_path, charts))
+    names = [entry.name for entry in reconcile._ordered(cfg.entries)]
+    assert names == [
+        "gateway", "metallb", "traefik", "sealed-secrets", "cert-manager",
+        "ceph", "nfs", "zcustom",
+    ]
+
+
+def test_nfs_values_carry_storage_classes(tmp_path, fake_helm, no_kube):
+    charts = {"nfs": {"storageClasses": [
+        {"name": "nfs-data", "server": "nfs.example.edu", "share": "/exports/data"},
+    ]}}
+    result = reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert result["entries"]["nfs"]["action"] == "installed"
+    values = yaml.safe_load(fake_helm.upgrades[0][1])
+    assert values["driver"]["mountPermissions"] == "0777"
+    sc = values["storageClasses"][0]
+    assert sc["name"] == "nfs-data"
+    assert sc["parameters"]["subDir"].startswith("test/")
+    assert sc["parameters"]["server"] == "nfs.example.edu"
+
+
+def test_cert_manager_issuers_applied_after_chart(tmp_path, fake_helm, no_kube):
+    charts = {"cert-manager": {"email": "a@b", "prod": True}}
+    result = reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert result["entries"]["cert-manager"]["action"] == "installed"
+    assert "-" in no_kube["apply"]  # ClusterIssuers via stdin after the chart
+
+
+def test_cert_manager_issuers_deleted_before_uninstall(tmp_path, monkeypatch):
+    log = []
+    _stub(monkeypatch, log, releases=("cert-manager",), exists=True)
+    charts = {"cert-manager": {"email": "a@b", "prod": True, "enabled": False}}
+    result = reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert result["entries"]["cert-manager"]["action"] == "removed"
+    assert log == [
+        "delete cert-manager ClusterIssuers",  # webhook must still be serving
+        "uninstall cert-manager",
+    ]
+
+
+def test_check_fails_when_issuers_drifted(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["cert-manager"] = "1.21.2"
+    no_kube["matches"] = False
+    charts = {"cert-manager": {"email": "a@b", "prod": True}}
+    report = reconcile.check(_pool_ctx(tmp_path, charts))
+    assert report["entries"]["cert-manager"] == "drifted"
+
+
+def test_check_ignores_issuers_when_none_enabled(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["cert-manager"] = "1.21.2"
+    charts = {"cert-manager": {"email": "a@b"}}
+    report = reconcile.check(_pool_ctx(tmp_path, charts))
+    assert report["entries"]["cert-manager"] == "ok"

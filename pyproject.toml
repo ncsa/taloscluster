@@ -21,10 +21,11 @@ dependencies = [
 openstack = ["python-openstackclient"]
 # optional plugins (plugins/*), hooked into converge/plan/destroy/status/check
 # through the `taloscluster.plugins` entry point:
-#   uv tool install "taloscluster[argocd,rancher] @ git+https://github.com/ncsa/taloscluster"
+#   uv tool install "taloscluster[argocd,charts,rancher] @ git+https://github.com/ncsa/taloscluster"
 argocd = ["taloscluster-argocd"]
+charts = ["taloscluster-charts"]
 rancher = ["taloscluster-rancher"]
-all = ["taloscluster-argocd", "taloscluster-rancher"]
+all = ["taloscluster-argocd", "taloscluster-charts", "taloscluster-rancher"]
 dev = [
     "pytest>=8",
     "ruff>=0.4",
@@ -32,6 +33,7 @@ dev = [
     "types-PyYAML",
     "types-requests",
     "taloscluster-argocd",
+    "taloscluster-charts",
     "taloscluster-rancher",
     "mkdocs-material>=9.7.7",
     "pytest-timeout>=2.4",
@@ -45,6 +47,7 @@ members = ["plugins/*"]
 
 [tool.uv.sources]
 taloscluster-argocd = { workspace = true }
+taloscluster-charts = { workspace = true }
 taloscluster-rancher = { workspace = true }
 
 [project.scripts]
@@ -62,7 +65,7 @@ testpaths = ["tests", "plugins"]
 timeout = 30
 
 [tool.coverage.run]
-source = ["taloscluster", "plugins/argocd/taloscluster_argocd", "plugins/rancher/taloscluster_rancher"]
+source = ["taloscluster", "plugins/argocd/taloscluster_argocd", "plugins/charts/taloscluster_charts", "plugins/rancher/taloscluster_rancher"]
 
 [tool.coverage.report]
 show_missing = true
