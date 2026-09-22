@@ -233,13 +233,16 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         )
         # a joined metal machine gets the same config push as the VM pools: its
         # configuration is generated from its own cabling plan and the metal
-        # installer, at the same running kubernetes version the VMs bake
+        # installer, at the same running kubernetes version the VMs bake, and
+        # against the same provider-resolved endpoint (the vip a metal control
+        # plane holds, the advertised address in the certSANs)
         for server in metal_servers:
             configs[server.name] = metal_talos.build_config(
                 server,
                 cfg,
                 secrets_path,
                 metal_installer,
+                refs.kubernetes,
                 kubernetes_version=config_kubernetes_version,
             )
 

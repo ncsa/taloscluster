@@ -28,6 +28,7 @@ import pytest
 import yaml
 
 from taloscluster.config import ConfigError
+from taloscluster.infrastructure import Endpoint
 from taloscluster.metal import talos as metal_talos
 from taloscluster.talos import machineconfig
 
@@ -92,6 +93,14 @@ def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
     return make_config(overrides, remove=("openstack",))
 
 
+def _endpoint(cfg) -> Endpoint:
+    """The endpoint a Proxmox cluster's network phase resolves: the configured
+    VIP, advertised as it is (exactly one of the two sections carries it)."""
+    ext = cfg.network.external
+    vip = cfg.network.cluster.kubeapi_vip or (ext.kubeapi_vip if ext else "")
+    return Endpoint(vip=vip, advertised_address=vip)
+
+
 def _render(monkeypatch, output: str) -> dict[str, list]:
     rendered: dict[str, list] = {}
 
@@ -107,14 +116,16 @@ def _render(monkeypatch, output: str) -> dict[str, list]:
 
 
 def _build(
-    make_config, monkeypatch, tmp_path, output=None, **kwargs
+    make_config, monkeypatch, tmp_path, output=None, *, endpoint=None, **kwargs
 ) -> tuple[dict[str, list], str]:
     cfg = _cfg(make_config, **kwargs)
     rendered = _render(monkeypatch, output or _GEN_OUTPUT)
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
     server = cfg.metal.groups["phoenix"].servers["rp001"]
-    out = metal_talos.build_config(server, cfg, secrets_path, INSTALLER)
+    out = metal_talos.build_config(
+        server, cfg, secrets_path, INSTALLER, endpoint or _endpoint(cfg)
+    )
     assert len(rendered) == 1
     return rendered["rp001"], out
 
@@ -363,7 +374,7 @@ def test_metal_tailscale_cluster_tells_the_node_to_join_the_tailnet(
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
     server = cfg.metal.groups["phoenix"].servers["rp001"]
-    metal_talos.build_config(server, cfg, secrets_path, INSTALLER)
+    metal_talos.build_config(server, cfg, secrets_path, INSTALLER, _endpoint(cfg))
 
     # the tailscale document rides the shared stack between kubespan and the
     # cabling plan, exactly where build_configs puts it for the VM machines
@@ -483,7 +494,8 @@ def test_metal_config_bakes_the_running_version_when_one_is_passed(
     server = cfg.metal.groups["phoenix"].servers["rp001"]
 
     metal_talos.build_config(
-        server, cfg, secrets_path, INSTALLER, kubernetes_version="v1.30.4"
+        server, cfg, secrets_path, INSTALLER, _endpoint(cfg),
+        kubernetes_version="v1.30.4",
     )
 
     assert seen["kubernetes_version"] == "v1.30.4"
@@ -497,7 +509,7 @@ def test_metal_config_bakes_the_running_version_when_one_is_passed(
     assert pod["spec"]["containers"][0]["image"] == "registry.k8s.io/kube-proxy:v1.30.4"
 
     seen.clear()
-    metal_talos.build_config(server, cfg, secrets_path, INSTALLER)
+    metal_talos.build_config(server, cfg, secrets_path, INSTALLER, _endpoint(cfg))
     assert seen["kubernetes_version"] == cfg.kubernetes_version
 
 
@@ -617,6 +629,98 @@ def test_metal_control_plane_with_external_vip_needs_an_external_link(
             external={**EXTERNAL, "kubeapi_vip": "203.0.113.79"},
             vip=None,
         )
+
+
+# The metal-on-OpenStack shape: the openstack section stays (no VM pool keys,
+# no kubeapi_vip anywhere in cluster.yaml), the metal group sits on the tenant
+# network the provider creates, and the endpoint is what the network phase
+# resolved -- the reserved kubeapi port's fixed ip with the floating ip in
+# front of it, exactly what converge passes for the VM machines.
+OPENSTACK_TENANT_VIP = "192.168.0.10"
+OPENSTACK_FLOATING_IP = "203.0.113.79"
+
+
+def _openstack_cfg(make_config, role="worker"):
+    return make_config({
+        "metal": {
+            "phoenix": {
+                "role": role,
+                "disk": "/dev/sda",
+                "interfaces": {"enp1s0f0": {"role": "cluster"}},
+                "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5"}}}},
+            },
+        },
+    })
+
+
+def test_metal_control_plane_without_a_vip_is_refused(make_config, monkeypatch, tmp_path):
+    """A control plane with no kubeapi VIP resolved could never hold the API
+    address, so the configuration refuses instead of omitting the document."""
+    cfg = _openstack_cfg(make_config, role="controlplane")
+    rendered = _render(monkeypatch, _GEN_OUTPUT)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    with pytest.raises(ConfigError, match="resolved no kubeapi VIP"):
+        metal_talos.build_config(
+            server, cfg, secrets_path, INSTALLER,
+            Endpoint(vip="", advertised_address=OPENSTACK_FLOATING_IP),
+        )
+    assert rendered == {}
+
+
+def test_metal_on_openstack_uses_the_provider_endpoint(
+    make_config, monkeypatch, tmp_path
+):
+    """A metal machine beside OpenStack VMs is generated against the endpoint
+    the network phase resolved, like the VM configs: the floating ip advertises
+    the endpoint (the certSANs included), and a control plane holds the
+    tenant-network VIP on its cluster link."""
+    cfg = _openstack_cfg(make_config, role="controlplane")
+    seen: dict = {}
+
+    def fake_gen_config(**kwargs):
+        seen["endpoint"] = kwargs["endpoint"]
+        seen["patches"] = [
+            list(yaml.safe_load_all(Path(p).read_text())) for p in kwargs["patches"]
+        ]
+        return _GEN_OUTPUT
+
+    monkeypatch.setattr(metal_talos.talosctl, "gen_config", fake_gen_config)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    metal_talos.build_config(
+        server, cfg, secrets_path, INSTALLER,
+        Endpoint(vip=OPENSTACK_TENANT_VIP, advertised_address=OPENSTACK_FLOATING_IP),
+    )
+
+    # the floating ip is the endpoint and the only certSAN, as for the VMs
+    assert seen["endpoint"] == f"https://{OPENSTACK_FLOATING_IP}:6443"
+    assert seen["patches"][0] == [{
+        "machine": {
+            "certSANs": [OPENSTACK_FLOATING_IP],
+            "nodeLabels": {"ncsa/role": "controlplane", "ncsa/pool": "phoenix"},
+            "kubelet": {
+                "extraArgs": {"rotate-server-certificates": True},
+                "nodeIP": {"validSubnets": ["192.168.0.0/21"]},
+            },
+            "install": {"disk": "/dev/sda", "image": INSTALLER, "wipe": True},
+            "time": {"servers": ["ntp.example.com"]},
+        },
+    }]
+    assert seen["patches"][2][0]["cluster"]["apiServer"] == {
+        "certSANs": [OPENSTACK_FLOATING_IP],
+    }
+    # the control plane holds the tenant-network VIP on its cluster link
+    vip = next(
+        doc for group in seen["patches"] for doc in group
+        if doc.get("kind") == "Layer2VIPConfig"
+    )
+    assert vip == {
+        "apiVersion": "v1alpha1", "kind": "Layer2VIPConfig",
+        "name": OPENSTACK_TENANT_VIP, "link": "enp1s0f0",
+    }
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,7 @@ import requests
 from taloscluster import converge
 from taloscluster.config import ConfigError, MetalBmc
 from taloscluster.errors import ReconcileError
+from taloscluster.infrastructure import Endpoint
 from taloscluster.k8s import kubectl
 from taloscluster.metal import commands, redfish
 
@@ -113,6 +114,15 @@ def fake_redfish(monkeypatch):
 @pytest.fixture
 def stub_factory(monkeypatch):
     monkeypatch.setattr(commands.factory, "schematic_id", lambda _ext: "abc123")
+
+
+@pytest.fixture
+def cluster_endpoint(monkeypatch):
+    """The endpoint the provider resolved, as `_cluster_endpoint` reads it:
+    the configured Proxmox VIP, advertised as it is."""
+    stub = Endpoint(vip=VIP, advertised_address=VIP)
+    monkeypatch.setattr(commands, "_cluster_endpoint", lambda _cfg: stub)
+    return stub
 
 
 # -- shared lookups -----------------------------------------------------------
@@ -341,15 +351,16 @@ def test_wait_times_out_when_nothing_answers(make_config, tmp_path, monkeypatch)
 
 
 def test_apply_generates_and_pushes_the_config(
-    make_config, tmp_path, monkeypatch, stub_factory
+    make_config, tmp_path, monkeypatch, stub_factory, cluster_endpoint
 ):
     _cfg(make_config)
     (tmp_path / "talossecrets.yaml").write_text("dummy")
     seen = {}
 
-    def fake_build(server, cfg, secrets, installer, kubernetes_version=None):
+    def fake_build(server, cfg, secrets, installer, endpoint, kubernetes_version=None):
         seen.update(
-            installer=installer, role=server.role, kubernetes_version=kubernetes_version,
+            installer=installer, role=server.role, endpoint=endpoint,
+            kubernetes_version=kubernetes_version,
         )
         return f"# config for {server.name}\n"
 
@@ -366,12 +377,14 @@ def test_apply_generates_and_pushes_the_config(
     assert seen["node"] == "172.29.21.5"
     assert seen["pushed"] == "# config for rp001\n"
     assert seen["installer"] == "factory.talos.dev/metal-installer/abc123:v1.13.9"
+    # the config is generated against the endpoint the provider resolved
+    assert seen["endpoint"] == cluster_endpoint
     # no kubeconfig yet: the never-bootstrapped cluster gets the target
     assert seen["kubernetes_version"] == "v1.31.0"
 
 
 def test_apply_warns_when_gitignore_does_not_cover_metal(
-    make_config, tmp_path, monkeypatch, stub_factory, capsys
+    make_config, tmp_path, monkeypatch, stub_factory, cluster_endpoint, capsys
 ):
     """Clusters scaffolded before the scaffold wrote the .metal/ entry have no
     ignore entry: apply warns, since the generated config carries the cluster's
@@ -391,7 +404,7 @@ def test_apply_warns_when_gitignore_does_not_cover_metal(
 
 
 def test_apply_is_quiet_when_gitignore_covers_metal(
-    make_config, tmp_path, monkeypatch, stub_factory, capsys
+    make_config, tmp_path, monkeypatch, stub_factory, cluster_endpoint, capsys
 ):
     _cfg(make_config)
     (tmp_path / "talossecrets.yaml").write_text("dummy")
@@ -409,7 +422,7 @@ def test_apply_is_quiet_when_gitignore_covers_metal(
 
 
 def test_apply_bakes_the_running_version_of_a_bootstrapped_cluster(
-    make_config, tmp_path, monkeypatch, stub_factory
+    make_config, tmp_path, monkeypatch, stub_factory, cluster_endpoint
 ):
     """A non-empty kubeconfig from an earlier converge means the cluster is
     running: the config is generated at the cluster's version, not cluster.yaml's
@@ -420,7 +433,7 @@ def test_apply_bakes_the_running_version_of_a_bootstrapped_cluster(
     monkeypatch.setattr(kubectl, "server_version", lambda *_a: "v1.30.4")
     seen = {}
 
-    def fake_build(server, cfg, secrets, installer, kubernetes_version=None):
+    def fake_build(server, cfg, secrets, installer, endpoint, kubernetes_version=None):
         seen["kubernetes_version"] = kubernetes_version
         return "# config for rp001\n"
 
@@ -436,7 +449,7 @@ def test_apply_bakes_the_running_version_of_a_bootstrapped_cluster(
 
 @pytest.mark.parametrize("on_disk", [None, ""])
 def test_apply_bakes_the_target_before_the_cluster_is_bootstrapped(
-    make_config, tmp_path, monkeypatch, stub_factory, on_disk
+    make_config, tmp_path, monkeypatch, stub_factory, cluster_endpoint, on_disk
 ):
     """No kubeconfig (or an empty one) reads as never bootstrapped: there is no
     running version, so cluster.yaml's target is baked and the cluster is never
@@ -451,7 +464,7 @@ def test_apply_bakes_the_target_before_the_cluster_is_bootstrapped(
     )
     seen = {}
 
-    def fake_build(server, cfg, secrets, installer, kubernetes_version=None):
+    def fake_build(server, cfg, secrets, installer, endpoint, kubernetes_version=None):
         seen["kubernetes_version"] = kubernetes_version
         return "# config for rp001\n"
 
@@ -466,7 +479,7 @@ def test_apply_bakes_the_target_before_the_cluster_is_bootstrapped(
 
 
 def test_apply_refuses_to_guess_when_the_running_version_is_unreadable(
-    make_config, tmp_path, monkeypatch, stub_factory
+    make_config, tmp_path, monkeypatch, stub_factory, cluster_endpoint
 ):
     """A kubeconfig whose cluster no longer answers aborts the apply instead of
     silently baking the target -- the same fail-closed stance as converge."""
@@ -481,6 +494,76 @@ def test_apply_refuses_to_guess_when_the_running_version_is_unreadable(
     )
 
     with pytest.raises(ReconcileError, match="could not determine the running"):
+        commands.apply(tmp_path, "rp001")
+
+
+def _openstack_cfg(make_config):
+    """The openstack section stays: the metal group sits on the tenant network
+    the provider creates, and no kubeapi_vip exists anywhere in cluster.yaml."""
+    return make_config({
+        "metal": {
+            "phoenix": {
+                "role": "worker",
+                "redfish": True,
+                "disk": "/dev/sda",
+                "interfaces": {
+                    "enp1s0f0": {"role": "pxe"},
+                    "enp2s0f0": {"role": "cluster"},
+                },
+                "bmc": {"username": "root", "password": "hunter2"},
+                "servers": {
+                    "rp001": {
+                        "bmc": {"ip": "198.51.100.10"},
+                        "interfaces": {"enp2s0f0": {"ip": "192.168.0.5/21"}},
+                    },
+                },
+            },
+        },
+    })
+
+
+def test_apply_uses_the_provider_endpoint_on_openstack(
+    make_config, tmp_path, monkeypatch, stub_factory
+):
+    """On OpenStack the endpoint is the reserved kubeapi port's fixed ip with
+    the floating ip in front of it -- exactly what converge passed for the VM
+    configs -- and apply reads it from the provider like converge does."""
+    _openstack_cfg(make_config)
+    (tmp_path / "talossecrets.yaml").write_text("dummy")
+    resolved = Endpoint(vip="192.168.0.10", advertised_address="203.0.113.79")
+    monkeypatch.setattr(commands, "_cluster_endpoint", lambda _cfg: resolved)
+    seen = {}
+
+    def fake_build(server, cfg, secrets, installer, endpoint, kubernetes_version=None):
+        seen["endpoint"] = endpoint
+        return "# config for rp001\n"
+
+    monkeypatch.setattr(commands.metal_talos, "build_config", fake_build)
+    monkeypatch.setattr(
+        commands.talosctl, "apply_config_insecure", lambda node, config: None
+    )
+
+    commands.apply(tmp_path, "rp001")
+
+    assert seen["endpoint"] == resolved
+
+
+def test_apply_refuses_when_the_provider_resolved_no_endpoint(
+    make_config, tmp_path, monkeypatch, stub_factory
+):
+    """A provider with no kube-api endpoint yet (no converge has run) refuses:
+    pushing a config that names no usable endpoint would be worse."""
+    _cfg(make_config)
+    (tmp_path / "talossecrets.yaml").write_text("dummy")
+    monkeypatch.setattr(
+        commands, "_cluster_endpoint", lambda _cfg: Endpoint()
+    )
+    monkeypatch.setattr(
+        commands.metal_talos, "build_config",
+        lambda *_a, **_k: pytest.fail("no config must be generated"),
+    )
+
+    with pytest.raises(ReconcileError, match="has not resolved the cluster's kube-api"):
         commands.apply(tmp_path, "rp001")
 
 

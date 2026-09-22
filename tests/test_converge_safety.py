@@ -2629,10 +2629,11 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     )
     built: list[dict] = []
 
-    def fake_build(server, _cfg, _secrets, installer, kubernetes_version=None):
+    def fake_build(server, _cfg, _secrets, installer, endpoint, kubernetes_version=None):
         built.append({
             "server": server.name,
             "installer": installer,
+            "endpoint": endpoint,
             "kubernetes_version": kubernetes_version,
         })
         return f"metal-config:{server.name}"
@@ -2671,10 +2672,13 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     assert applied == [("192.0.2.61", "metal-config:rp001")]
 
     # the metal config was generated beside the VMs', from the metal installer
-    # at the cluster's running kubernetes version, and reached the compute phase
+    # at the cluster's running kubernetes version and against the endpoint the
+    # network phase resolved (the same one the VM configs carry), and reached
+    # the compute phase
     assert built == [{
         "server": "rp001",
         "installer": "factory.talos.dev/metal-installer/m-sch:v1.13.0",
+        "endpoint": SimpleNamespace(advertised_address="192.0.2.5", vip="192.0.2.5"),
         "kubernetes_version": "v1.31.0",
     }]
     assert backend.seen_configs == {

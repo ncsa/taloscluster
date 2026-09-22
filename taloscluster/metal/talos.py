@@ -97,18 +97,6 @@ def installer(cfg: Config) -> tuple[str, str]:
     return schematic, factory.installer_image(schematic, cfg.talos_version, platform="metal")
 
 
-def _vip(cfg: Config) -> str:
-    """The cluster endpoint address: exactly one L2 block carries the VIP."""
-    vip = cfg.network.cluster.kubeapi_vip
-    if not vip and cfg.network.external is not None:
-        vip = cfg.network.external.kubeapi_vip
-    if not vip:
-        raise ConfigError(
-            "cluster.yaml: kubeapi_vip must be set in network.cluster or network.external"
-        )
-    return vip
-
-
 def _machine(server: MetalServer, cfg: Config) -> Machine:
     """The server as the shared patch builders see it: pool is the group."""
     return Machine(
@@ -159,7 +147,7 @@ def _external_child(server: MetalServer, cfg: Config, ifname: str,
     return vlan, iface.link_name or f"{ifname}.{vlan}"
 
 
-def network_docs(server: MetalServer, cfg: Config) -> list[dict]:
+def network_docs(server: MetalServer, cfg: Config, vip: str = "") -> list[dict]:
     """The new-style link documents for one machine's cabling plan.
 
     The `cluster` link states its static address and the default route via the
@@ -167,9 +155,9 @@ def network_docs(server: MetalServer, cfg: Config) -> list[dict]:
     child carries the anchor address from `network.external.anchor_cidr`, a
     static address of its own when the interface has no cluster role, and the
     routes to the external network over the return-path routing table. A
-    control plane states the kubeapi VIP on the link that carries it.
+    control plane states the kubeapi VIP `vip` on the link that carries it.
     """
-    docs, _ = _cabling(server, cfg)
+    docs, _ = _cabling(server, cfg, vip)
     return docs
 
 
@@ -180,11 +168,11 @@ def device_entries(server: MetalServer, cfg: Config) -> list[dict]:
     must never pick up a lease -- and the `external` link's entry creates its
     VLAN child on the parent port.
     """
-    _, entries = _cabling(server, cfg)
+    _, entries = _cabling(server, cfg, "")
     return entries
 
 
-def _cabling(server: MetalServer, cfg: Config) -> tuple[list[dict], list[dict]]:
+def _cabling(server: MetalServer, cfg: Config, vip: str = "") -> tuple[list[dict], list[dict]]:
     """(new-style link documents, classic device entries) for one machine.
 
     The loader has checked the cabling plan
@@ -192,7 +180,10 @@ def _cabling(server: MetalServer, cfg: Config) -> tuple[list[dict], list[dict]]:
     carries the cluster role and an `external` link implies a
     `network.external` block. A control plane whose kubeapi_vip rides
     `network.external` but has no `external` link could never hold the VIP,
-    so that is refused here.
+    so that is refused here. `vip` is the cluster endpoint address the
+    provider resolved -- the one the VM nodes' configurations carry -- and a
+    control plane is refused without one rather than left unable to hold the
+    API address.
     """
     interfaces = server.interfaces
     ext = cfg.network.external
@@ -286,7 +277,11 @@ def _cabling(server: MetalServer, cfg: Config) -> tuple[list[dict], list[dict]]:
             }
         )
     if server.role == "controlplane":
-        vip = _vip(cfg)
+        if not vip:
+            raise ConfigError(
+                f"metal server {server.name}: the provider resolved no kubeapi "
+                "VIP for the control plane to hold"
+            )
         on_external = bool(cfg.network.external and cfg.network.external.kubeapi_vip)
         if on_external and not child_name:
             raise ConfigError(
@@ -426,6 +421,7 @@ def build_config(
     cfg: Config,
     secrets_path: Path,
     installer_image: str,
+    endpoint: Endpoint,
     kubernetes_version: str | None = None,
 ) -> str:
     """Return one metal machine's machine-config YAML string.
@@ -435,7 +431,11 @@ def build_config(
     providers -- the firewall and the control plane's etcd advertisement keyed
     on the machine's own L2 -- then the cabling plan's network patches and the
     cluster's freeform patches; a Talos < 1.14 cluster gets the
-    classic hostname field and the 1.14-era keys stripped. `kubernetes_version`
+    classic hostname field and the 1.14-era keys stripped. `endpoint` is the
+    provider-resolved cluster endpoint the VM machines' configurations carry:
+    its advertised address names the endpoint in the generated config and the
+    certSANs, and its vip is what a control plane holds as a Layer 2 VIP on
+    the link that carries it. `kubernetes_version`
     overrides `cfg.kubernetes_version` for the kubelet and control-plane images
     and the return-path pod's kube-proxy image: `metal apply` passes the
     running cluster's version so a machine joined after a `kubernetes.version`
@@ -444,8 +444,6 @@ def build_config(
     """
     kubernetes = kubernetes_version or cfg.kubernetes_version
     host = server.name
-    vip = _vip(cfg)
-    endpoint = Endpoint(vip=vip, advertised_address=vip)
     m = _machine(server, cfg)
     with tempfile.TemporaryDirectory(prefix="taloscluster-metal-mc-") as tmp:
         workdir = Path(tmp)
@@ -494,7 +492,7 @@ def build_config(
                     machineconfig._tailscale_patch(m, cfg, auth_key),
                 )
             )
-        docs, entries = _cabling(server, cfg)
+        docs, entries = _cabling(server, cfg, vip=endpoint.vip)
         patches.append(machineconfig._write(workdir, f"{host}-network", docs))
         if entries:
             patches.append(
@@ -518,7 +516,7 @@ def build_config(
 
         raw = talosctl.gen_config(
             cluster=cfg.name,
-            endpoint=f"https://{vip}:6443",
+            endpoint=f"https://{endpoint.advertised_address}:6443",
             secrets_path=secrets_path,
             output_type="controlplane" if server.role == "controlplane" else "worker",
             install_image=installer_image,

@@ -35,6 +35,7 @@ import requests
 from ..config import Config, ConfigError, MetalServer, load_config
 from ..converge import _config_kubernetes_version
 from ..errors import ReconcileError
+from ..infrastructure import Endpoint, backend_for
 from ..naming import METAL_BASE_EXTENSIONS
 from ..output import action, info, report, warn
 from ..state import State
@@ -110,6 +111,19 @@ def _iso_url(cfg: Config) -> str:
 def _installer_image(cfg: Config) -> str:
     """The metal installer ref for the machine's resolved extension set."""
     return metal_talos.installer(cfg)[1]
+
+
+def _cluster_endpoint(cfg: Config) -> Endpoint:
+    """The cluster endpoint as the provider resolved it, read-only.
+
+    The machine config a metal machine joins with must carry the same
+    endpoint the VM nodes' configurations were generated against: the address
+    converge reserves for the kube-api (on OpenStack the reserved port's
+    fixed ip and the floating ip in front of it, on Proxmox the configured
+    VIP). The provider is only read, never reconciled.
+    """
+    backend = backend_for(cfg)
+    return backend.current_network(backend.load_inventory()).kubernetes
 
 
 # -- the commands ---------------------------------------------------------------
@@ -220,6 +234,11 @@ def apply(root: Path, name: str) -> None:
     target would start a kubelet newer than the API server and pull the target
     kube-proxy before `talosctl upgrade-k8s` stepped the minors. A cluster with
     no kubeconfig yet has no running version, so it gets the target.
+
+    The config is generated against the endpoint the provider resolved -- the
+    same one the VM nodes' configs carry -- so a provider that has none yet
+    (no converge has run) refuses here instead of pushing a config that names
+    no usable endpoint.
     """
     cfg = load_config(root)
     server = _find_server(cfg, name)
@@ -228,8 +247,15 @@ def apply(root: Path, name: str) -> None:
     kubeconfig = root / "kubeconfig"
     # a non-empty kubeconfig is the bootstrap signal converge itself uses
     bootstrapped = kubeconfig.is_file() and kubeconfig.stat().st_size > 0
+    endpoint = _cluster_endpoint(cfg)
+    if not (endpoint.vip and endpoint.advertised_address):
+        raise ReconcileError(
+            "the provider has not resolved the cluster's kube-api endpoint yet "
+            "(has converge run?); run `taloscluster converge` before joining "
+            "metal machines"
+        )
     config_yaml = metal_talos.build_config(
-        server, cfg, secrets, _installer_image(cfg),
+        server, cfg, secrets, _installer_image(cfg), endpoint,
         kubernetes_version=_config_kubernetes_version(cfg, kubeconfig, bootstrapped),
     )
     out_dir = root / ".metal"
