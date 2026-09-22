@@ -57,7 +57,7 @@ PHOENIX = {
 
 
 def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
-         kubernetes_version=None, tailscale=None, vip=VIP):
+         kubernetes_version=None, tailscale=None, vip=VIP, tags=None):
     cluster: dict = {
         "cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000,
     }
@@ -85,6 +85,8 @@ def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
     }
     if tailscale is not None:
         overrides["tailscale"] = tailscale
+    if tags is not None:
+        overrides["tags"] = tags
     if kubernetes_version is not None:
         overrides["kubernetes"] = {"version": kubernetes_version}
     # the golden stack carries the KubeSpan patch, so the config opts in
@@ -118,7 +120,8 @@ def _render(monkeypatch, output: str) -> dict[str, list]:
 
 
 def _build(
-    make_config, monkeypatch, tmp_path, output=None, *, endpoint=None, **kwargs
+    make_config, monkeypatch, tmp_path, output=None, *, endpoint=None,
+    default_tags=None, **kwargs
 ) -> tuple[dict[str, list], str]:
     cfg = _cfg(make_config, **kwargs)
     rendered = _render(monkeypatch, output or _GEN_OUTPUT)
@@ -126,7 +129,8 @@ def _build(
     secrets_path.write_text("dummy")
     server = cfg.metal.groups["phoenix"].servers["rp001"]
     out = metal_talos.build_config(
-        server, cfg, secrets_path, INSTALLER, endpoint or _endpoint(cfg)
+        server, cfg, secrets_path, INSTALLER, endpoint or _endpoint(cfg),
+        default_tags=default_tags,
     )
     assert len(rendered) == 1
     return rendered["rp001"], out
@@ -135,7 +139,10 @@ def _build(
 MACHINE_PATCH = {
     "machine": {
         "certSANs": [VIP],
-        "nodeLabels": {"ncsa/role": "worker", "ncsa/pool": "phoenix"},
+        "nodeLabels": {
+            "ncsa/role": "worker", "ncsa/pool": "phoenix",
+            "ncsa/project": "bbdb", "team": "platform",
+        },
         "kubelet": {
             "extraArgs": {"rotate-server-certificates": True},
             "nodeIP": {"validSubnets": ["172.29.21.0/24"]},
@@ -261,8 +268,13 @@ STRIPPED_OUTPUT = [
 
 
 def test_metal_patch_stack_matches_golden(make_config, monkeypatch, tmp_path):
-    """The csfarm shape: pxe boot link, one [cluster, external] NIC, jumbo L2."""
-    stack, _ = _build(make_config, monkeypatch, tmp_path)
+    """The csfarm shape: pxe boot link, one [cluster, external] NIC, jumbo L2.
+    The machine patch carries the cluster's `tags:` and the provider defaults
+    as node labels, the same labels the VM machines' patches carry."""
+    stack, _ = _build(
+        make_config, monkeypatch, tmp_path,
+        tags={"team": "platform"}, default_tags={"ncsa/project": "bbdb"},
+    )
 
     assert stack[:6] == [
         [MACHINE_PATCH],

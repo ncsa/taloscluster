@@ -3245,7 +3245,8 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     )
     built: list[dict] = []
 
-    def fake_build(server, _cfg, _secrets, installer, endpoint, kubernetes_version=None):
+    def fake_build(server, _cfg, _secrets, installer, endpoint,
+                   default_tags=None, kubernetes_version=None):
         built.append({
             "server": server.name,
             "installer": installer,

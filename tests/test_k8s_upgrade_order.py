@@ -224,26 +224,32 @@ def test_new_metal_configs_carry_the_target_version(make_config, monkeypatch, tm
         },
     })
     seen: list[str] = []
+    tags_seen: list = []
 
-    def fake_build(server, _cfg, _secrets, _installer, _endpoint, kubernetes_version=None):
+    def fake_build(server, _cfg, _secrets, _installer, _endpoint,
+                   default_tags=None, kubernetes_version=None):
         seen.append(kubernetes_version)
+        tags_seen.append(default_tags)
         return f"metal-config/{server.name}"
 
     monkeypatch.setattr(converge.metal_talos, "build_config", fake_build)
     refs = NetworkResult(
         kubernetes=Endpoint(vip="192.0.2.10", advertised_address="203.0.113.10")
     )
+    default_tags = {"ncsa/project": "bbdb"}
 
     fresh = converge._new_metal_configs(
-        cfg, converge._metal_servers(cfg), tmp_path / "secrets", "metal-installer", refs,
+        cfg, converge._metal_servers(cfg), tmp_path / "secrets", "metal-installer",
+        refs, default_tags,
     )
 
     assert set(fresh) == {"rp001"}
     assert set(seen) == {cfg.kubernetes_version}  # the target, not the running version
+    assert tags_seen == [default_tags]
 
     # nothing pending: nothing is regenerated
     assert converge._new_metal_configs(
-        cfg, [], tmp_path / "secrets", "metal-installer", refs
+        cfg, [], tmp_path / "secrets", "metal-installer", refs, default_tags
     ) == {}
 
 
@@ -575,7 +581,7 @@ def test_converge_joins_metal_at_the_upgraded_version(make_config, monkeypatch, 
     metal_calls: list[tuple[str, str | None]] = []
 
     def fake_metal_build(server, _cfg, _secrets, _installer, _endpoint,
-                         kubernetes_version=None):
+                         default_tags=None, kubernetes_version=None):
         metal_calls.append((server.name, kubernetes_version))
         return f"metal-config/{server.name}@{kubernetes_version}"
 

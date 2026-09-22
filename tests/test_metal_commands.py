@@ -118,10 +118,11 @@ def stub_factory(monkeypatch):
 
 @pytest.fixture
 def cluster_endpoint(monkeypatch):
-    """The endpoint the provider resolved, as `_cluster_endpoint` reads it:
-    the configured Proxmox VIP, advertised as it is."""
+    """The provider-resolved state, as `_provider_snapshot` reads it: the
+    configured Proxmox VIP, advertised as it is; Proxmox supplies no default
+    node labels."""
     stub = Endpoint(vip=VIP, advertised_address=VIP)
-    monkeypatch.setattr(commands, "_cluster_endpoint", lambda _cfg: stub)
+    monkeypatch.setattr(commands, "_provider_snapshot", lambda _cfg: (stub, {}))
     return stub
 
 
@@ -357,10 +358,11 @@ def test_apply_generates_and_pushes_the_config(
     (tmp_path / "talossecrets.yaml").write_text("dummy")
     seen = {}
 
-    def fake_build(server, cfg, secrets, installer, endpoint, kubernetes_version=None):
+    def fake_build(server, cfg, secrets, installer, endpoint,
+                   default_tags=None, kubernetes_version=None):
         seen.update(
             installer=installer, role=server.role, endpoint=endpoint,
-            kubernetes_version=kubernetes_version,
+            default_tags=default_tags, kubernetes_version=kubernetes_version,
         )
         return f"# config for {server.name}\n"
 
@@ -379,6 +381,8 @@ def test_apply_generates_and_pushes_the_config(
     assert seen["installer"] == "factory.talos.dev/metal-installer/abc123:v1.13.9"
     # the config is generated against the endpoint the provider resolved
     assert seen["endpoint"] == cluster_endpoint
+    # the provider's default node labels ride along (Proxmox supplies none)
+    assert seen["default_tags"] == {}
     # no kubeconfig yet: the never-bootstrapped cluster gets the target
     assert seen["kubernetes_version"] == "v1.31.0"
 
@@ -433,7 +437,8 @@ def test_apply_bakes_the_running_version_of_a_bootstrapped_cluster(
     monkeypatch.setattr(kubectl, "server_version", lambda *_a: "v1.30.4")
     seen = {}
 
-    def fake_build(server, cfg, secrets, installer, endpoint, kubernetes_version=None):
+    def fake_build(server, cfg, secrets, installer, endpoint,
+                   default_tags=None, kubernetes_version=None):
         seen["kubernetes_version"] = kubernetes_version
         return "# config for rp001\n"
 
@@ -464,7 +469,8 @@ def test_apply_bakes_the_target_before_the_cluster_is_bootstrapped(
     )
     seen = {}
 
-    def fake_build(server, cfg, secrets, installer, endpoint, kubernetes_version=None):
+    def fake_build(server, cfg, secrets, installer, endpoint,
+                   default_tags=None, kubernetes_version=None):
         seen["kubernetes_version"] = kubernetes_version
         return "# config for rp001\n"
 
@@ -527,15 +533,21 @@ def test_apply_uses_the_provider_endpoint_on_openstack(
 ):
     """On OpenStack the endpoint is the reserved kubeapi port's fixed ip with
     the floating ip in front of it -- exactly what converge passed for the VM
-    configs -- and apply reads it from the provider like converge does."""
+    configs -- and apply reads it from the provider like converge does, with
+    the project label beside it."""
     _openstack_cfg(make_config)
     (tmp_path / "talossecrets.yaml").write_text("dummy")
     resolved = Endpoint(vip="192.168.0.10", advertised_address="203.0.113.79")
-    monkeypatch.setattr(commands, "_cluster_endpoint", lambda _cfg: resolved)
+    monkeypatch.setattr(
+        commands, "_provider_snapshot",
+        lambda _cfg: (resolved, {"ncsa/project": "bbdb"}),
+    )
     seen = {}
 
-    def fake_build(server, cfg, secrets, installer, endpoint, kubernetes_version=None):
+    def fake_build(server, cfg, secrets, installer, endpoint,
+                   default_tags=None, kubernetes_version=None):
         seen["endpoint"] = endpoint
+        seen["default_tags"] = default_tags
         return "# config for rp001\n"
 
     monkeypatch.setattr(commands.metal_talos, "build_config", fake_build)
@@ -546,6 +558,7 @@ def test_apply_uses_the_provider_endpoint_on_openstack(
     commands.apply(tmp_path, "rp001")
 
     assert seen["endpoint"] == resolved
+    assert seen["default_tags"] == {"ncsa/project": "bbdb"}
 
 
 def test_apply_refuses_when_the_provider_resolved_no_endpoint(
@@ -556,7 +569,7 @@ def test_apply_refuses_when_the_provider_resolved_no_endpoint(
     _cfg(make_config)
     (tmp_path / "talossecrets.yaml").write_text("dummy")
     monkeypatch.setattr(
-        commands, "_cluster_endpoint", lambda _cfg: Endpoint()
+        commands, "_provider_snapshot", lambda _cfg: (Endpoint(), {})
     )
     monkeypatch.setattr(
         commands.metal_talos, "build_config",

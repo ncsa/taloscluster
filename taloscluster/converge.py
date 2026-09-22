@@ -253,6 +253,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
                 secrets_path,
                 metal_installer,
                 refs.kubernetes,
+                default_tags=default_tags,
                 kubernetes_version=config_kubernetes_version,
             )
 
@@ -334,6 +335,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
                     secrets_path,
                     metal_installer,
                     refs,
+                    default_tags,
                 )
             )
         needs_restart = backend.reconcile_machines(machines, inv, boot_image, configs) or set()
@@ -1366,6 +1368,7 @@ def _new_metal_configs(
     secrets_path: Path,
     installer_image: str,
     refs: NetworkResult,
+    default_tags,
 ) -> dict[str, str]:
     """Metal configs for the machines that have not joined yet, at the target version.
 
@@ -1385,6 +1388,7 @@ def _new_metal_configs(
             secrets_path,
             installer_image,
             refs.kubernetes,
+            default_tags=default_tags,
             kubernetes_version=cfg.kubernetes_version,
         )
         for server in pending

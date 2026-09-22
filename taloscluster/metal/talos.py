@@ -106,13 +106,17 @@ def _machine(server: MetalServer, cfg: Config) -> Machine:
         disk=0,
         extensions=(),
         config_patches=tuple(cfg.talos_config_patches),
+        tags=dict(cfg.tags),
     )
 
 
 def _machine_patch(server: MetalServer, cfg: Config, endpoint: Endpoint,
-                   installer_image: str) -> dict:
+                   installer_image: str,
+                   default_tags: dict[str, str] | None = None) -> dict:
     m = _machine(server, cfg)
-    patch = machineconfig._machine_patch(m, cfg, endpoint, installer_image, server.disk)
+    patch = machineconfig._machine_patch(
+        m, cfg, endpoint, installer_image, server.disk, default_tags
+    )
     # a group on its own L2 pins the pod node IP to that L2, not the cluster's
     patch["machine"]["kubelet"]["nodeIP"]["validSubnets"] = [server.network.cidr]
     return patch
@@ -422,6 +426,7 @@ def build_config(
     secrets_path: Path,
     installer_image: str,
     endpoint: Endpoint,
+    default_tags: dict[str, str] | None = None,
     kubernetes_version: str | None = None,
 ) -> str:
     """Return one metal machine's machine-config YAML string.
@@ -431,7 +436,10 @@ def build_config(
     providers -- the firewall and the control plane's etcd advertisement keyed
     on the machine's own L2 -- then the cabling plan's network patches and the
     cluster's freeform patches; a Talos < 1.14 cluster gets the
-    classic hostname field and the 1.14-era keys stripped. `endpoint` is the
+    classic hostname field and the 1.14-era keys stripped. `default_tags` are
+    the provider's default node labels (`ncsa/project` on OpenStack), merged
+    under the machine's `tags:` exactly as `build_configs` merges them for the
+    VM machines. `endpoint` is the
     provider-resolved cluster endpoint the VM machines' configurations carry:
     its advertised address names the endpoint in the generated config and the
     certSANs, and its vip is what a control plane holds as a Layer 2 VIP on
@@ -450,7 +458,7 @@ def build_config(
         patches = [
             machineconfig._write(
                 workdir, f"{host}-machine",
-                _machine_patch(server, cfg, endpoint, installer_image),
+                _machine_patch(server, cfg, endpoint, installer_image, default_tags),
             ),
             machineconfig._write(
                 workdir, f"{host}-hostname", _hostname_patch(server, cfg)
