@@ -1152,7 +1152,8 @@ class ProxmoxBackend:
             # stale: the running VM still has old cores/memory. had_disk: a disk
             # grow was applied and Talos extends its EPHEMERAL partition on reboot.
             # A cores/memory revert (applied but not stale, no disk) needs no restart.
-            if (stale or (applied and had_disk)) and vm.status == "running":
+            # mtu: a NIC rewrite is deferred to the restart on a running VM.
+            if (stale or (applied and had_disk) or "mtu" in drift) and vm.status == "running":
                 needs_restart.add(vm.name)
             # remember a grown disk that is still waiting for its boot (only for a
             # running VM: a stopped VM absorbs the grow when it next starts). Written
@@ -1325,8 +1326,13 @@ class ProxmoxBackend:
         # A NIC must inherit the bridge MTU, which on Proxmox 9 is what an unset
         # MTU does -- so any `mtu=` is drift and is stripped, whatever the L2
         # carries. That also repairs a VM an older taloscluster wrote `mtu=1`
-        # onto, which 9 reads as a literal MTU of 1. Rewriting the NIC applies
-        # live, so this is reconcilable drift.
+        # onto, which 9 reads as a literal MTU of 1. Proxmox applies a NIC
+        # rewrite to a running VM by hot-unplugging and re-plugging the device,
+        # which takes the node off the network and makes the kernel delete the
+        # flannel VXLAN device bound to it -- the node then has no pod-network
+        # routes until flannel restarts. So the rewrite is written to a stopped
+        # VM straight away and to a running VM only right before its restart
+        # (``restart_machine``); until then it is reported as pending.
         mtu_nics: dict[str, str] = {}
         for nic in ("net0", "net1"):
             stripped = _net_without_mtu(config.get(nic))
@@ -1379,7 +1385,15 @@ class ProxmoxBackend:
         if "mtu" in drift:
             for nic, value in sorted(drift["mtu"].items()):
                 action(f"unset the mtu on {vm.name} {nic} to inherit the bridge MTU")
-                if not dry_run():
+                if vm.status == "running":
+                    # written by restart_machine right before the reboot: a
+                    # live rewrite hot-replugs the NIC and deletes flannel.1
+                    warn(
+                        f"{vm.name}: the NIC is rewritten when the VM next restarts "
+                        "(Proxmox re-plugs a running VM's NIC, which cuts the node off "
+                        "the pod network until flannel restarts)"
+                    )
+                elif not dry_run():
                     self.client.mutate(
                         "PUT",
                         f"nodes/{vm.node}/qemu/{vm.vmid}/config",
@@ -1703,6 +1717,21 @@ class ProxmoxBackend:
             raise ReconcileError(f"cannot restart unknown Proxmox VM {name!r}")
         if not self._owns_vm(raw, vm):
             raise ReconcileError(f"refusing to restart unowned Proxmox VM {name!r}")
+        # a NIC waiting to inherit its bridge MTU is rewritten here, not live: the
+        # re-plug that rewrite causes is harmless on a VM about to reboot anyway
+        config = self.client.get(f"nodes/{vm.node}/qemu/{vm.vmid}/config")
+        pending_nics = {
+            nic: stripped
+            for nic in ("net0", "net1")
+            if isinstance(config, dict)
+            and (stripped := _net_without_mtu(config.get(nic))) is not None
+        }
+        for nic, value in sorted(pending_nics.items()):
+            action(f"unset the mtu on {name} {nic} to inherit the bridge MTU")
+            if not dry_run():
+                self.client.mutate(
+                    "PUT", f"nodes/{vm.node}/qemu/{vm.vmid}/config", data={nic: value}
+                )
         action(f"restart server {name} (proxmox reboot, applies pending sizing)")
         if not dry_run():
             self.client.mutate(

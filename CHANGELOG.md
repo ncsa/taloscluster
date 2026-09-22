@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Defer a VM NIC rewrite (dropping `mtu=`) to the VM's restart instead of writing it live: Proxmox re-plugs a running VM's NIC, which deletes flannel's VXLAN device and leaves the node without pod-network routes until flannel restarts.
 - Reset a node dropped from the config at the address its kube Node reports when no other source knows it, so a metal machine removed by commenting out its config leaves the cluster instead of re-registering.
 - Scale a bare-metal machine down into maintenance mode: wipe only `STATE` and `EPHEMERAL` and reboot, keeping the Talos install, so the machine is ready to join another cluster instead of wiped whole and powered off like a VM.
 - Refuse an `include` entry naming `cluster.yaml` itself.

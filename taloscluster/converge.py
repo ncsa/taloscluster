@@ -326,7 +326,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         )
     elif needs_restart:
         warn(
-            f"{len(needs_restart)} node(s) need a restart to pick up their new sizing: "
+            f"{len(needs_restart)} node(s) need a restart to pick up their pending changes: "
             + ", ".join(sorted(needs_restart))
             + " -- rerun with `converge --reboot` to reboot them one at a time"
         )

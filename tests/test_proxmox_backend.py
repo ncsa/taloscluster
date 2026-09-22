@@ -2756,8 +2756,10 @@ def test_disk_shrink_is_refused_before_any_mutation(make_config):
     assert client.mutations == []
 
 
-# NIC MTU: VMs created before the MTU was raised lack `mtu=1` and stay capped
-# at 1500; the rewrite applies live, so it is reconcilable drift.
+# NIC MTU: a NIC an older taloscluster wrote `mtu=1` onto must have the key
+# dropped to inherit the bridge MTU. Proxmox applies a NIC rewrite to a running
+# VM by re-plugging the device, which deletes flannel's VXLAN device on the
+# node, so the rewrite waits for the VM's restart (or a stopped VM).
 
 
 def test_plan_reports_a_stale_mtu1_as_drift_on_pve9(make_config, capsys):
@@ -3224,12 +3226,32 @@ def test_firewall_reconcile_claims_an_unmarked_kubespan_rule(make_config):
     assert deleted == []
 
 
-def test_converge_strips_a_stale_mtu1_on_pve9(make_config):
-    """A NIC an older taloscluster wrote `mtu=1` onto runs at a literal MTU of 1
-    on Proxmox 9 the moment it re-plugs. Converge repairs it by dropping the key,
-    which is what inherits the bridge MTU there."""
+def test_converge_defers_a_stale_mtu1_rewrite_on_a_running_vm(make_config, capsys):
+    """Rewriting a running VM's NIC makes Proxmox hot-unplug and re-plug it; the
+    kernel deletes the flannel VXLAN device bound to that NIC and the node loses
+    its pod-network routes until flannel restarts. So the repair is not written
+    live: the VM is reported as needing a restart, which writes it."""
     data = _data(pve=9)
     data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1"
+    client = FakeClient(data)
+
+    backend = _reconcile_cp1(_jumbo_cfg(make_config), client)
+
+    assert not any(
+        "net0" in (payload or {})
+        for method, path, payload in client.mutations
+        if method == "PUT" and path == "nodes/pve001/qemu/800/config"
+    )
+    assert backend.restart_result == {"testcluster-controlplane-01"}
+    assert "rewritten when the VM next restarts" in capsys.readouterr().err
+
+
+def test_converge_strips_a_stale_mtu1_on_a_stopped_vm(make_config):
+    """A stopped VM has no NIC to re-plug: the key is dropped straight away and
+    the VM starts with the bridge MTU, so no restart is asked for."""
+    data = _data(pve=9)
+    data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1"
+    data["cluster/resources"][0]["status"] = "stopped"
     client = FakeClient(data)
 
     backend = _reconcile_cp1(_jumbo_cfg(make_config), client)
@@ -3239,11 +3261,42 @@ def test_converge_strips_a_stale_mtu1_on_pve9(make_config):
         "nodes/pve001/qemu/800/config",
         {"net0": "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1"},
     ) in client.mutations
-    # the rewrite applies live, so no restart is asked for
     assert backend.restart_result == set()
 
 
-def test_converge_strips_a_stale_mtu1_even_on_a_default_mtu_cluster(make_config, proxmox_cfg):
+def test_restart_machine_strips_a_stale_mtu1_before_the_reboot(make_config):
+    """The deferred NIC rewrite is written by the restart, right before the
+    Proxmox reboot: the re-plug it causes is harmless on a VM going down anyway,
+    and flannel comes back with the device and its routes after the boot."""
+    data = _data(pve=9)
+    data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1"
+    client = FakeClient(data)
+    backend = _backend(_jumbo_cfg(make_config), client)
+    inventory = backend.load_inventory()
+
+    backend.restart_machine("testcluster-controlplane-01", inventory)
+
+    rewrite = (
+        "PUT",
+        "nodes/pve001/qemu/800/config",
+        {"net0": "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1"},
+    )
+    reboot = ("POST", "nodes/pve001/qemu/800/status/reboot", {"timeout": 300})
+    assert rewrite in client.mutations and reboot in client.mutations
+    assert client.mutations.index(rewrite) < client.mutations.index(reboot)
+
+
+def test_restart_machine_leaves_a_clean_nic_alone(make_config):
+    client = FakeClient(_data(pve=9))
+    backend = _backend(_jumbo_cfg(make_config), client)
+    inventory = backend.load_inventory()
+
+    backend.restart_machine("testcluster-controlplane-01", inventory)
+
+    assert [m for m in client.mutations if m[0] == "PUT"] == []
+
+
+def test_converge_repairs_a_stale_mtu1_even_on_a_default_mtu_cluster(make_config, proxmox_cfg):
     """The repair does not depend on the cluster being jumbo: `mtu=1` is wrong on
     Proxmox 9 whatever the L2 carries, and a cluster that lowered its MTU back to
     the default must not be left with a NIC stuck at 1."""
@@ -3251,13 +3304,9 @@ def test_converge_strips_a_stale_mtu1_even_on_a_default_mtu_cluster(make_config,
     data["nodes/pve001/qemu/800/config"]["net0"] += ",mtu=1"
     client = FakeClient(data)
 
-    _reconcile_cp1(proxmox_cfg, client)
+    backend = _reconcile_cp1(proxmox_cfg, client)
 
-    assert (
-        "PUT",
-        "nodes/pve001/qemu/800/config",
-        {"net0": "virtio=02:00:00:00:00:00,bridge=vmbr0,firewall=1"},
-    ) in client.mutations
+    assert backend.restart_result == {"testcluster-controlplane-01"}
 
 
 def test_a_clean_nic_is_not_drift_on_pve9(make_config, capsys):
