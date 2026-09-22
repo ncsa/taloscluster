@@ -1,4 +1,4 @@
-"""Golden test: the metal patch stack and the Talos < 1.14 handling.
+"""Golden test: the metal patch stack and the hostname handling.
 
 The metal machine config is generated through the same ``talosctl gen config``
 pipeline as the VM providers, so this pins every document handed to it for a
@@ -11,11 +11,13 @@ L2, and the KubeSpan patch rides along with its endpoint filters; the
 external child brings the return-path static pod that marks ingress
 connections for the policy-routing rule.
 
-The Talos < 1.14 handling is pinned end to end: the hostname patch is the
-classic ``machine.network.hostname`` and the generated config loses the
-``machine.install.grubUseUKICmdline`` key and the ``HostnameConfig`` document
-the client emits regardless of ``--talos-version``; a 1.14 cluster keeps the
-document form and the generated output passes through untouched.
+The hostname handling is pinned end to end: the hostname patch is the same
+``HostnameConfig`` document every node's configuration carries, whatever
+``talos.version`` pins -- Talos has accepted it since 1.12, older than the
+minimum supported version -- and the generated config passes through as the
+client emits it, the client's own ``HostnameConfig`` document and
+``machine.install.grubUseUKICmdline`` included, exactly as the VM providers
+leave them.
 
 Update the golden only when a machine-config change is intended.
 """
@@ -235,9 +237,9 @@ FIREWALL_DOCS = [
     },
 ]
 
-# what `talosctl gen config` (a 1.14 client) emits for a v1.13 target: the
-# machine document carries grubUseUKICmdline and a HostnameConfig document
-# follows; the classic machine.network.hostname arrives via the patches
+# what `talosctl gen config` emits: the machine document carries
+# grubUseUKICmdline and a HostnameConfig document follows -- both kept, as the
+# VM providers keep them
 _GEN_OUTPUT = yaml.safe_dump_all(
     [
         {
@@ -257,20 +259,12 @@ _GEN_OUTPUT = yaml.safe_dump_all(
     explicit_start=True,
 )
 
-STRIPPED_OUTPUT = [
-    {
-        "machine": {
-            "network": {"hostname": "rp001"},
-            "install": {"disk": "/dev/sda", "image": INSTALLER, "wipe": False},
-        }
-    }
-]
-
 
 def test_metal_patch_stack_matches_golden(make_config, monkeypatch, tmp_path):
     """The csfarm shape: pxe boot link, one [cluster, external] NIC, jumbo L2.
     The machine patch carries the cluster's `tags:` and the provider defaults
-    as node labels, the same labels the VM machines' patches carry."""
+    as node labels, the same labels the VM machines' patches carry, and the
+    hostname patch is the HostnameConfig document the VM machines get."""
     stack, _ = _build(
         make_config, monkeypatch, tmp_path,
         tags={"team": "platform"}, default_tags={"ncsa/project": "bbdb"},
@@ -278,7 +272,7 @@ def test_metal_patch_stack_matches_golden(make_config, monkeypatch, tmp_path):
 
     assert stack[:6] == [
         [MACHINE_PATCH],
-        [HOSTNAME_FIELD_PATCH],
+        [HOSTNAME_DOCUMENT_PATCH],
         FIREWALL_DOCS,
         [KUBESPAN_PATCH],
         NETWORK_DOCS,
@@ -438,17 +432,19 @@ def test_metal_secrets_yaml_tailscale_key_opts_in(
     )
 
 
-def test_metal_config_strips_pre_1_14_output(make_config, monkeypatch, tmp_path):
-    """The generated config loses grubUseUKICmdline and the HostnameConfig doc."""
+def test_metal_config_keeps_the_generated_output(make_config, monkeypatch, tmp_path):
+    """The generated config passes through untouched: the client's
+    grubUseUKICmdline key and HostnameConfig document stay, as for the VMs."""
     _, out = _build(make_config, monkeypatch, tmp_path)
 
-    assert list(yaml.safe_load_all(out)) == STRIPPED_OUTPUT
+    assert list(yaml.safe_load_all(out)) == list(yaml.safe_load_all(_GEN_OUTPUT))
 
 
 def test_metal_config_on_talos_1_14_uses_the_hostname_document(
     make_config, monkeypatch, tmp_path
 ):
-    """A 1.14 cluster: the HostnameConfig document patch, nothing stripped."""
+    """A 1.14 cluster gets the same HostnameConfig document patch as the
+    default pin, and the generated output passes through untouched."""
     passthrough = yaml.safe_dump(HOSTNAME_FIELD_PATCH, sort_keys=False)
     stack, out = _build(
         make_config, monkeypatch, tmp_path,

@@ -13,12 +13,13 @@ marks the connections entering the VLAN child so their replies leave through
 the external gateway instead of the default route -- MetalLB ingress on the
 machine would otherwise answer from the wrong interface.
 
-Carried over from the prototype for Talos < 1.14 clusters: the hostname rides
-the classic ``machine.network.hostname`` field instead of the ``HostnameConfig``
-document, and the 1.14-era ``machine.install.grubUseUKICmdline`` key and the
-generated ``HostnameConfig`` document are stripped -- ``--talos-version`` does
-not gate what the client emits, and a metal machine is configured in
-maintenance mode where the running Talos may be older than the cluster's.
+The hostname rides the same ``HostnameConfig`` document every node's
+configuration carries -- Talos has accepted it, and
+``machine.install.grubUseUKICmdline``, since 1.12, older than the minimum
+supported ``talos.version`` -- so the generated config is used as the client
+emits it, whatever ``--talos-version`` says. A metal machine is configured in
+maintenance mode where the running Talos matches the version its install media
+was built for.
 """
 
 from __future__ import annotations
@@ -29,7 +30,6 @@ from pathlib import Path
 
 import yaml
 
-from .. import versions
 from ..config import (
     DEFAULT_MTU,
     Config,
@@ -47,15 +47,6 @@ from ..proxmox.talos import (
     anchor_address,
 )
 from ..talos import factory, machineconfig, talosctl
-
-# The Talos release that introduced machine.install.grubUseUKICmdline and the
-# HostnameConfig document. The client emits both regardless of --talos-version,
-# so a cluster older than this gets the classic forms instead.
-HOSTNAME_DOCUMENT_VERSION = "v1.14.0"
-
-
-def _pre_1_14(cfg: Config) -> bool:
-    return versions.is_older(cfg.talos_version, HOSTNAME_DOCUMENT_VERSION)
 
 
 def cluster_ip(server: MetalServer) -> str:
@@ -120,14 +111,6 @@ def _machine_patch(server: MetalServer, cfg: Config, endpoint: Endpoint,
     # a group on its own L2 pins the pod node IP to that L2, not the cluster's
     patch["machine"]["kubelet"]["nodeIP"]["validSubnets"] = [server.network.cidr]
     return patch
-
-
-def _hostname_patch(server: MetalServer, cfg: Config) -> dict:
-    """Talos < 1.14 rejects the HostnameConfig document, so the hostname rides
-    the classic machine.network.hostname field there."""
-    if _pre_1_14(cfg):
-        return {"machine": {"network": {"hostname": server.name}}}
-    return machineconfig._hostname_patch(_machine(server, cfg))
 
 
 def _with_prefix(address: str, cidr: str) -> str:
@@ -314,15 +297,6 @@ def _cabling(server: MetalServer, cfg: Config, vip: str = "") -> tuple[list[dict
     return docs, entries
 
 
-def _strip_pre_1_14(docs: list[dict]) -> list[dict]:
-    """Drop the 1.14-era bits the client emits regardless of --talos-version."""
-    for doc in docs:
-        install = (doc.get("machine") or {}).get("install")
-        if isinstance(install, dict):
-            install.pop("grubUseUKICmdline", None)
-    return [doc for doc in docs if doc.get("kind") != "HostnameConfig"]
-
-
 def _external_child_link(server: MetalServer, cfg: Config) -> str:
     """The VLAN child link name of the machine's external link, or none."""
     external = [n for n, i in server.interfaces.items() if "external" in i.role]
@@ -434,9 +408,8 @@ def build_config(
     The shared patch stack (machine, hostname, cluster, firewall, kubespan,
     tailscale) is assembled exactly as `build_configs` does for the VM
     providers -- the firewall and the control plane's etcd advertisement keyed
-    on the machine's own L2 -- then the cabling plan's network patches and the
-    cluster's freeform patches; a Talos < 1.14 cluster gets the
-    classic hostname field and the 1.14-era keys stripped. `default_tags` are
+    on     the machine's own L2 -- then the cabling plan's network patches and the
+    cluster's freeform patches. `default_tags` are
     the provider's default node labels (`ncsa/project` on OpenStack), merged
     under the machine's `tags:` exactly as `build_configs` merges them for the
     VM machines. `endpoint` is the
@@ -461,7 +434,7 @@ def build_config(
                 _machine_patch(server, cfg, endpoint, installer_image, default_tags),
             ),
             machineconfig._write(
-                workdir, f"{host}-hostname", _hostname_patch(server, cfg)
+                workdir, f"{host}-hostname", machineconfig._hostname_patch(m)
             ),
         ]
         if server.role == "controlplane":
@@ -534,6 +507,4 @@ def build_config(
             patches=patches,
         )
     generated = [doc for doc in yaml.safe_load_all(raw) if doc]
-    if _pre_1_14(cfg):
-        generated = _strip_pre_1_14(generated)
     return yaml.safe_dump_all(generated, sort_keys=False, explicit_start=True)
