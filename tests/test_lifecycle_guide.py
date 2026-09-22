@@ -60,3 +60,19 @@ def test_unknown_version_rule_is_not_appended_to_scale_up():
     # the refusal is its own paragraph, not folded into the scale-up paragraph
     assert any(refusal in p for p in paragraphs[1:])
     assert not any(refusal in p for p in paragraphs[:1])
+
+
+def test_hand_cordon_caveat_is_spelled_out_in_the_rollout_prose():
+    # Converge lifts any cordon it finds on a managed node during the upgrade
+    # phase -- including one the operator placed by hand. The caveat must be
+    # spelled out in the Day 2 rollout text; only the function docstring said so.
+    text = GUIDE.read_text()
+    section = text.split("### Control-plane rollouts", 1)[1].split("\n### ", 1)[0]
+    paragraphs = [p for p in section.split("\n\n") if p.strip()]
+    cordoned = [p for p in paragraphs if "cordon" in p]
+    assert cordoned
+    caveat = "\n\n".join(cordoned)
+    # the by-hand case is named explicitly, not just the stale upgrade cordon
+    assert "by hand" in caveat
+    # the caveat is its own paragraph, not folded into the quorum-safety one
+    assert all("quorum-safe" not in p for p in cordoned)

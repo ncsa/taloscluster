@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Document the MTU rules for jumbo layer-2 networks, including the jumbo-frame ping recipe.
 - Document the metal provider with a setup guide, join-flow coverage for both the `metal join` command and converge's `auto_join` path, and a boot-media troubleshooting entry.
 - Document the ownership markers taloscluster writes on OpenStack and Proxmox and how bare-metal machines are recognised without one.
+- Document that converge lifts any cordon on a managed node, including one placed by hand.
 - Add a top-level `include` list that merges extra YAML files into `cluster.yaml` before validation, refusing `cluster.yaml` itself, nested includes and duplicate values; a section left `null` opts nothing in.
 - Bound every `kubectl` call with a request timeout so a hung kube-api fails converge.
 - Report a machine missing from both Talos discovery and Kubernetes as an incomplete `check`.
