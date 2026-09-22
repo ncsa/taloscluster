@@ -24,16 +24,16 @@ def _entry(root: Path, charts: dict, name: str):
 
 
 def test_first_pool_address():
-    assert first_pool_address(("141.142.36.190-141.142.36.199",)) == "141.142.36.190"
+    assert first_pool_address(("203.0.113.190-203.0.113.199",)) == "203.0.113.190"
     assert first_pool_address(("192.0.2.7",)) == "192.0.2.7"
     assert first_pool_address(()) == ""
 
 
 def test_metallb_pool_manifest():
-    docs = yaml.safe_load_all(metallb_pool_manifest(("141.142.36.190-141.142.36.199",)))
+    docs = yaml.safe_load_all(metallb_pool_manifest(("203.0.113.190-203.0.113.199",)))
     pool, l2 = list(docs)
     assert pool["kind"] == "IPAddressPool"
-    assert pool["spec"]["addresses"] == ["141.142.36.190-141.142.36.199"]
+    assert pool["spec"]["addresses"] == ["203.0.113.190-203.0.113.199"]
     assert pool["spec"]["autoAssign"] is True
     assert pool["metadata"]["namespace"] == "metallb-system"
     assert l2["kind"] == "L2Advertisement"
@@ -50,9 +50,9 @@ def test_namespace_manifest_labels():
 
 def test_traefik_common_values_classic(tmp_path):
     entry = _entry(tmp_path, {"traefik": {}}, "traefik")
-    values = common_values(entry, ingress_ip="141.142.36.190", gateway_enabled=False)
+    values = common_values(entry, ingress_ip="203.0.113.190", gateway_enabled=False)
     assert values["deployment"]["replicas"] == 1
-    assert values["service"]["loadBalancerIP"] == "141.142.36.190"
+    assert values["service"]["loadBalancerIP"] == "203.0.113.190"
     assert values["ports"]["web"]["http"]["redirections"]["entryPoint"]["to"] == "websecure"
     # no acme resolver of its own: cert-manager owns issuance
     assert "certificatesResolvers" not in values
@@ -63,7 +63,7 @@ def test_traefik_common_values_classic(tmp_path):
 
 def test_traefik_common_values_gateway(tmp_path):
     entry = _entry(tmp_path, {"traefik": {}}, "traefik")
-    values = common_values(entry, ingress_ip="141.142.36.190", gateway_enabled=True)
+    values = common_values(entry, ingress_ip="203.0.113.190", gateway_enabled=True)
     assert values["providers"]["kubernetesGateway"]["enabled"] is True
     assert values["gateway"]["listeners"]["web"]["port"] == 8000
 
@@ -89,18 +89,18 @@ def test_nfs_storage_class_values(tmp_path):
          "mountOptions": ["nfsvers=4.2"], "reclaimPolicy": "Delete"},
     ]}}
     entry = _entry(tmp_path, raw, "nfs")
-    values = nfs_storage_class_values(entry, "csfarm")
+    values = nfs_storage_class_values(entry, "testcluster")
     first, second = values["storageClasses"]
     assert first["annotations"] == {"storageclass.kubernetes.io/is-default-class": "true"}
     assert first["parameters"]["server"] == "nfs.example.edu"
     assert first["parameters"]["subDir"] == (
-        "csfarm/${pvc.metadata.namespace}-${pvc.metadata.name}-${pv.metadata.name}"
+        "testcluster/${pvc.metadata.namespace}-${pvc.metadata.name}-${pv.metadata.name}"
     )
     assert first["parameters"]["onDelete"] == "retain"
     assert first["reclaimPolicy"] == "Retain"
     assert first["volumeBindingMode"] == "Immediate"
     assert first["mountOptions"] == ["nfsvers=4.1"]
-    assert second["parameters"]["subDir"].startswith("csfarm/")
+    assert second["parameters"]["subDir"].startswith("testcluster/")
     assert second["mountOptions"] == ["nfsvers=4.2"]
     assert second["reclaimPolicy"] == "Delete"
     assert "annotations" not in second
