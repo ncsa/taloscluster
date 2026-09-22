@@ -1017,6 +1017,52 @@ def test_scale_down_resets_a_dropped_metal_node_using_its_kube_node_address(
     assert mutations == ["drain", "reset 172.29.21.6 maintenance=True", "delete", "compute"]
 
 
+def test_scale_down_does_not_claim_bare_metal_for_a_vm_absent_from_the_inventory(
+    monkeypatch, tmp_path, capsys
+):
+    """A VM deleted by hand is absent from the provider inventory just like a
+    dropped metal machine, so the inventory cannot tell the two apart: the
+    reset to maintenance against the stale kube-Node address is right, but the
+    log line must not claim the node is bare metal."""
+    cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
+    mutations: list[str] = []
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("contexts: {}")
+    monkeypatch.setattr(
+        converge.kubectl, "node_names", lambda _kc: ["testcluster-worker-01"]
+    )
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        converge.talosctl,
+        "etcd_members",
+        lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
+    )
+    monkeypatch.setattr(
+        converge.kubectl,
+        "node_addresses",
+        lambda _kc: {"testcluster-worker-01": "172.29.21.6"},
+    )
+    monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
+    monkeypatch.setattr(
+        converge.talosctl,
+        "reset",
+        lambda _tc, _ep, node, **kw: mutations.append(
+            f"reset {node} maintenance={kw['to_maintenance']}"
+        ),
+    )
+    monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: mutations.append("delete"))
+
+    converge._scale_down(
+        FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
+        talosconfig, Path("kubeconfig"), assume_yes=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "reset 172.29.21.6 maintenance=True" in mutations
+    assert "not in the provider inventory: reset to maintenance mode, not deleted" in out
+    assert "bare metal" not in out
+
+
 def test_scale_down_prefers_discovery_over_the_kube_node_address(monkeypatch):
     """A Node object can outlive the machine that registered it, so its
     InternalIP is the last fallback -- live Talos discovery wins."""

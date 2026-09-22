@@ -1787,10 +1787,12 @@ def _scale_down(
         # is no VM of ours, so deleting it is a no-op and no reinstall follows.
         is_metal = node not in inv.machines
         if address:
-            info(
-                f"removing {node} ({address})"
-                + (" -- bare metal: reset to maintenance mode, not deleted" if is_metal else "")
+            suffix = (
+                " -- not in the provider inventory: reset to maintenance mode, not deleted"
+                if is_metal
+                else ""
             )
+            info(f"removing {node} ({address}){suffix}")
             if has_node:
                 try:
                     kubectl.drain(kubeconfig, node)
