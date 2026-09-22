@@ -1,6 +1,6 @@
 # Metal setup
 
-Prepare the machines before joining them to the cluster. For each configuration key, see the [Metal reference](../configuration/metal.md). taloscluster does not provision bare metal: you rack and cable the machines, describe them in a [`metal:` section](../configuration/metal.md) beside the one [OpenStack](openstack.md) or [Proxmox](proxmox.md) section — one VM provider is always required — and join each machine with `taloscluster metal join SERVER`. The join flow itself is described under [Machines and access](../concepts/machines.md#metal); this page is the preparation it needs.
+Prepare the machines before joining them to the cluster. For each configuration key, see the [Metal reference](../configuration/metal.md). taloscluster does not provision bare metal: you rack and cable the machines, describe them in a [`metal:` section](../configuration/metal.md) beside the one [OpenStack](openstack.md) or [Proxmox](proxmox.md) section — one VM provider is always required — and join each machine — explicitly with `taloscluster metal join SERVER`, or through converge when its group sets [`auto_join`](../configuration/metal.md#metalgroupauto_join). The join flow itself is described under [Machines and access](../concepts/machines.md#metal); this page is the preparation it needs.
 
 ## Network and cabling
 

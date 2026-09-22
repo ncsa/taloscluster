@@ -5,8 +5,10 @@ under ``docs/providers/``, the key reference under ``docs/configuration/``, the
 join-flow coverage in the machines and lifecycle concepts pages, and the
 troubleshooting entry for BMCs that cannot boot remote media. These tests pin
 the pages to the behavior they describe: the published nav entry, the quoted
-diagnostics against the strings the ``metal`` commands actually print, and the
-cross-links that carry a reader from one page to the next.
+diagnostics against the strings the ``metal`` commands actually print, the
+cross-links that carry a reader from one page to the next, and the two join
+paths — an explicit ``metal join`` and converge's ``auto_join`` phase — named
+together on every page that tells the operator how a machine joins.
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ PROVIDER = ROOT / "docs" / "providers" / "metal.md"
 REFERENCE = ROOT / "docs" / "configuration" / "metal.md"
 MACHINES = ROOT / "docs" / "concepts" / "machines.md"
 LIFECYCLE = ROOT / "docs" / "concepts" / "lifecycle.md"
+USAGE = ROOT / "docs" / "usage.md"
+COMMANDS = ROOT / "docs" / "commands.md"
 GUIDE = ROOT / "docs" / "troubleshooting.md"
 NAV = ROOT / "mkdocs.yml"
 JOINED = ROOT / "taloscluster" / "metal" / "commands.py"
@@ -73,6 +77,19 @@ def test_lifecycle_build_covers_the_join():
     assert "taloscluster metal join SERVER" in text
     assert "redfish: false" in text
     assert "../providers/metal.md" in text
+
+
+def test_join_pages_name_both_join_paths():
+    # A machine joins either through an explicit `metal join` or through
+    # converge's compute phase when its group opts in with `auto_join`; every
+    # page that tells the operator how a machine joins names both, so none of
+    # them drifts back into presenting `metal join` as the only path.
+    for page in (MACHINES, USAGE, COMMANDS, PROVIDER):
+        text = page.read_text()
+        assert "metal join" in text
+        assert "auto_join" in text, (
+            f"{page.relative_to(ROOT)} presents `metal join` as the only join path"
+        )
 
 
 def test_troubleshooting_entry_quotes_the_join_diagnostics():
