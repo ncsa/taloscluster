@@ -106,6 +106,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Reconfigure and upgrade joined metal nodes during converge, and warn that destroy leaves them running the destroyed cluster.
 - Advertise etcd on a metal control plane's own L2 instead of the cluster network.
 - Refuse a `talos.version` older than the running release and a `kubernetes.version` the pinned Talos does not support.
+- Wait out control-plane reboots through the control-plane endpoint so an unroutable node address no longer stalls the rollout.
 
 ## [0.7.0] - 2026-09-06
 

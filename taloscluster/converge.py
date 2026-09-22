@@ -837,7 +837,9 @@ def _reboot_nodes(
         backend.restart_machine(host, inv)  # returns once the provider restarted it
         if dry_run():
             continue
-        _wait_reachable(talosconfig, address, address)
+        # the wait dials through the endpoint (this host may not route the
+        # node's address directly); the node is always the restarted address
+        _wait_reachable(talosconfig, endpoint, address)
         if not _health_or_kube_fallback(
             talosconfig,
             endpoint,
@@ -1822,14 +1824,16 @@ def _apply_configs(
             # reboot-requiring patch is fully settled before the next control
             # plane is touched. apid reachability alone does not prove the node
             # rejoined etcd, so it is never treated as settled without health.
-            if not _wait_down(talosconfig, address, address):
+            # Both waits dial through the endpoint -- this host may not route
+            # the node's address directly -- and target the node with -n.
+            if not _wait_down(talosconfig, endpoint, address):
                 raise ReconcileError(
                     f"{host}: apply requested a reboot but apid never dropped within "
                     f"the {_SETTLE_GRACE_S}s settle grace window; refusing to touch "
                     "the next control plane (a slow reboot cannot be told apart "
                     "from a stuck node)"
                 )
-            _wait_reachable(talosconfig, address, address)
+            _wait_reachable(talosconfig, endpoint, address)
             if not _health_or_kube_fallback(
                 talosconfig,
                 endpoint,

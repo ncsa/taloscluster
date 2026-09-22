@@ -2345,6 +2345,42 @@ def test_reboot_nodes_is_serial_controlplanes_first_and_health_checked(monkeypat
     ]
 
 
+def test_reboot_wait_dials_through_the_endpoint(monkeypatch, tmp_path):
+    """The post-reboot reachability wait dials cp-01's endpoint and targets the
+    restarted node's address with -n, like every other talosctl call: the node
+    address may be a private address this host cannot route, and dialing it
+    directly would read the node as never having come back."""
+    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=True)
+    machines = {
+        "phoenix-controlplane-01": SimpleNamespace(role="controlplane"),
+        "phoenix-worker-01": SimpleNamespace(role="worker"),
+    }
+    inv = InfrastructureInventory(
+        machines={
+            h: InfrastructureMachine(name=h, attachments=(NetworkAttachment("cluster", a),))
+            for h, a in {
+                "phoenix-controlplane-01": "10.0.0.1",
+                "phoenix-worker-01": "10.0.0.11",
+            }.items()
+        }
+    )
+    waited: list[tuple[str, str]] = []
+    backend = SimpleNamespace(restart_machine=lambda name, _inv: None)
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *a, **k: {})
+    monkeypatch.setattr(
+        converge, "_wait_reachable", lambda _tc, e, n: waited.append((e, n))
+    )
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_k: True)
+
+    converge._reboot_nodes(
+        backend, cfg, machines, inv, NetworkResult(),
+        {"phoenix-worker-01"}, tmp_path / "talosconfig", tmp_path / "kubeconfig",
+    )
+
+    # the endpoint is cp-01's tailnet name; the node is the restarted address
+    assert waited == [("phoenix-controlplane-01", "10.0.0.11")]
+
+
 def test_reboot_rollout_stops_when_the_cluster_is_unhealthy(monkeypatch, tmp_path):
     cfg = SimpleNamespace(name="phoenix", tailscale_enabled=False)
     machines = {
@@ -2475,6 +2511,42 @@ def test_apply_configs_settles_control_planes_by_default(monkeypatch):
         ("apply", cp1), ("down", cp1), ("up", cp1), ("health", None),
         ("apply", cp2), ("down", cp2), ("up", cp2), ("health", None),
         ("apply", worker),
+    ]
+
+
+def test_apply_configs_settle_waits_dial_through_the_endpoint(monkeypatch):
+    """The settle waits dial cp-01's endpoint and target the applied node's
+    address with -n, like every other talosctl call: the node address may be a
+    private address this host cannot route, and dialing it directly would read
+    the node as instantly down and then never coming back."""
+    machines, inv, configs = _apply_configs_fixtures()
+    _no_op_reachable(monkeypatch)
+    waited: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(converge.talosctl, "apply_config", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        converge, "_wait_down",
+        lambda _tc, e, n: waited.append(("down", e, n)) or True,
+    )
+    monkeypatch.setattr(
+        converge, "_wait_reachable",
+        lambda _tc, e, n: waited.append(("up", e, n)),
+    )
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_k: True)
+
+    converge._apply_configs(
+        SimpleNamespace(name="phoenix", tailscale_enabled=True),
+        machines, inv, NetworkResult(), configs,
+        Path("talosconfig"), Path("kubeconfig"),
+    )
+
+    cp1, cp2, _worker = (_APPLY_ADDR[h] for h in _APPLY_MACHINES)
+    # the endpoint is cp-01's tailnet name for both control planes; the node
+    # is each applied node's own address
+    assert waited == [
+        ("down", "phoenix-controlplane-01", cp1),
+        ("up", "phoenix-controlplane-01", cp1),
+        ("down", "phoenix-controlplane-01", cp2),
+        ("up", "phoenix-controlplane-01", cp2),
     ]
 
 
