@@ -45,6 +45,8 @@ class FakeHelm:
     latest: dict[str, str] = field(default_factory=dict)
     values: dict[str, dict] = field(default_factory=dict)  # release -> last applied values
     upgrades: list = field(default_factory=list)
+    lookups: list = field(default_factory=list)  # chart names asked for their latest version
+    pulled: list = field(default_factory=list)  # (release, chart) pairs installed
     uninstalls: list = field(default_factory=list)
 
     def release(self, kubeconfig, name, namespace):
@@ -53,6 +55,7 @@ class FakeHelm:
         return {"name": name, "status": "deployed", "chart": f"{name}-{self.installed[name]}"}
 
     def latest_version(self, chart, repo):
+        self.lookups.append(chart)
         return self.latest.get(chart)
 
     def get_values(self, kubeconfig, name, namespace):
@@ -60,6 +63,7 @@ class FakeHelm:
 
     def upgrade_install(self, kubeconfig, name, chart, repo, namespace, version, values_yaml):
         self.upgrades.append((name, values_yaml))
+        self.pulled.append((name, chart))
         self.values[name] = yaml.safe_load(values_yaml)
 
     def uninstall(self, kubeconfig, name, namespace):
@@ -153,6 +157,57 @@ def test_plan_shows_values_when_changing(tmp_path, fake_helm, no_kube, dry, caps
     out = capsys.readouterr().out
     assert "metallb: values" in out
     assert "frrk8s" in out
+
+
+def test_ceph_pulls_the_csi_charts_not_the_entry_name(tmp_path, fake_helm, no_kube):
+    charts = {"ceph": {
+        "clusterID": "2f6a1c0e-0000-4000-8000-000000000000",
+        "monitors": ["192.0.2.11:6789"],
+        "rbd": True,
+        "fs": True,
+    }}
+    result = reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert result["entries"]["ceph"]["charts"] == {
+        "ceph-csi-rbd": "installed", "ceph-csi-cephfs": "installed",
+    }
+    assert fake_helm.lookups == ["ceph-csi-rbd", "ceph-csi-cephfs"]
+    assert fake_helm.pulled == [
+        ("ceph-csi-rbd", "ceph-csi-rbd"), ("ceph-csi-cephfs", "ceph-csi-cephfs"),
+    ]
+
+
+def test_ceph_charts_get_their_own_storage_class(tmp_path, fake_helm, no_kube):
+    charts = {"ceph": {
+        "clusterID": "fsid",
+        "monitors": ["192.0.2.11:6789"],
+        "rbd": {"pool": "kubernetes"},
+        "fs": True,
+        "values": {"logLevel": 3},
+    }}
+    reconcile.converge(_pool_ctx(tmp_path, charts))
+    values = dict(fake_helm.upgrades)
+    rbd, fs = yaml.safe_load(values["ceph-csi-rbd"]), yaml.safe_load(values["ceph-csi-cephfs"])
+    assert rbd["storageClass"]["pool"] == "kubernetes" and rbd["storageClass"]["create"] is True
+    assert "storageClass" not in fs
+    assert rbd["logLevel"] == fs["logLevel"] == 3
+    assert rbd["csiConfig"] == fs["csiConfig"]
+
+
+def test_plan_never_prints_the_ceph_key(tmp_path, fake_helm, no_kube, dry, capsys):
+    (tmp_path / "kubeconfig").write_text("")
+    charts = {"ceph": {
+        "clusterID": "2f6a1c0e-0000-4000-8000-000000000000",
+        "monitors": ["192.0.2.11:6789"],
+        "rbd": True,
+        "userID": "kubernetes",
+        "userKey": "AQC0secretkey==",
+    }}
+    reconcile.converge(_pool_ctx(tmp_path, charts))
+    out = capsys.readouterr().out
+    assert "kubectl apply ceph csi secrets" in out
+    assert "name: csi-rbd-secret" in out
+    assert "AQC0secretkey" not in out
+    assert "userKey: REDACTED" in out
 
 
 def test_values_change_triggers_upgrade(tmp_path, fake_helm, no_kube):

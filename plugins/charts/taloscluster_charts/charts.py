@@ -258,6 +258,45 @@ def ceph_values(entry: Entry) -> dict[str, Any]:
     return {"csiConfig": [{"clusterID": entry.cluster_id, "monitors": list(entry.monitors)}]}
 
 
+# the charts' own default StorageClass names
+CEPH_CLASS_NAMES = {"ceph-csi-rbd": "csi-rbd-sc", "ceph-csi-cephfs": "csi-cephfs-sc"}
+
+
+def ceph_storage_class_values(entry: Entry, chart: str) -> dict[str, Any]:
+    """storageClass values for one ceph-csi chart from the entry's `rbd:`/`fs:`
+    mapping; empty for a bare boolean, which installs the driver alone.
+
+    The class points at the entry's clusterID and the given pool (rbd) or file
+    system (fs); Retain is the default reclaim policy, as for nfs, so deleting
+    a claim never deletes data. `parameters` are extra `storageClass.*` chart
+    values for that class (imageFeatures, mounter, fuseMountOptions, ...).
+    """
+    sc = entry.rbd_class if chart == "ceph-csi-rbd" else entry.fs_class
+    if sc is None:
+        return {}
+    values: dict[str, Any] = {
+        "create": True,
+        "name": sc.get("name", CEPH_CLASS_NAMES[chart]),
+        "clusterID": entry.cluster_id,
+        "reclaimPolicy": sc.get("reclaimPolicy", "Retain"),
+    }
+    if chart == "ceph-csi-rbd":
+        values["pool"] = sc["pool"]
+    else:
+        values["fsName"] = sc["fsName"]
+        if sc.get("pool"):
+            values["pool"] = sc["pool"]
+    if sc.get("mountOptions"):
+        values["mountOptions"] = list(sc["mountOptions"])
+    annotations = dict(sc.get("annotations") or {})
+    if sc.get("defaultClass"):
+        annotations["storageclass.kubernetes.io/is-default-class"] = "true"
+    if annotations:
+        values["annotations"] = annotations
+    values.update(sc.get("parameters") or {})
+    return {"storageClass": values}
+
+
 def ceph_namespace(chart: str) -> Namespace:
     return Namespace(chart, *CEPH_PSA)
 

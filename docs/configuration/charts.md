@@ -41,8 +41,11 @@ charts:
     enabled: false
     clusterID: 2f6a1c0e-0000-4000-8000-000000000000
     monitors: [mon-a.example.edu:6789, mon-b.example.edu:6789]
-    rbd: true
-    fs: true
+    rbd:
+      pool: kubernetes
+      defaultClass: true
+    fs:
+      fsName: cephfs
   my-chart:
     repo: https://charts.example.com
     namespace: my-namespace
@@ -61,7 +64,7 @@ Entries the plugin knows by name ship a chart repository, an install namespace w
 | `cert-manager` | The cert-manager chart with CRDs | `cert-manager` (restricted) | Consumes `email`, `staging` and `prod`; the ingress shim defaults to the `letsencrypt-prod` ClusterIssuer |
 | `sealed-secrets` | The Bitnami sealed-secrets controller | `sealed-secrets` (restricted) | Named `sealed-secrets-controller` so `kubeseal` finds it |
 | `nfs` | The `csi-driver-nfs` chart | `nfs` (privileged) | Consumes `storageClasses` |
-| `ceph` | The `ceph-csi-rbd` and/or `ceph-csi-cephfs` charts | one privileged namespace per chart | Consumes `clusterID`, `monitors`, `rbd`, `fs` and the optional [`userID`/`userKey` credentials](#secretsyaml) |
+| `ceph` | The `ceph-csi-rbd` and/or `ceph-csi-cephfs` charts | one privileged namespace per chart | Consumes `clusterID`, `monitors`, `rbd`, `fs` (booleans, or mappings that also create a StorageClass) and the optional [`userID`/`userKey` credentials](#secretsyaml) |
 
 The MetalLB pool is never written in `charts`: it comes from the provider, the [`ingress_pool`](network.md#networkexternal) range on Proxmox, and is reused for the traefik service address.
 
@@ -137,9 +140,89 @@ The Ceph cluster fsid and its monitor addresses, rendered into the `csiConfig` e
 
 #### `charts.ceph.rbd` and `charts.ceph.fs`
 
-Optional · boolean · default `false` and `false`
+Optional · boolean or mapping · default `false` and `false`
 
-Install the `ceph-csi-rbd` (block) and `ceph-csi-cephfs` (shared file system) charts. At least one must be on when the entry is enabled; each runs in its own privileged namespace named after the chart.
+Install the `ceph-csi-rbd` (block) and `ceph-csi-cephfs` (shared file system) charts. At least one must be on when the entry is enabled; each runs in its own privileged namespace named after the chart. `true` installs the driver alone, so you create StorageClasses yourself. A mapping also has that chart create one StorageClass pointing at the entry's `clusterID`: `rbd` needs `pool`, and `fs` needs `fsName` with an optional `pool`. Both accept `name` (default the chart's own, `csi-rbd-sc` and `csi-cephfs-sc`), `defaultClass: true` on at most one of the two, `reclaimPolicy` (default `Retain`), `mountOptions`, `annotations`, and `parameters`, a mapping of extra `storageClass.*` chart values for that class such as `imageFeatures` or `fuseMountOptions`. Set either a mapping or `values.storageClass`, not both.
+
+### Gathering the values from Ceph
+
+Run these on any Ceph node (or wherever `ceph` has an admin keyring), for example a Proxmox host or a cephadm shell. The fsid is the `clusterID`:
+
+```sh
+ceph fsid
+```
+
+The monitors are the `mon.*` entries of the monitor map; take the v1 address of each and write it as `host:6789` (the v2 port `3300` also works with current ceph-csi):
+
+```sh
+ceph mon dump
+# 0: [v2:192.0.2.11:3300/0,v1:192.0.2.11:6789/0] mon.a
+# 1: [v2:192.0.2.12:3300/0,v1:192.0.2.12:6789/0] mon.b
+```
+
+With `rbd` on, always create and initialise the pool the images will live in before anything else; the user capabilities below and the StorageClass refer to it by name:
+
+```sh
+ceph osd pool create kubernetes
+rbd pool init kubernetes
+```
+
+With `fs` on, the file system must already exist. Its `name` is the `fsName`; the metadata and data pools on the same line belong to CephFS, and `fs.pool` only matters when a file system has several data pools:
+
+```sh
+ceph fs ls
+# name: kubernetes, metadata pool: cephfs.kubernetes.meta, data pools: [cephfs.kubernetes.data ]
+```
+
+Create a dedicated CephX user for the cluster instead of handing out `client.admin`. The plugin delivers a single `userID`/`userKey` pair to both ceph-csi charts, so the user needs the provisioner and node capabilities of every chart it enables (see the [ceph-csi capability list](https://github.com/ceph/ceph-csi/blob/devel/docs/capabilities.md)):
+
+```sh
+# rbd only
+ceph auth get-or-create client.kubernetes \
+  mon 'profile rbd' mgr 'allow rw' osd 'profile rbd pool=kubernetes'
+
+# cephfs only
+ceph auth get-or-create client.kubernetes \
+  mon 'allow r' mgr 'allow rw' osd 'allow rw tag cephfs *=*' mds 'allow rw'
+
+# rbd and cephfs with one user
+ceph auth get-or-create client.kubernetes \
+  mon 'allow r, profile rbd' mgr 'allow rw' \
+  osd 'allow rw tag cephfs *=*, profile rbd pool=kubernetes' mds 'allow rw'
+```
+
+The `userID` is the name without the `client.` prefix (`kubernetes`) and the `userKey` is its key:
+
+```sh
+ceph auth get-key client.kubernetes
+```
+
+Put the pool and the file system name into the `rbd` and `fs` mappings so each chart creates its StorageClass (the secret names and namespaces default to the ones the plugin delivers):
+
+```yaml
+charts:
+  ceph:
+    enabled: true
+    clusterID: 2f6a1c0e-0000-4000-8000-000000000000
+    monitors: [192.0.2.11:6789, 192.0.2.12:6789]
+    rbd:
+      pool: kubernetes        # the pool created above
+      defaultClass: true
+    fs:
+      fsName: cephfs          # a name from `ceph fs ls`
+```
+
+`values` is handed to every enabled ceph-csi chart, so it holds what both share (log level, resources); anything per class belongs in the `rbd` or `fs` mapping.
+
+The classes default to `reclaimPolicy: Retain`, so deleting a PVC keeps its image or subvolume and leaves the PV `Released`. Deleting that PV by hand removes only the Kubernetes object; to have ceph-csi delete the data as well, switch the Released PV to `Delete` and the controller reclaims it:
+
+```sh
+kubectl patch pv <pv> -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'
+```
+
+A `Released` PV can instead be reattached by clearing its `claimRef` and creating a PVC that names it in `volumeName`.
+
+Once a Retained PV is deleted by hand, its image stays in the pool with nothing referencing it. `scripts/rbd-review.sh [POOL]`, run on a Ceph node, walks the ceph-csi images in a pool, shows each one's size, usage, claim and timestamps, skips images a node has mapped, and deletes the ones you confirm together with their ceph-csi journal records.
 
 ## secrets.yaml
 

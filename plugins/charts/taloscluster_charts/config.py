@@ -58,8 +58,13 @@ STORAGE_CLASS_KEYS = {
     "volumeBindingMode", "mountOptions", "annotations", "parameters",
 }
 
-SECRET_KEY_RE = re.compile(r"(?i)pass|token|secret|key|credential")
-
+# keys a ceph `rbd:` / `fs:` mapping (a chart-created StorageClass) may carry,
+# plus the driver-specific `pool` (rbd, required) and `fsName` (fs, required)
+CEPH_CLASS_KEYS = {
+    "name", "defaultClass", "reclaimPolicy", "mountOptions", "annotations", "parameters",
+}
+CEPH_DRIVER_KEYS = {"rbd": {"pool"}, "fs": {"fsName", "pool"}}
+CEPH_DRIVER_REQUIRED = {"rbd": "pool", "fs": "fsName"}
 
 @dataclass(frozen=True)
 class Namespace:
@@ -151,6 +156,8 @@ class Entry:
     monitors: tuple[str, ...] = ()  # ceph: monitor addresses
     rbd: bool = False               # ceph: install the ceph-csi-rbd chart
     fs: bool = False                # ceph: install the ceph-csi-cephfs chart
+    rbd_class: dict[str, Any] | None = None  # ceph: StorageClass the rbd chart creates
+    fs_class: dict[str, Any] | None = None   # ceph: StorageClass the cephfs chart creates
     user_id: str = ""               # ceph: CephX user for the csi secrets (optional)
     user_key: str = ""              # ceph: CephX key for the csi secrets (optional)
 
@@ -327,13 +334,17 @@ def _entry(name: str, raw: Any) -> Entry:
 
     cluster_id = raw.get("clusterID") or ""
     monitors = raw.get("monitors") or ()
-    rbd = raw.get("rbd", False)
-    fs = raw.get("fs", False)
+    rbd, rbd_class = raw.get("rbd", False), None
+    fs, fs_class = raw.get("fs", False), None
     user_id = raw.get("userID")
     user_key = raw.get("userKey")
     if known is not None and known.ceph:
-        if not isinstance(rbd, bool) or not isinstance(fs, bool):
-            raise ConfigError(f"{where}: rbd and fs must be booleans")
+        rbd, rbd_class = _ceph_driver(name, "rbd", rbd)
+        fs, fs_class = _ceph_driver(name, "fs", fs)
+        if (rbd_class or fs_class) and "storageClass" in values:
+            raise ConfigError(f"{where}: use rbd/fs mappings or values.storageClass, not both")
+        if sum(1 for c in (rbd_class, fs_class) if c and c.get("defaultClass")) > 1:
+            raise ConfigError(f"{where}: at most one of rbd and fs may set defaultClass: true")
         # the credentials are optional, but half a pair is a mistake
         if (user_id is None) != (user_key is None):
             raise ConfigError(f"{where}: set both userID and userKey, or neither")
@@ -397,10 +408,31 @@ def _entry(name: str, raw: Any) -> Entry:
         cluster_id=cluster_id,
         monitors=monitors,
         rbd=rbd,
+        rbd_class=rbd_class,
+        fs_class=fs_class,
         fs=fs,
         user_id=user_id or "",
         user_key=user_key or "",
     )
+
+
+def _ceph_driver(name: str, key: str, raw: Any) -> tuple[bool, dict[str, Any] | None]:
+    """Normalize a ceph `rbd:` / `fs:` value: a boolean, or a mapping that also
+    has the chart create a StorageClass (pool for rbd, fsName for fs)."""
+    where = f"cluster.yaml: {SECTION}.{name}"
+    if isinstance(raw, bool):
+        return raw, None
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: {key} must be a boolean or a mapping")
+    if unknown := sorted(set(raw) - CEPH_CLASS_KEYS - CEPH_DRIVER_KEYS[key]):
+        raise ConfigError(f"{where}: {key}: unsupported key(s): {', '.join(unknown)}")
+    required = CEPH_DRIVER_REQUIRED[key]
+    for field_name in (required, "name", "pool"):
+        value = raw.get(field_name)
+        if field_name == required or value is not None:
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigError(f"{where}: {key}.{field_name} must be a non-empty string")
+    return True, raw
 
 
 def _storage_classes(name: str, raw: Any, known: Known | None) -> tuple[dict[str, Any], ...]:
@@ -481,26 +513,6 @@ def merge_values(common: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]
     for key, value in user.items():
         if key in out and isinstance(out[key], dict) and isinstance(value, dict):
             out[key] = merge_values(out[key], value)
-        else:
-            out[key] = value
-    return out
-
-
-def redact(values: dict[str, Any]) -> dict[str, Any]:
-    """Display copy of `values` with secret-looking keys replaced by REDACTED.
-
-    Plan prints the merged values, so anything a user adds under a key that
-    looks like a credential (password/token/secret/key/credential, at any
-    depth) is masked. Display only -- real values still reach helm.
-    """
-    out: dict[str, Any] = {}
-    for key, value in values.items():
-        if SECRET_KEY_RE.search(str(key)):
-            out[key] = "REDACTED"
-        elif isinstance(value, dict):
-            out[key] = redact(value)
-        elif isinstance(value, list):
-            out[key] = [redact(item) if isinstance(item, dict) else item for item in value]
         else:
             out[key] = value
     return out

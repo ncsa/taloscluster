@@ -13,7 +13,6 @@ from taloscluster_charts.config import (
     charts_configured,
     is_newer,
     merge_values,
-    redact,
     validate_charts,
 )
 
@@ -113,7 +112,7 @@ def test_ceph_entry_schema(tmp_path):
     with pytest.raises(ConfigError, match="monitors must be a non-empty list"):
         validate_charts(tmp_path)
     _write_cluster(tmp_path, {"ceph": {"clusterID": "x", "monitors": ["m:6789"], "rbd": "yes"}})
-    with pytest.raises(ConfigError, match="rbd and fs must be booleans"):
+    with pytest.raises(ConfigError, match="rbd must be a boolean or a mapping"):
         validate_charts(tmp_path)
     _write_cluster(tmp_path, {"gateway": {"clusterID": "x", "rbd": True}})
     with pytest.raises(ConfigError, match="only used by ceph"):
@@ -125,6 +124,34 @@ def test_ceph_entry_schema(tmp_path):
     assert entry.cluster_id == "x"
     assert entry.monitors == ("m:6789",)
     assert entry.rbd and entry.fs
+
+
+def test_ceph_driver_mappings_create_storage_classes(tmp_path):
+    base = {"clusterID": "x", "monitors": ["m:6789"]}
+    _write_cluster(tmp_path, {"ceph": {
+        **base, "rbd": {"pool": "kubernetes", "defaultClass": True}, "fs": {"fsName": "cephfs"},
+    }})
+    entry = Config.load(tmp_path).entries["ceph"]
+    assert entry.rbd and entry.fs
+    assert entry.rbd_class == {"pool": "kubernetes", "defaultClass": True}
+    assert entry.fs_class == {"fsName": "cephfs"}
+    # a bare boolean installs the driver alone
+    _write_cluster(tmp_path, {"ceph": {**base, "rbd": True}})
+    entry = Config.load(tmp_path).entries["ceph"]
+    assert entry.rbd and entry.rbd_class is None and entry.fs_class is None
+    for bad, msg in (
+        ({"rbd": {}}, "rbd.pool must be a non-empty string"),
+        ({"fs": {"pool": "p"}}, "fs.fsName must be a non-empty string"),
+        ({"rbd": {"pool": "p", "fsName": "f"}}, "rbd: unsupported key"),
+        ({"rbd": {"pool": "p", "name": ""}}, "rbd.name must be a non-empty string"),
+        ({"rbd": {"pool": "p", "defaultClass": True}, "fs": {"fsName": "f", "defaultClass": True}},
+         "at most one of rbd and fs may set defaultClass"),
+        ({"rbd": {"pool": "p"}, "values": {"storageClass": {"create": True}}},
+         "rbd/fs mappings or values.storageClass, not both"),
+    ):
+        _write_cluster(tmp_path, {"ceph": {**base, **bad}})
+        with pytest.raises(ConfigError, match=msg):
+            Config.load(tmp_path)
 
 
 def test_ceph_secrets_merge_from_secrets_yaml(tmp_path):
@@ -310,19 +337,3 @@ def test_version_key_and_is_newer():
 def test_merge_values_deep_dicts_lists_replace():
     common = {"a": {"b": 1, "c": 2}, "l": [1, 2]}
     assert merge_values(common, {"a": {"b": 9}, "l": [3]}) == {"a": {"b": 9, "c": 2}, "l": [3]}
-
-
-def test_redact_masks_secret_looking_keys_at_depth():
-    values = {
-        "replicas": 1,
-        "auth": {"password": "hush", "token": "t", "nested": {"apiKey": "k", "plain": "v"}},
-        "secretName": "s",
-    }
-    out = redact(values)
-    assert out["replicas"] == 1
-    assert out["auth"]["password"] == "REDACTED"
-    assert out["auth"]["token"] == "REDACTED"
-    assert out["auth"]["nested"]["apiKey"] == "REDACTED"
-    assert out["auth"]["nested"]["plain"] == "v"
-    assert out["secretName"] == "REDACTED"
-    assert values["auth"]["password"] == "hush"  # display only

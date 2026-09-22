@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from taloscluster_charts.charts import (
+    ceph_storage_class_values,
     cert_manager_issuers,
     common_values,
     first_pool_address,
@@ -109,6 +110,45 @@ def test_nfs_storage_class_values(tmp_path):
 def test_ceph_gets_no_common_values(tmp_path):
     entry = _entry(tmp_path, {"ceph": {"enabled": False}}, "ceph")
     assert common_values(entry) == {}
+
+
+def test_ceph_storage_class_values_per_chart(tmp_path):
+    entry = _entry(tmp_path, {"ceph": {
+        "clusterID": "fsid",
+        "monitors": ["m:6789"],
+        "rbd": {
+            "pool": "kubernetes", "defaultClass": True,
+            "parameters": {"imageFeatures": "layering"},
+        },
+        "fs": {
+            "fsName": "cephfs", "name": "cephfs-shared", "reclaimPolicy": "Delete",
+            "mountOptions": ["debug"], "annotations": {"a": "b"},
+        },
+    }}, "ceph")
+    rbd = ceph_storage_class_values(entry, "ceph-csi-rbd")["storageClass"]
+    assert rbd == {
+        "create": True,
+        "name": "csi-rbd-sc",
+        "clusterID": "fsid",
+        "reclaimPolicy": "Retain",
+        "pool": "kubernetes",
+        "annotations": {"storageclass.kubernetes.io/is-default-class": "true"},
+        "imageFeatures": "layering",
+    }
+    fs = ceph_storage_class_values(entry, "ceph-csi-cephfs")["storageClass"]
+    assert fs == {
+        "create": True,
+        "name": "cephfs-shared",
+        "clusterID": "fsid",
+        "reclaimPolicy": "Delete",
+        "fsName": "cephfs",
+        "mountOptions": ["debug"],
+        "annotations": {"a": "b"},
+    }
+    bare = _entry(
+        tmp_path, {"ceph": {"clusterID": "fsid", "monitors": ["m:6789"], "rbd": True}}, "ceph"
+    )
+    assert ceph_storage_class_values(bare, "ceph-csi-rbd") == {}
 
 
 def test_sealed_secrets_common_values(tmp_path):

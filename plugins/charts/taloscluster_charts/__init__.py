@@ -43,11 +43,12 @@ CLUSTER_SCAFFOLD = """\
 charts:
   ceph:
     enabled: false       # ceph storage: rbd and/or cephfs; needs clusterID + monitors
-    # clusterID: <ceph-fsid>
-    # monitors: [mon.example.edu:6789]
+    # clusterID: <ceph-fsid>            # from `ceph fsid`
+    # monitors: [mon.example.edu:6789]  # from `ceph mon dump`
     # userID/userKey: the CephX credentials, scaffolded in secrets.yaml
-    rbd: true            # installs the ceph-csi-rbd chart
-    fs: true             # installs the ceph-csi-cephfs chart
+    rbd: true            # installs the ceph-csi-rbd chart; or a mapping with the
+    #   pool (and defaultClass, name, reclaimPolicy, ...) to also create a StorageClass
+    fs: true             # installs the ceph-csi-cephfs chart; or a mapping with fsName
     version: latest
   cert-manager:
     enabled: false        # TLS certificate provisioning
@@ -84,8 +85,8 @@ charts:
 SECRETS_SCAFFOLD = """\
 # charts:
 #   ceph:
-#     userID: admin
-#     userKey: AQC...
+#     userID: kubernetes   # a client.<userID> made with `ceph auth get-or-create`
+#     userKey: AQC...      # from `ceph auth get-key client.<userID>`
 """
 
 __all__ = ["check", "configured", "converge", "destroy", "init", "status", "validate"]

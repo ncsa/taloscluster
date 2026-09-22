@@ -14,9 +14,16 @@ the plugin Context and are never duplicated in config.
 
 Known entries: `gateway`, `metallb`, `traefik`, `cert-manager`, `sealed-secrets`,
 `nfs` (consumes `storageClasses`) and `ceph` (consumes `clusterID`, `monitors`,
-`rbd`, `fs` and the optional `userID`/`userKey` credentials, scaffolded into secrets.yaml under the same `charts.ceph` path). Any other entry must
+`rbd`, `fs` -- booleans, or mappings with the pool / fsName that also create a
+StorageClass -- and the optional `userID`/`userKey` credentials, scaffolded into secrets.yaml under the same `charts.ceph` path). Any other entry must
 set `repo` or `manifest` itself. Every key is documented in
 [docs/configuration/charts.md](../../docs/configuration/charts.md).
+
+The ceph values come from the Ceph cluster itself: `ceph fsid` (clusterID),
+`ceph mon dump` (monitors) and a dedicated CephX user created with
+`ceph auth get-or-create` whose key `ceph auth get-key` prints (userID/userKey).
+The exact commands and capabilities are in
+[docs/configuration/charts.md](../../docs/configuration/charts.md#gathering-the-values-from-ceph).
 
 ## Behaviour
 

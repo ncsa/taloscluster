@@ -16,10 +16,10 @@ from typing import Any
 import yaml
 from taloscluster.context import Context
 from taloscluster.errors import ReconcileError, preflight_tools
-from taloscluster.output import action, dry_run, info, log, warn
+from taloscluster.output import action, dry_run, info, log, show_yaml, warn
 
 from . import charts, helm, kube, upstream
-from .config import Config, Entry, Namespace, is_newer, merge_values, redact
+from .config import Config, Entry, Namespace, is_newer, merge_values
 
 # dependency order: gateway CRDs before traefik's gateway provider, the
 # metallb chart (and its pool) before traefik claims an address from it; the
@@ -87,15 +87,6 @@ def _manifest_urls(entry: Entry) -> tuple[str, ...]:
     raise ReconcileError(
         f"{entry.name}: cannot resolve the latest release; pin a version in cluster.yaml or retry"
     )
-
-
-def _show_yaml(text: str) -> None:
-    for line in text.rstrip().splitlines():
-        info("      " + line)
-
-
-def _show_values(values: dict[str, Any]) -> None:
-    _show_yaml(yaml.safe_dump(redact(values), default_flow_style=False))
 
 
 # ---------------------------------------------------------------------------
@@ -200,19 +191,27 @@ def _converge_chart(entry: Entry, ctx: Context, pool: tuple[str, ...], gateway_o
 
 
 def _deploy_chart(
-    entry: Entry, ctx: Context, release: str, namespace: str, merged: dict[str, Any]
+    entry: Entry,
+    ctx: Context,
+    release: str,
+    namespace: str,
+    merged: dict[str, Any],
+    chart: str | None = None,
 ) -> tuple[str, str]:
     """Install/upgrade one helm release to the desired chart version and values.
 
     Drift-driven: a missing release installs, a pinned version or a values
     change upgrades, and a `latest` entry upgrades only when the repo offers a
-    newer chart version. Returns (action, version-reported).
+    newer chart version. `chart` is the chart to pull from the entry's repo
+    when it is not the entry's own (the ceph entry deploys ceph-csi-rbd and
+    ceph-csi-cephfs). Returns (action, version-reported).
     """
+    chart = chart or entry.chart_name
     kubeconfig = ctx.kubeconfig
     record = helm.release(kubeconfig, release, namespace)
     latest = None
     if entry.is_latest:
-        latest = helm.latest_version(entry.chart_name, entry.repo or "")
+        latest = helm.latest_version(chart, entry.repo or "")
     desired = latest or entry.version or "latest"
     installed = helm.chart_version(record) if record else None
     current_values = helm.get_values(kubeconfig, release, namespace) if record else None
@@ -233,12 +232,12 @@ def _deploy_chart(
     else:
         log(what)
         helm.upgrade_install(
-            kubeconfig, release, entry.chart_name, entry.repo or "", namespace, entry.version,
+            kubeconfig, release, chart, entry.repo or "", namespace, entry.version,
             yaml.safe_dump(merged),
         )
         if dry_run():
             info(f"{release}: values")
-            _show_values(merged)
+            show_yaml(merged)
         taken = "installed" if record is None else "upgraded"
 
     return taken, installed or desired
@@ -286,11 +285,13 @@ def _converge_ceph(entry: Entry, ctx: Context) -> dict:
             "(however you manage them) or the provisioners cannot reach ceph"
         )
 
-    merged = merge_values(charts.ceph_values(entry), entry.values)
+    shared = merge_values(charts.ceph_values(entry), entry.values)
     charts_result = {}
     taken = "up_to_date"
     for chart in charts_wanted:
-        action, _ = _deploy_chart(entry, ctx, chart, chart, merged)
+        # each chart's StorageClass comes from its own rbd:/fs: mapping
+        merged = merge_values(shared, charts.ceph_storage_class_values(entry, chart))
+        action, _ = _deploy_chart(entry, ctx, chart, chart, merged, chart=chart)
         charts_result[chart] = action
         if action != "up_to_date":
             taken = action
@@ -305,7 +306,7 @@ def _converge_ceph_secrets(root, secrets, entry: Entry) -> None:
         return
     if dry_run():
         action("kubectl apply ceph csi secrets")
-        _show_yaml(manifest)
+        show_yaml(manifest)
         return
     log("apply ceph csi secrets")
     kube.apply(root, "-", label="ceph csi secrets", input=manifest)
@@ -330,7 +331,7 @@ def _converge_pool(root, pool: tuple[str, ...], namespace: str) -> None:
         return
     if dry_run():
         action("kubectl apply IPAddressPool/L2Advertisement (metallb-system)")
-        _show_yaml(manifest)
+        show_yaml(manifest)
         return
     log("apply metallb pool (IPAddressPool, L2Advertisement)")
     # the CRs are validated by a webhook served by the controller pod, which is
@@ -347,7 +348,7 @@ def _converge_namespace(namespace: Namespace, root) -> None:
         return
     if dry_run():
         action(f"kubectl apply namespace {namespace.name}")
-        _show_yaml(manifest)
+        show_yaml(manifest)
         return
     log(f"ensure namespace {namespace.name}")
     kube.apply(root, "-", label=f"namespace {namespace.name}", input=manifest)
@@ -578,7 +579,7 @@ def _converge_issuers(entry: Entry, root, namespace: str) -> None:
         return
     if dry_run():
         action("kubectl apply letsencrypt ClusterIssuers")
-        _show_yaml(manifest)
+        show_yaml(manifest)
         return
     log("apply cert-manager ClusterIssuers")
     # the ClusterIssuers are validated by the chart's webhook, which is still
