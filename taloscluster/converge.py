@@ -1925,6 +1925,26 @@ def _apply_existing_configs(
         _apply_configs(cfg, machines, inv, refs, configs, talosconfig, kubeconfig)
 
 
+def _node_present(kubeconfig: Path, name: str) -> bool:
+    """Whether the kube Node exists, refusing to guess when the api fails.
+
+    `kubectl.node_exists` answers None when the node query fails (api 5xx,
+    connection refused, an expired kubeconfig) -- an unknown, not an absence.
+    A node whose presence is unknown must never be skipped: its config push
+    and Talos upgrade would be silently dropped while the run still exits
+    clean. The failure is raised instead, and a re-run once the api answers
+    again applies to whatever was missed.
+    """
+    exists = kubectl.node_exists(kubeconfig, name)
+    if exists is None:
+        raise ReconcileError(
+            f"{name}: the kube-api did not answer its node query, so the "
+            "node's presence is unknown; refusing to skip a node that may "
+            "need configuring -- investigate the kube-api and re-run converge"
+        )
+    return exists
+
+
 def _apply_configs(
     cfg: Config,
     machines: dict[str, Machine],
@@ -1973,7 +1993,7 @@ def _apply_configs(
     for host, m in ordered:
         if m.role not in roles or host not in inv.machines or host not in configs:
             continue
-        if not kubectl.node_exists(kubeconfig, host):
+        if not _node_present(kubeconfig, host):
             warn(f"{host}: not visible through {kubeconfig.name}, config not applied")
             continue
         address = resolve_node_address(host, discovered, inv, refs)
@@ -1982,7 +2002,7 @@ def _apply_configs(
     for server in _metal_servers(cfg):
         if server.role not in roles or server.name not in configs:
             continue
-        if not kubectl.node_exists(kubeconfig, server.name):
+        if not _node_present(kubeconfig, server.name):
             continue
         work.append((server.name, server.role, metal_talos.cluster_ip(server)))
     work.sort(key=lambda w: 0 if w[1] == "controlplane" else 1)
@@ -2083,7 +2103,7 @@ def _reconcile_talos(
     targets: list[tuple[str, str, str, str, str]] = []
     ordered = sorted(machines.items(), key=lambda kv: 0 if kv[1].role == "controlplane" else 1)
     for host, m in ordered:
-        if host not in inv.machines or not kubectl.node_exists(kubeconfig, host):
+        if host not in inv.machines or not _node_present(kubeconfig, host):
             continue
         address = resolve_node_address(host, discovered, inv, refs)
         if address:
@@ -2097,7 +2117,7 @@ def _reconcile_talos(
                 )
             )
     for server in _metal_servers(cfg):
-        if not kubectl.node_exists(kubeconfig, server.name):
+        if not _node_present(kubeconfig, server.name):
             continue
         targets.append(
             (server.name, server.role, metal_talos.cluster_ip(server),

@@ -83,6 +83,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Fail converge when the kube-api cannot answer a node query rather than silently skipping that node's config push and Talos upgrade.
 - Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.
 - Parse the `talosctl etcd members` table by column offset so a member with an empty hostname fails closed during scale-down.
 - Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.

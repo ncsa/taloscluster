@@ -2651,6 +2651,52 @@ def test_apply_configs_aborts_when_cluster_unhealthy_after_reboot(monkeypatch):
     assert events == [("apply", cp1), ("down", cp1), ("up", cp1), ("health", None)]
 
 
+def test_apply_configs_refuses_a_failed_node_query(monkeypatch):
+    """A node query the api cannot answer leaves the VM's presence unknown: it
+    must not read as absent and skip the config push with a warning and a clean
+    exit. Converge fails instead, and a re-run once the api answers again
+    applies to whatever was missed."""
+    machines, inv, configs = _apply_configs_fixtures()
+    _no_op_reachable(monkeypatch)
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: None)
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config",
+        lambda *_a, **_k: pytest.fail("a node of unknown presence must not be configured"),
+    )
+
+    with pytest.raises(ReconcileError, match="phoenix-controlplane-01"):
+        converge._apply_configs(
+            SimpleNamespace(name="phoenix", tailscale_enabled=True),
+            machines, inv, NetworkResult(), configs,
+            Path("talosconfig"), Path("kubeconfig"),
+        )
+
+
+def test_apply_configs_refuses_a_failed_metal_node_query(monkeypatch, make_config):
+    """The metal pass of the config rollout treats a failed node query the same
+    way: a machine whose presence the api cannot answer is never read as
+    never-joined and skipped -- converge fails instead."""
+    cfg = _metal_cfg(
+        make_config,
+        {"rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}}},
+    )
+    _no_op_reachable(monkeypatch)
+    monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_k: "ep")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: None)
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config",
+        lambda *_a, **_k: pytest.fail("a machine of unknown presence must not be configured"),
+    )
+
+    with pytest.raises(ReconcileError, match="rp001"):
+        converge._apply_configs(
+            cfg, {}, InfrastructureInventory(), NetworkResult(), {"rp001": "config:metal"},
+            Path("talosconfig"), Path("kubeconfig"),
+        )
+
+
 def test_wait_down_returns_true_only_after_apid_stops_answering(monkeypatch):
     """_wait_down returns True the moment the node's apid stops answering, and
     False if it never drops (a live apply) -- the distinction that makes the
@@ -2780,6 +2826,61 @@ def test_controlplane_upgrade_rollout_aborts_when_health_fails_and_vip_responds(
         )
 
     assert upgraded == ["upgrade"]
+
+
+def test_reconcile_talos_refuses_a_failed_node_query(monkeypatch):
+    """A node query the api cannot answer leaves the VM's presence unknown: it
+    must not read as absent and silently drop the node's Talos upgrade while
+    the run exits clean. Converge fails instead, and a re-run once the api
+    answers again upgrades whatever was missed."""
+    cfg = SimpleNamespace(name="phoenix", talos_version="v1.13.9")
+    machines = {
+        "phoenix-controlplane-01": SimpleNamespace(role="controlplane", extensions=("base",)),
+    }
+    inventory = InfrastructureInventory(
+        machines={h: InfrastructureMachine(h) for h in machines}
+    )
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses",
+        lambda *_a, **_kw: {"phoenix-controlplane-01": "192.0.2.1"},
+    )
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: None)
+    monkeypatch.setattr(
+        converge.talosctl,
+        "server_version",
+        lambda *_a, **_k: pytest.fail("a node of unknown presence must not be upgraded"),
+    )
+
+    with pytest.raises(ReconcileError, match="phoenix-controlplane-01"):
+        converge._reconcile_talos(
+            cfg, machines, inventory, NetworkResult(),
+            {("base",): "installer:v1.13.9"}, {("base",): "want-sch"},
+            Path("talosconfig"), Path("kubeconfig"),
+        )
+
+
+def test_reconcile_talos_refuses_a_failed_metal_node_query(monkeypatch, make_config):
+    """The metal pass of the Talos reconcile treats a failed node query the same
+    way: a machine whose presence the api cannot answer is never read as
+    never-joined and skipped -- converge fails instead."""
+    cfg = _metal_cfg(
+        make_config,
+        {"rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}}},
+    )
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_k: "ep")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: None)
+    monkeypatch.setattr(
+        converge.talosctl,
+        "server_version",
+        lambda *_a, **_k: pytest.fail("a machine of unknown presence must not be upgraded"),
+    )
+
+    with pytest.raises(ReconcileError, match="rp001"):
+        converge._reconcile_talos(
+            cfg, {}, InfrastructureInventory(), NetworkResult(), {}, {},
+            Path("talosconfig"), Path("kubeconfig"),
+        )
 
 
 # ---- secrets: refused on an existing cluster, generated on first run -------
