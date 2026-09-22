@@ -13,6 +13,7 @@ together on every page that tells the operator how a machine joins.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -55,6 +56,19 @@ def test_provider_page_documents_the_dev_build_reinstall():
 def test_reference_points_back_at_the_setup_guide():
     text = REFERENCE.read_text()
     assert "../providers/metal.md" in text
+
+
+def test_reference_lists_every_setting_a_server_replaces():
+    # The `metal.<group>` prose splits the group settings into the plain ones a
+    # server replaces wholesale and the ones that merge (`bmc` key by key,
+    # `interfaces` per interface). The replaced list must carry every scalar
+    # setting, `boot_timeout` among them, and none of the merging keys.
+    listed = re.search(
+        r"plain settings \(([^)]*)\) are replaced when the server sets one",
+        REFERENCE.read_text(),
+    ).group(1)
+    names = {chunk.strip().strip("`") for chunk in listed.split(",")}
+    assert names == {"role", "redfish", "disk", "network", "boot_timeout"}
 
 
 def test_machines_page_describes_the_join_flow():
