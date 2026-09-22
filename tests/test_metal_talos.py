@@ -24,6 +24,7 @@ Update the golden only when a machine-config change is intended.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -59,7 +60,8 @@ PHOENIX = {
 
 
 def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
-         kubernetes_version=None, tailscale=None, vip=VIP, tags=None):
+         kubernetes_version=None, tailscale=None, vip=VIP, tags=None,
+         talos_extensions=None):
     cluster: dict = {
         "cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000,
     }
@@ -93,6 +95,8 @@ def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
         overrides["kubernetes"] = {"version": kubernetes_version}
     # the golden stack carries the KubeSpan patch, so the config opts in
     talos: dict = {"kubespan": True}
+    if talos_extensions is not None:
+        talos["extensions"] = talos_extensions
     if talos_version is not None:
         talos["version"] = talos_version
     overrides["talos"] = talos
@@ -430,6 +434,33 @@ def test_metal_secrets_yaml_tailscale_key_opts_in(
         for group in stack
         for doc in group
     )
+
+
+def test_metal_explicit_extension_without_a_section_still_configures(
+    make_config, monkeypatch, tmp_path
+):
+    """The patch keys on the same predicate as the VM machines': the key is
+    set and the resolved extensions carry tailscale -- not on the section's
+    presence. The metal installer honours an explicit `talos.extensions`
+    entry without a `tailscale:` section, so the running extension must not
+    be left unconfigured. The key here rides the config without the section,
+    the way a duck-typed plugin config carries it."""
+    cfg = replace(
+        _cfg(make_config, talos_extensions=["siderolabs/tailscale"]),
+        auth_key="tskey-secret",
+        login_server="https://headscale.example.com",
+    )
+    rendered = _render(monkeypatch, _GEN_OUTPUT)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    metal_talos.build_config(server, cfg, secrets_path, INSTALLER, _endpoint(cfg))
+
+    (tailscale,) = [
+        doc for group in rendered["rp001"] for doc in group
+        if doc.get("kind") == "ExtensionServiceConfig"
+    ]
+    assert tailscale == TAILSCALE_PATCH
 
 
 def test_metal_config_keeps_the_generated_output(make_config, monkeypatch, tmp_path):

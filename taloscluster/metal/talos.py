@@ -461,12 +461,14 @@ def build_config(
                     machineconfig._kubespan_patch(cfg, mtu=server.network.mtu),
                 )
             )
-        # the metal installer bakes the tailscale extension whenever the
-        # cluster opts in, so the node is told how to join the tailnet exactly
-        # as `build_configs` tells the VM machines (the `tailscale:` section
-        # may live in any merged file, secrets.yaml included)
+        # the patch rides the same predicate `build_configs` applies to the VM
+        # machines: the key is set and the resolved extensions carry tailscale
+        # (on metal, the set the installer bakes, which honours an explicit
+        # `talos.extensions` entry even without a `tailscale:` section; the
+        # section may live in any merged file, secrets.yaml included)
+        extensions = cfg._resolve_extensions({}, metal=True)
         auth_key = cfg.tailscale_auth_key
-        if auth_key and cfg.tailscale_enabled:
+        if auth_key and "siderolabs/tailscale" in extensions:
             patches.append(
                 machineconfig._write(
                     workdir, f"{host}-tailscale",
