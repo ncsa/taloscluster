@@ -77,6 +77,35 @@ def test_worker_keeps_dhcp_without_a_vip(cfg, ep):
     assert contribution.patches[0].document == ETH0_DHCP
 
 
+def test_jumbo_mtu_states_the_link_and_clamps_the_default_route(make_config, ep):
+    """On a jumbo cluster L2 the eth0 link states its MTU and restates the
+    default route the DHCP lease provides with an MTU of 1500, so off-subnet
+    traffic is clamped; the gateway is the first host of the cluster CIDR,
+    which is what Neutron hands the tool-created subnet. Both roles carry the
+    documents; the VIP still rides the control plane's link."""
+    cfg = make_config({
+        "workers": {"worker": {"count": 1, "flavor": "gp.xlarge", "disk": 50}},
+        "network": {"cluster": {"mtu": 9000}},
+    })
+    cp = talos.contribution(cfg.machines["testcluster-controlplane-01"], cfg, ep)
+    worker = talos.contribution(cfg.machines["testcluster-worker-01"], cfg, ep)
+
+    eth0 = [
+        {
+            "apiVersion": "v1alpha1",
+            "kind": "LinkConfig",
+            "name": "eth0",
+            "mtu": 9000,
+            "routes": [{"gateway": "192.168.0.1", "mtu": 1500}],
+        },
+        {"apiVersion": "v1alpha1", "kind": "DHCPv4Config", "name": "eth0"},
+    ]
+    assert cp.patches[0].document == eth0 + [
+        {"apiVersion": "v1alpha1", "kind": "Layer2VIPConfig", "name": VIP, "link": "eth0"},
+    ]
+    assert worker.patches[0].document == eth0
+
+
 def test_controlplane_embeds_the_metadata_policy_in_the_cluster_config(cfg, ep):
     """The policy rides cluster.inlineManifests, which Talos applies with the
     bootstrap manifests; a patch document is the delivery vehicle. The
