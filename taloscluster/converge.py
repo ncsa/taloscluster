@@ -323,6 +323,19 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
                     default_tags,
                 )
             )
+            # the metal half of the same rebuild: a machine joining this run has
+            # no prior minor to step either, so its config carries the target
+            # the upgrade phase established, not the running version the configs
+            # above were built with
+            configs.update(
+                _new_metal_configs(
+                    cfg,
+                    _metal_unjoined(cfg, kubeconfig_path),
+                    secrets_path,
+                    metal_installer,
+                    refs,
+                )
+            )
         needs_restart = backend.reconcile_machines(machines, inv, boot_image, configs) or set()
         # the bare-metal half of the same phase: a configured machine that is
         # not in the cluster is brought in here, after the existing nodes were
@@ -698,7 +711,9 @@ def _join_metal(
     that grew is created here, after the existing nodes were upgraded, so a new
     node never joins newer than the rest. A metal machine joins the same way --
     it installs the cluster's Talos version from the machine config this run
-    already generated, which carries the running Kubernetes version.
+    generated, which carries the running Kubernetes version -- or the upgrade
+    target when this run is also stepping a `kubernetes.version` bump, since a
+    machine joining mid-upgrade has no prior minor to step either.
 
     A machine already waiting in maintenance mode is applied straight away. One
     with a BMC converge may drive is booted from the install ISO and waited out
@@ -1343,6 +1358,37 @@ def _new_node_configs(
         default_tags=default_tags,
         kubernetes_version=cfg.kubernetes_version,
     )
+
+
+def _new_metal_configs(
+    cfg: Config,
+    pending: list[MetalServer],
+    secrets_path: Path,
+    installer_image: str,
+    refs: NetworkResult,
+) -> dict[str, str]:
+    """Metal configs for the machines that have not joined yet, at the target version.
+
+    The bare-metal half of `_new_node_configs`: the configs built above bake the
+    RUNNING version so `talosctl upgrade-k8s` steps the existing cluster through
+    every minor, and a machine joining in the same run as that upgrade has no
+    prior minor to step -- so its config is regenerated with the target version
+    the upgrade phase moves the cluster to. Without this a metal control plane
+    would join one minor behind the rest of the cluster.
+    """
+    if not pending:
+        return {}
+    return {
+        server.name: metal_talos.build_config(
+            server,
+            cfg,
+            secrets_path,
+            installer_image,
+            refs.kubernetes,
+            kubernetes_version=cfg.kubernetes_version,
+        )
+        for server in pending
+    }
 
 
 def _k8s_upgrade_path(cur: str, want: str) -> list[str]:

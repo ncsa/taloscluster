@@ -87,7 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.
 - Refuse to remove a node dropped from the config during scale-down while etcd membership is unreadable.
 - Abort a control-plane scale-down when the graceful reset fails or times out, and health-check between removals.
-- Boot nodes scaled up in the same run as a Kubernetes upgrade at the upgraded version.
+- Boot VM and bare-metal nodes added in the same run as a Kubernetes upgrade at the upgraded version.
 - Detect Tailscale addresses across the whole `100.64.0.0/10` range.
 - Redact registry passwords, `machine.files` and inline-manifest contents, multiline credentials and secret-like environment entries from the `plan` diff.
 - Emit no `--login-server` argument when `tailscale.login_server` is unset.

@@ -207,6 +207,46 @@ def test_scale_up_configs_are_regenerated_only_for_missing_nodes(
     assert fresh == {}
 
 
+def test_new_metal_configs_carry_the_target_version(make_config, monkeypatch, tmp_path):
+    """A metal machine joining in the same run as a kubernetes upgrade has no
+    prior minor to step either, so its regenerated config bakes the target
+    version -- the bare-metal half of the VM scale-up rule above."""
+    cfg = make_config({
+        "controlplane": {"count": 1, "flavor": "f", "disk": 40},
+        "kubernetes": {"version": "v1.36.4"},
+        "metal": {
+            "worker": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
+                "servers": {"rp001": {}},
+            },
+        },
+    })
+    seen: list[str] = []
+
+    def fake_build(server, _cfg, _secrets, _installer, _endpoint, kubernetes_version=None):
+        seen.append(kubernetes_version)
+        return f"metal-config/{server.name}"
+
+    monkeypatch.setattr(converge.metal_talos, "build_config", fake_build)
+    refs = NetworkResult(
+        kubernetes=Endpoint(vip="192.0.2.10", advertised_address="203.0.113.10")
+    )
+
+    fresh = converge._new_metal_configs(
+        cfg, converge._metal_servers(cfg), tmp_path / "secrets", "metal-installer", refs,
+    )
+
+    assert set(fresh) == {"rp001"}
+    assert set(seen) == {cfg.kubernetes_version}  # the target, not the running version
+
+    # nothing pending: nothing is regenerated
+    assert converge._new_metal_configs(
+        cfg, [], tmp_path / "secrets", "metal-installer", refs
+    ) == {}
+
+
 # ---- converge(): the compute phase must not crash when configs are empty ----
 
 class _DryRunState:
@@ -478,6 +518,119 @@ def test_converge_scales_up_nodes_at_the_upgraded_version(
     # the existing node keeps its running-version config, not a rebuild
     existing = "testcluster-controlplane-01"
     assert backend.applied.get(existing) == f"config/{existing}"
+
+
+class _MetalJoinUpgradeBackend(_ScaleUpAfterUpgradeBackend):
+    """The scale-up backend plus the finalize hook the health phase calls."""
+
+    def finalize_machines(self, _inventory):
+        return None
+
+
+def test_converge_joins_metal_at_the_upgraded_version(make_config, monkeypatch, tmp_path):
+    """A metal machine joining in the same run as a kubernetes upgrade must boot
+    at the upgraded (target) version too: its config is regenerated beside the
+    VM scale-ups', after the upgrade phase has moved the cluster, so a metal
+    control plane never joins with an N-1 kube-apiserver. The config built
+    before the upgrade carries the running version (the existing nodes step
+    minors with it); only the unjoined machine's config is rebuilt."""
+    cfg = make_config({
+        "controlplane": {"count": 1, "flavor": "f", "disk": 40},
+        "kubernetes": {"version": "v1.36.4"},
+        "metal": {
+            "worker": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
+                "servers": {"rp001": {}},
+            },
+        },
+    })
+    running = "v1.34.4"  # a minor behind cfg.kubernetes_version (the upgrade target)
+    assert versions.is_older(running, cfg.kubernetes_version)  # genuinely an upgrade
+
+    backend = _MetalJoinUpgradeBackend(
+        InfrastructureInventory(
+            machines={
+                "testcluster-controlplane-01": InfrastructureMachine(
+                    "testcluster-controlplane-01"
+                )
+            }
+        )
+    )
+    state = _ExistingSecretsState(tmp_path)
+    # an up cluster already bootstrapped and wrote its kubeconfig, so the
+    # running version is readable and the compute phase runs
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+
+    vm_calls: list[str] = []
+
+    def fake_build_configs(
+        _cfg, machines, _endpoint, _secrets_path, _images,
+        _contributions, default_tags=None, kubernetes_version=None,
+    ):
+        vm_calls.append(kubernetes_version)
+        return {h: f"config/{h}" for h in machines}
+
+    metal_calls: list[tuple[str, str | None]] = []
+
+    def fake_metal_build(server, _cfg, _secrets, _installer, _endpoint,
+                         kubernetes_version=None):
+        metal_calls.append((server.name, kubernetes_version))
+        return f"metal-config/{server.name}@{kubernetes_version}"
+
+    monkeypatch.setattr(machineconfig, "build_configs", fake_build_configs)
+    monkeypatch.setattr(
+        converge.metal_talos, "installer", lambda _cfg: ("m-sch", "metal-installer")
+    )
+    monkeypatch.setattr(converge.metal_talos, "build_config", fake_metal_build)
+    # the real `_config_kubernetes_version` runs so the downgrade guard is
+    # exercised: running (v1.34.4) is below the target (v1.36.4), a genuine upgrade
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: running)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    # rp001 has no kube Node, so the compute phase joins it from maintenance mode,
+    # which needs no BMC and is what `redfish: false` expects
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.168.0.5")
+    monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: True)
+    applied: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config_insecure",
+        lambda ip, config: applied.append((ip, config)),
+    )
+    monkeypatch.setattr(converge.talosctl, "gen_talosconfig", lambda *_a, **_k: "talosconfig")
+    monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_apply_existing_configs", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_require_final_health", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_wait_nodes_ready", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_reconcile_joined", lambda *a, **k: backend.inventory)
+    monkeypatch.setattr(converge, "_resolve_cp1_address", lambda *_a: "192.0.2.11")
+    monkeypatch.setattr(converge.kubectl, "get_nodes_wide", lambda _kc: "")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    assert converge.converge(tmp_path) == 0
+
+    # the metal config was baked twice: beside the VMs' at the running version,
+    # then regenerated for the unjoined machine at the target version
+    assert metal_calls == [
+        ("rp001", running),
+        ("rp001", cfg.kubernetes_version),
+    ]
+    # the VM configs were baked once at the running version: no VM node is new
+    # in this run, so the VM regeneration has nothing to rebuild
+    assert vm_calls == [running]
+    # and the machine joined with the regenerated target-version config
+    assert applied == [("192.168.0.5", f"metal-config/rp001@{cfg.kubernetes_version}")]
 
 
 def test_converge_aborts_when_reachable_cluster_version_cannot_be_read(
