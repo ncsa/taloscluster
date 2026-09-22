@@ -1720,6 +1720,16 @@ def _validate(cfg: Config) -> None:
             f"cluster.yaml: talos.version must be {MIN_TALOS_VERSION} or newer, "
             f"got {cfg.talos_version}"
         )
+    support = versions.kubernetes_support(cfg.talos_version)
+    if support is not None and versions.kubernetes_supported(
+        cfg.talos_version, cfg.kubernetes_version
+    ) is False:
+        lo, hi = support
+        raise ConfigError(
+            f"cluster.yaml: kubernetes.version {cfg.kubernetes_version} is not "
+            f"supported by talos.version {cfg.talos_version}, which runs "
+            f"kubernetes {lo} to {hi}"
+        )
     if not isinstance(cfg.kubespan, bool):
         raise ConfigError("cluster.yaml: talos.kubespan must be true or false")
     if not cfg.kubespan and cfg.metal is not None:

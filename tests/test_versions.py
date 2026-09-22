@@ -51,6 +51,20 @@ def test_is_older():
     assert not versions.is_older("v1.13.9", "")
 
 
+def test_kubernetes_supported():
+    # the range edges of the support matrix are inclusive
+    assert versions.kubernetes_supported("v1.13.8", "v1.31.0") is True
+    assert versions.kubernetes_supported("v1.13.8", "v1.36.4") is True
+    assert versions.kubernetes_supported("v1.13.8", "v1.30.4") is False
+    assert versions.kubernetes_supported("v1.13.8", "v1.37.0") is False
+    assert versions.kubernetes_supported("v1.14.0", "v1.33.0") is True
+    assert versions.kubernetes_supported("v1.14.0", "v1.37.0") is True
+    # a talos minor the table does not list is unknown, not incompatible
+    assert versions.kubernetes_supported("v1.15.0", "v1.37.0") is None
+    assert versions.kubernetes_supported("garbage", "v1.35.0") is None
+    assert versions.kubernetes_supported("v1.13.8", "") is None
+
+
 def test_latest_talos_skips_prereleases():
     assert versions.latest_talos(FACTORY) == "v1.13.9"
 

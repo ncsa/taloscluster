@@ -57,7 +57,7 @@ PHOENIX = {
 
 
 def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
-         tailscale=None, vip=VIP):
+         kubernetes_version=None, tailscale=None, vip=VIP):
     cluster: dict = {
         "cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000,
     }
@@ -85,6 +85,8 @@ def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
     }
     if tailscale is not None:
         overrides["tailscale"] = tailscale
+    if kubernetes_version is not None:
+        overrides["kubernetes"] = {"version": kubernetes_version}
     # the golden stack carries the KubeSpan patch, so the config opts in
     talos: dict = {"kubespan": True}
     if talos_version is not None:
@@ -438,7 +440,7 @@ def test_metal_config_on_talos_1_14_uses_the_hostname_document(
     passthrough = yaml.safe_dump(HOSTNAME_FIELD_PATCH, sort_keys=False)
     stack, out = _build(
         make_config, monkeypatch, tmp_path,
-        talos_version="v1.14.0", output=passthrough,
+        talos_version="v1.14.0", kubernetes_version="v1.33.0", output=passthrough,
     )
 
     assert stack[1] == [HOSTNAME_DOCUMENT_PATCH]

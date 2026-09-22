@@ -209,6 +209,10 @@ def test_non_integer_count_in_worker_pool_raises_config_error(make_config):
         ({"name": "Bad_Name"}, "name"),
         ({"talos": {"version": "latest"}}, "talos.version"),
         ({"talos": {"version": "v1.12.9"}}, "v1.13.0 or newer"),
+        ({"kubernetes": {"version": "v1.30.0"}},
+         "not supported by talos.version v1.13.9"),
+        ({"kubernetes": {"version": "v1.37.0"}},
+         "not supported by talos.version v1.13.9"),
         ({"network": {"cluster": {"cidr": "not-a-cidr"}}}, "network.cluster.cidr"),
         ({"controlplane": {"count": 0}}, "controlplane"),
         ({"workers": {"worker": {"count": -1, "flavor": "f", "disk": 20}}}, "count"),
@@ -230,8 +234,22 @@ def test_unprefixed_talos_version_is_normalized(make_config):
     assert cfg.talos_version == "v1.13.9"
 
 
+def test_kubernetes_version_at_the_talos_range_edges_loads(make_config):
+    """The support-matrix range is inclusive at both ends: the oldest and the
+    newest kubernetes minor the pinned talos release runs both load."""
+    assert make_config({"kubernetes": {"version": "v1.36.4"}}).kubernetes_version == "v1.36.4"
+
+
+def test_kubernetes_compat_skips_a_talos_minor_outside_the_table(make_config):
+    """A talos release newer than the support table cannot be judged, so the
+    pairing is not refused: unknown is not incompatible."""
+    cfg = make_config({"talos": {"version": "v1.15.0"}, "kubernetes": {"version": "v1.40.0"}})
+    assert cfg.kubernetes_version == "v1.40.0"
+
+
 def test_prefixed_talos_version_is_kept(make_config):
-    cfg = make_config({"talos": {"version": "v1.14.2"}})
+    # a kubernetes pin inside the pinned talos release's supported range
+    cfg = make_config({"talos": {"version": "v1.14.2"}, "kubernetes": {"version": "v1.36.0"}})
     assert cfg.talos_version == "v1.14.2"
 
 

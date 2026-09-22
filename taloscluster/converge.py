@@ -128,6 +128,9 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # every node's schematic and deadlocks the upgrade rollout; refuse it here,
     # while the cluster is still untouched
     _validate_tailscale_toggle(cfg, machines, talosconfig_path)
+    # a talos pin older than what runs would roll a downgrade across the control
+    # planes; refused here like the kubernetes one, while the cluster is untouched
+    _validate_talos_downgrade(cfg, talosconfig_path)
     # Validate configured plugin sections ahead of any cluster change, so a
     # malformed or contradictory plugin configuration stops the run here -- not
     # as a late plugin failure once the image, network and machines mutated.
@@ -654,6 +657,33 @@ def _validate_tailscale_toggle(
         "tailscale settings, or destroy the cluster and converge it fresh with "
         "the new ones."
     )
+
+
+def _validate_talos_downgrade(cfg: Config, talosconfig: Path) -> None:
+    """Refuse a talos.version pin older than what the cluster runs.
+
+    `_reconcile_talos` reinstalls every node whose running version differs from
+    the pin, so a typo or a reverted commit would roll a downgrade across the
+    control planes one etcd member at a time -- the exact refusal
+    `_config_kubernetes_version` makes for kubernetes, made here in the validate
+    phase before any phase mutates. The running version is read through the
+    endpoint the last converge recorded -- cp-01's real address or tailnet name,
+    never the kube-api VIP -- and the check stays silent when the node does not
+    answer: an unreachable cluster fails on its own later, without this check
+    guessing.
+    """
+    endpoint = _talosconfig_endpoint(talosconfig, cfg.name)
+    if not endpoint:
+        return
+    try:
+        cur = talosctl.server_version(talosconfig, endpoint, endpoint)
+    except (OSError, subprocess.CalledProcessError):
+        return
+    if cur and versions.is_older(cfg.talos_version, cur):
+        raise ReconcileError(
+            f"talos.version {cfg.talos_version} is older than the running {cur}; "
+            "talos downgrades are not supported"
+        )
 
 
 def _join_metal(

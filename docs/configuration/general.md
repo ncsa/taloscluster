@@ -51,7 +51,7 @@ Extra Kubernetes node labels applied to every node through Talos `machine.nodeLa
 
 Required · `vMAJOR.MINOR.PATCH`
 
-Talos release to run; use the canonical `vMAJOR.MINOR.PATCH` form. A missing `v` prefix is normalized to the canonical form during load, and prerelease/build suffixes are accepted, but upstream lookup and upgrade behavior is designed around release versions. Must be v1.13.0 or newer because the generated machine configuration uses multi-document network kinds that older releases reject. Bumping it builds a new boot image from factory.talos.dev and rolls the upgrade over existing nodes on the next converge. Nothing auto-upgrades.
+Talos release to run; use the canonical `vMAJOR.MINOR.PATCH` form. A missing `v` prefix is normalized to the canonical form during load, and prerelease/build suffixes are accepted, but upstream lookup and upgrade behavior is designed around release versions. Must be v1.13.0 or newer because the generated machine configuration uses multi-document network kinds that older releases reject. Bumping it builds a new boot image from factory.talos.dev and rolls the upgrade over existing nodes on the next converge. Nothing auto-upgrades, and moving backwards is refused: converge's validate phase reads the running version from the cluster and refuses a pin older than it, the same refusal [`kubernetes.version`](#kubernetesversion) gets, rather than reinstall every node onto an older release.
 
 ### `talos.extensions`
 
@@ -90,4 +90,4 @@ The overlay is off unless you enable it here, and upgrading to a new release nev
 
 Required · `vMAJOR.MINOR.PATCH`
 
-Kubernetes release to run; use the canonical `vMAJOR.MINOR.PATCH` form. A missing `v` prefix is normalized to the canonical form during load, so an unprefixed pin is never compared verbatim against the running cluster's version or rendered into a component image tag that lacks the leading `v`. Upgrade one minor at a time; converge steps through skipped minors itself with `talosctl upgrade-k8s`. A version older than what the cluster runs is refused. When bumping Talos and Kubernetes together, converge upgrades Talos first.
+Kubernetes release to run; use the canonical `vMAJOR.MINOR.PATCH` form. A missing `v` prefix is normalized to the canonical form during load, so an unprefixed pin is never compared verbatim against the running cluster's version or rendered into a component image tag that lacks the leading `v`. Upgrade one minor at a time; converge steps through skipped minors itself with `talosctl upgrade-k8s`. A version older than what the cluster runs is refused. The pin must also be inside the range of Kubernetes minors the pinned [`talos.version`](#talosversion) supports (the [support matrix](https://docs.siderolabs.com/talos/latest/getting-started/support-matrix)); a pairing outside it is refused when the configuration loads. When bumping Talos and Kubernetes together, converge upgrades Talos first.

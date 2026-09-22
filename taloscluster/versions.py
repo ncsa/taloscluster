@@ -70,6 +70,44 @@ def is_older(a: str, b: str) -> bool:
     return pa < pb
 
 
+# ---- talos/kubernetes compatibility ---------------------------------------
+
+#: Kubernetes minors each supported Talos minor runs, from the official
+#: support matrix (https://docs.siderolabs.com/talos/latest/getting-started/support-matrix).
+#: A Talos minor newer than this table is not checked: unknown, not incompatible.
+KUBERNETES_SUPPORT: dict[str, tuple[str, str]] = {
+    "1.13": ("1.31", "1.36"),
+    "1.14": ("1.33", "1.37"),
+}
+
+
+def kubernetes_support(talos_version: str) -> tuple[str, str] | None:
+    """The (oldest, newest) kubernetes minor `talos_version` runs, or None.
+
+    Keyed by the talos minor; None when this table does not list the release.
+    """
+    p = parse(talos_version)
+    if len(p) < 2:
+        return None
+    return KUBERNETES_SUPPORT.get(f"{p[0]}.{p[1]}")
+
+
+def kubernetes_supported(talos_version: str, kubernetes_version: str) -> bool | None:
+    """Whether `kubernetes_version` is inside the range `talos_version` runs.
+
+    None when the pairing cannot be judged: a talos minor the table does not
+    list, or an unparseable kubernetes version. Unknown is not incompatible.
+    """
+    support = kubernetes_support(talos_version)
+    if support is None:
+        return None
+    k = parse(kubernetes_version)
+    if len(k) < 2:
+        return None
+    lo, hi = (parse(v)[:2] for v in support)
+    return lo <= k[:2] <= hi
+
+
 # ---- talos ----------------------------------------------------------------
 
 def talos_versions() -> list[str]:

@@ -104,6 +104,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Give the ArgoCD AppProject `user` role the read access its name implies.
 - Reconfigure and upgrade joined metal nodes during converge, and warn that destroy leaves them running the destroyed cluster.
 - Advertise etcd on a metal control plane's own L2 instead of the cluster network.
+- Refuse a `talos.version` older than the running release and a `kubernetes.version` the pinned Talos does not support.
 
 ## [0.7.0] - 2026-09-06
 

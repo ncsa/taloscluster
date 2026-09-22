@@ -28,7 +28,7 @@ taloscluster plan
 taloscluster converge
 ```
 
-Converge upgrades existing nodes before it adds any new ones, so a new node never joins newer than the rest. Talos goes first when both change. Each node is upgraded in turn and waited for; Talos boots the new image from its second partition and rolls back by itself if it fails. Kubernetes only supports moving one minor at a time, but you do not have to do it by hand: set the version you want and converge fills in the steps. Going from 1.34 to 1.36 upgrades to the newest 1.35 patch first, then to 1.36, with the machine configuration kept at the running version until each hop finishes. Use the patch release `check` suggested for a quiet in-place bump, or jump to the newer minor when you are ready for it.
+Converge upgrades existing nodes before it adds any new ones, so a new node never joins newer than the rest. Talos goes first when both change. Moving backwards is refused: a `talos.version` older than what the cluster runs, or a `kubernetes.version` the pinned Talos release does not support, stops the run before anything changes. Each node is upgraded in turn and waited for; Talos boots the new image from its second partition and rolls back by itself if it fails. Kubernetes only supports moving one minor at a time, but you do not have to do it by hand: set the version you want and converge fills in the steps. Going from 1.34 to 1.36 upgrades to the newest 1.35 patch first, then to 1.36, with the machine configuration kept at the running version until each hop finishes. Use the patch release `check` suggested for a quiet in-place bump, or jump to the newer minor when you are ready for it.
 
 ```yaml
 kubernetes:

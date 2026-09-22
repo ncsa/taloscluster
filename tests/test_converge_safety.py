@@ -2031,6 +2031,80 @@ def test_the_toggle_check_skips_a_duck_typed_machine(monkeypatch, make_config, t
     )
 
 
+# ---- validate phase: a talos downgrade is refused ---------------------------
+
+def test_an_older_talos_pin_is_refused(monkeypatch, make_config, tmp_path):
+    """A pin older than what the cluster runs -- a typo, a reverted commit --
+    would make `_reconcile_talos` roll a downgrade across the control planes.
+    Refused in validate, before anything mutates, like the kubernetes one."""
+    cfg = make_config()
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+    seen = []
+
+    def version(_tc, endpoint, node):
+        seen.append((endpoint, node))
+        return "v1.14.2"
+
+    monkeypatch.setattr(converge.talosctl, "server_version", version)
+    with pytest.raises(
+        ReconcileError,
+        match="talos.version v1.13.9 is older than the running v1.14.2; "
+        "talos downgrades are not supported",
+    ):
+        converge._validate_talos_downgrade(cfg, talosconfig)
+    # asked at the recorded endpoint, which is also the dial target
+    assert seen == [("192.0.2.10", "192.0.2.10")]
+
+
+def test_a_matching_or_older_running_talos_passes(monkeypatch, make_config, tmp_path):
+    """The pin equal to the running version is the settled state; a pin newer
+    than what runs is the ordinary upgrade path. Neither is a downgrade."""
+    cfg = make_config()
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
+    converge._validate_talos_downgrade(cfg, talosconfig)
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.5")
+    converge._validate_talos_downgrade(cfg, talosconfig)
+
+
+def test_the_downgrade_check_skips_a_node_that_answers_nothing(
+    monkeypatch, make_config, tmp_path
+):
+    """An unreadable version must not read as a downgrade; an unreachable
+    cluster fails on its own later."""
+    cfg = make_config()
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "")
+    converge._validate_talos_downgrade(cfg, talosconfig)
+
+
+def test_the_downgrade_check_skips_an_unreachable_cluster(
+    monkeypatch, make_config, tmp_path
+):
+    cfg = make_config()
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+
+    def unreachable(*_a):
+        raise subprocess.CalledProcessError(1, "talosctl")
+
+    monkeypatch.setattr(converge.talosctl, "server_version", unreachable)
+    converge._validate_talos_downgrade(cfg, talosconfig)
+
+
+def test_the_downgrade_check_skips_without_a_recorded_endpoint(
+    monkeypatch, make_config, tmp_path
+):
+    """No talosconfig from a previous run -- a first converge -- has no running
+    version to compare against."""
+    cfg = make_config()
+    monkeypatch.setattr(
+        converge.talosctl,
+        "server_version",
+        lambda *_a: pytest.fail("must not probe without a recorded endpoint"),
+    )
+    converge._validate_talos_downgrade(cfg, tmp_path / "none")
+
+
 # ---- --reboot: one node at a time, control planes first ------------------
 
 def test_reboot_nodes_is_serial_controlplanes_first_and_health_checked(monkeypatch, tmp_path):
