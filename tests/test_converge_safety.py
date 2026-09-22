@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from taloscluster import converge
 from taloscluster.config import Machine
@@ -20,6 +21,7 @@ from taloscluster.infrastructure import (
     NetworkAttachment,
     NetworkResult,
 )
+from taloscluster.talos import machineconfig
 
 # A guaranteed-absent talosconfig path. The repository root is itself a cluster
 # directory and may hold a real talosconfig, so tests exercising the
@@ -3008,12 +3010,14 @@ class _FakeState:
         self._exist = secrets_exist
         self.secrets_path = secrets_path
         self.generated = False
+        self.written = None
 
     def secrets_exist(self):
         return self._exist
 
-    def write_secrets(self, _contents):
+    def write_secrets(self, contents):
         self.generated = True
+        self.written = contents
 
 
 # raised by reconcile_network below to stop a first-run converge just past the
@@ -3025,6 +3029,7 @@ class _StatePhaseDone(Exception):
 class _SecretsBackend:
     name = "openstack"
     installer_platform = "openstack"
+    installer_secureboot = False
 
     def __init__(self, inventory, stop_after_state=False):
         self.inventory = inventory
@@ -3337,7 +3342,7 @@ def _stub_converge(monkeypatch, tmp_path, state, backend):
     # image-factory and talosctl side effects are out of scope for these tests
     # and talosctl is not installed in CI
     monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
-    monkeypatch.setattr(converge.talosctl, "gen_secrets", lambda _v: "dummy secrets")
+    monkeypatch.setattr(converge.talosctl, "gen_secrets", lambda _v: "secrets: dummy\n")
     return converge.converge(tmp_path)
 
 
@@ -3371,6 +3376,24 @@ def test_converge_generates_secrets_on_first_run_when_no_machines(monkeypatch, t
         )
 
     assert state.generated is True
+
+
+def test_converge_secrets_carry_the_disk_encryption_passphrase(monkeypatch, tmp_path):
+    """A fresh cluster's talossecrets.yaml gains the system-disk LUKS2
+    passphrase, so every machine it installs encrypts STATE and EPHEMERAL."""
+    state = _FakeState(False, tmp_path / "talossecrets.yaml")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+
+    with pytest.raises(_StatePhaseDone):
+        _stub_converge(
+            monkeypatch, tmp_path, state,
+            _SecretsBackend(InfrastructureInventory(), stop_after_state=True),
+        )
+
+    data = yaml.safe_load(state.written)
+    passphrase = data[machineconfig.DISK_PASSPHRASE_KEY]
+    assert isinstance(passphrase, str) and len(passphrase) >= 32
+    assert data["secrets"] == "dummy"  # the generated bundle itself
 
 
 # ---- unsupported machine-change preflight runs before any mutation -----------

@@ -76,6 +76,9 @@ def _memory_mib(memory_gb: int) -> int:
 class ProxmoxBackend:
     name = "proxmox"
     installer_platform = talos.INSTALLER_PLATFORM
+    # VMs boot the SecureBoot ISO, whose bootloader enrolls the factory's keys
+    # into the empty efidisk varstore and boots Talos with Secure Boot enforced
+    installer_secureboot = True
 
     def __init__(self, cfg: Config, client: ProxmoxClient | None = None):
         if not isinstance(cfg.provider, ProxmoxConfig):
@@ -325,7 +328,7 @@ class ProxmoxBackend:
         expected = f"{self.provider.iso_storage}:iso/{filename}"
         if dry_run():
             return expected
-        url = factory.nocloud_iso_url(schematic, self.cfg.talos_version)
+        url = factory.nocloud_secureboot_iso_url(schematic, self.cfg.talos_version)
         for node, volume in volumes.items():
             if not volume:
                 self._download_iso(node, self.provider.iso_storage, url, filename)
@@ -1821,12 +1824,16 @@ class ProxmoxBackend:
         inventory = self._require_preflight()
         schematic = factory.schematic_id(naming.BASE_EXTENSIONS)
         filename = _boot_iso_name(self.cfg.talos_version, schematic)
-        legacy_file = f"{naming.legacy_image_name(self.cfg.talos_version)}.iso"
+        legacy_files = (
+            # the non-secureboot ISO VMs booted before the SecureBoot switch
+            _legacy_boot_iso_name(self.cfg.talos_version, schematic),
+            f"{naming.legacy_image_name(self.cfg.talos_version)}.iso",
+        )
         nodes = self._iso_nodes(inventory)
         volumes = {
             (node, name): self._find_iso(node, self.provider.iso_storage, name)
             for node in nodes
-            for name in (filename, legacy_file)
+            for name in (filename, *legacy_files)
         }
         found = [(node, volume) for (node, _name), volume in volumes.items() if volume]
         if not found:
@@ -2099,6 +2106,13 @@ class ProxmoxBackend:
 
 
 def _boot_iso_name(talos_version: str, schematic: str) -> str:
+    # the SecureBoot ISO: its name carries the suffix so an existing cluster's
+    # pre-secureboot image is left alone and the secureboot one is downloaded
+    return f"{naming.image_name(talos_version, schematic)}-secureboot.iso"
+
+
+def _legacy_boot_iso_name(talos_version: str, schematic: str) -> str:
+    """The boot-image name before VMs booted the SecureBoot ISO."""
     return f"{naming.image_name(talos_version, schematic)}.iso"
 
 

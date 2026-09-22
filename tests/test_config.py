@@ -2473,6 +2473,19 @@ def test_tailscale_auth_key_loads_and_rejects_placeholders(make_config, tmp_path
             assert cfg.tailscale_auth_key
 
 
+def test_login_server_must_be_https(make_config, tmp_path):
+    """An http login server would send the pre-auth key in the clear."""
+    _write_secrets(tmp_path, {"openstack": dict(OPENSTACK_CREDENTIALS)})
+
+    assert make_config({
+        "tailscale": {"login_server": "https://headscale.example.edu"},
+    }).login_server == "https://headscale.example.edu"
+    with pytest.raises(ConfigError, match="must be an https:// URL"):
+        make_config({"tailscale": {"login_server": "http://headscale.example.edu"}})
+    with pytest.raises(ConfigError, match="must be an https:// URL"):
+        make_config({"tailscale": {"login_server": "headscale.example.edu"}})
+
+
 # ---------------------------------------------------------------------------
 # security rules
 # ---------------------------------------------------------------------------

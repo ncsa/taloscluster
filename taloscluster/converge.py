@@ -98,7 +98,10 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     installer_platform = backend.installer_platform
     installer_schematics = {s: factory.schematic_id(s) for s in cfg.extension_sets()}
     installer_images = {
-        s: factory.installer_image(sid, cfg.talos_version, platform=installer_platform)
+        s: factory.installer_image(
+            sid, cfg.talos_version,
+            platform=installer_platform, secureboot=backend.installer_secureboot,
+        )
         for s, sid in installer_schematics.items()
     }
     # metal machines share one installer ref of their own -- no VM pool's
@@ -166,7 +169,11 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             )
         action("generate talos machine secrets (first run)")
         if not dry_run():
-            state.write_secrets(talosctl.gen_secrets(cfg.talos_version))
+            # the bundle also carries the system-disk LUKS2 passphrase, so the
+            # machines this cluster ever installs encrypt STATE and EPHEMERAL
+            state.write_secrets(machineconfig.with_disk_passphrase(
+                talosctl.gen_secrets(cfg.talos_version)
+            ))
     else:
         info(f"machine secrets: {secrets_path} (CRITICAL -- back this up)")
 

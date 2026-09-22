@@ -49,6 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Require real YAML types for ArgoCD booleans, member lists, URLs and apply targets; refuse unknown per-app keys and version overrides on apps that ignore them.
 - Add guides for OpenStack setup, backup and recovery, node maintenance, load balancers and ingress, and both management access paths.
 - Expand troubleshooting with diagnostics and recovery for the new refusals, missing Talos secrets, failed drains, incomplete checks, plugin failures and interrupted upgrades.
+- Encrypt every installed machine's STATE and EPHEMERAL partitions with LUKS2, boot Proxmox VMs with Secure Boot, vendor the bootstrap manifests, and require https tailscale login servers.
 
 ### Changed
 

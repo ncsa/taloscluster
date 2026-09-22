@@ -2,8 +2,8 @@
 
 The shared machine-config patches become Python dicts dumped to YAML files and
 stacked as `--config-patch` on `talosctl gen config`, in this order:
-  machine -> hostname -> (cluster, controlplane only) -> firewall ->
-  (kubespan) -> tailscale -> freeform.
+  machine -> hostname -> (disk encryption) -> (cluster, controlplane only) ->
+  firewall -> (kubespan) -> tailscale -> freeform.
 
 Kept as separate patch files on purpose: hostname (HostnameConfig) and tailscale
 (ExtensionServiceConfig) are their own machine-config documents, and the
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import copy
 import re
+import secrets
 import tempfile
 from pathlib import Path
 
@@ -31,18 +32,492 @@ from ..config import KUBESPAN_PORT, Config, ConfigError, Machine
 from ..infrastructure import Endpoint, TalosContribution
 from . import talosctl
 
-# Pinned deliberately. Both of these were previously moving targets -- the
-# cert-approver at branch `main` (image tag `main`) and metrics-server at
-# `releases/latest` -- so an upstream push could break a cluster nobody touched.
-# The cert-approver did exactly that: it crashlooped on exit code 2, and because
-# talosctl upgrade-k8s waits for every bootstrap manifest to reconcile, a broken
-# add-on blocks kubernetes upgrades entirely. Bump these on purpose, not by drift.
-CERT_APPROVER_VERSION = "v0.11.0"
-METRICS_SERVER_VERSION = "v0.9.0"
+# Vendored deliberately. These were previously pulled from GitHub by URLs a
+# maintainer can move -- the cert-approver at a release tag, metrics-server at
+# a release asset -- so an upstream push could change what every new control
+# plane runs, and the approver holds CSR-approval RBAC. The cert-approver did
+# exactly that once: it crashlooped on exit code 2, and because talosctl
+# upgrade-k8s waits for every bootstrap manifest to reconcile, a broken add-on
+# blocks kubernetes upgrades entirely. Both now ride cluster.inlineManifests on
+# control planes, so what a cluster runs is fixed by this file: the approver at
+# its v0.11.0 standalone-install.yaml, metrics-server at its v0.9.0
+# components.yaml. Bump these on purpose, not by drift.
+CERT_APPROVER_MANIFEST = """\
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/instance: kubelet-serving-cert-approver
+    app.kubernetes.io/name: kubelet-serving-cert-approver
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+  name: kubelet-serving-cert-approver
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/instance: kubelet-serving-cert-approver
+    app.kubernetes.io/name: kubelet-serving-cert-approver
+  name: kubelet-serving-cert-approver
+  namespace: kubelet-serving-cert-approver
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: kubelet-serving-cert-approver
+    app.kubernetes.io/name: kubelet-serving-cert-approver
+  name: certificates:kubelet-serving-cert-approver
+rules:
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - certificatesigningrequests
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - certificatesigningrequests/approval
+  verbs:
+  - update
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
+  - certificates.k8s.io
+  resourceNames:
+  - kubernetes.io/kubelet-serving
+  resources:
+  - signers
+  verbs:
+  - approve
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: kubelet-serving-cert-approver
+    app.kubernetes.io/name: kubelet-serving-cert-approver
+  name: events:kubelet-serving-cert-approver
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: kubelet-serving-cert-approver
+    app.kubernetes.io/name: kubelet-serving-cert-approver
+  name: events:kubelet-serving-cert-approver
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: events:kubelet-serving-cert-approver
+subjects:
+- kind: ServiceAccount
+  name: kubelet-serving-cert-approver
+  namespace: kubelet-serving-cert-approver
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: kubelet-serving-cert-approver
+    app.kubernetes.io/name: kubelet-serving-cert-approver
+  name: kubelet-serving-cert-approver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: certificates:kubelet-serving-cert-approver
+subjects:
+- kind: ServiceAccount
+  name: kubelet-serving-cert-approver
+  namespace: kubelet-serving-cert-approver
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: kubelet-serving-cert-approver
+    app.kubernetes.io/name: kubelet-serving-cert-approver
+  name: kubelet-serving-cert-approver
+  namespace: kubelet-serving-cert-approver
+spec:
+  ports:
+  - name: metrics
+    port: 9090
+    protocol: TCP
+    targetPort: metrics
+  selector:
+    app.kubernetes.io/instance: kubelet-serving-cert-approver
+    app.kubernetes.io/name: kubelet-serving-cert-approver
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: kubelet-serving-cert-approver
+    app.kubernetes.io/name: kubelet-serving-cert-approver
+  name: kubelet-serving-cert-approver
+  namespace: kubelet-serving-cert-approver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: kubelet-serving-cert-approver
+      app.kubernetes.io/name: kubelet-serving-cert-approver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: kubelet-serving-cert-approver
+        app.kubernetes.io/name: kubelet-serving-cert-approver
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - preference:
+              matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: DoesNotExist
+            weight: 100
+      containers:
+      - args:
+        - serve
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        image: ghcr.io/alex1989hu/kubelet-serving-cert-approver:0.11.0
+        imagePullPolicy: Always
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 6
+        name: cert-approver
+        ports:
+        - containerPort: 8080
+          name: health
+        - containerPort: 9090
+          name: metrics
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 3
+        resources:
+          limits:
+            cpu: 250m
+            memory: 32Mi
+          requests:
+            cpu: 10m
+            memory: 16Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+      priorityClassName: system-cluster-critical
+      securityContext:
+        fsGroup: 65534
+        runAsGroup: 65534
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: kubelet-serving-cert-approver
+      tolerations:
+      - effect: NoSchedule
+        key: node.cloudprovider.kubernetes.io/uninitialized
+        operator: Exists
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/master
+        operator: Exists
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/control-plane
+        operator: Exists
+"""
+METRICS_SERVER_MANIFEST = """\
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    k8s-app: metrics-server
+  name: metrics-server
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    k8s-app: metrics-server
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+  name: system:aggregated-metrics-reader
+rules:
+- apiGroups:
+  - metrics.k8s.io
+  resources:
+  - pods
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    k8s-app: metrics-server
+  name: system:metrics-server
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - nodes/metrics
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    k8s-app: metrics-server
+  name: metrics-server-auth-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+- kind: ServiceAccount
+  name: metrics-server
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    k8s-app: metrics-server
+  name: metrics-server:system:auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: metrics-server
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    k8s-app: metrics-server
+  name: system:metrics-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:metrics-server
+subjects:
+- kind: ServiceAccount
+  name: metrics-server
+  namespace: kube-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    k8s-app: metrics-server
+  name: metrics-server
+  namespace: kube-system
+spec:
+  ports:
+  - appProtocol: https
+    name: https
+    port: 443
+    protocol: TCP
+    targetPort: https
+  selector:
+    k8s-app: metrics-server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    k8s-app: metrics-server
+  name: metrics-server
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      k8s-app: metrics-server
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        k8s-app: metrics-server
+    spec:
+      containers:
+      - args:
+        - --cert-dir=/tmp
+        - --secure-port=10250
+        - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+        - --kubelet-use-node-status-port
+        - --metric-resolution=15s
+        image: registry.k8s.io/metrics-server/metrics-server:v0.9.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /livez
+            port: https
+            scheme: HTTPS
+          periodSeconds: 10
+        name: metrics-server
+        ports:
+        - containerPort: 10250
+          name: https
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /readyz
+            port: https
+            scheme: HTTPS
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp-dir
+      nodeSelector:
+        kubernetes.io/os: linux
+      priorityClassName: system-cluster-critical
+      serviceAccountName: metrics-server
+      volumes:
+      - emptyDir: {}
+        name: tmp-dir
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  labels:
+    k8s-app: metrics-server
+  name: v1beta1.metrics.k8s.io
+spec:
+  group: metrics.k8s.io
+  groupPriorityMinimum: 100
+  insecureSkipTLSVerify: true
+  service:
+    name: metrics-server
+    namespace: kube-system
+  version: v1beta1
+  versionPriority: 100
+"""
 EXTRA_MANIFESTS = [
-    f"https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver/{CERT_APPROVER_VERSION}/deploy/standalone-install.yaml",
-    f"https://github.com/kubernetes-sigs/metrics-server/releases/download/{METRICS_SERVER_VERSION}/components.yaml",
+    {"name": "kubelet-serving-cert-approver", "contents": CERT_APPROVER_MANIFEST},
+    {"name": "metrics-server", "contents": METRICS_SERVER_MANIFEST},
 ]
+
+
+# The LUKS2 passphrase for machine.systemDiskEncryption lives in the cluster's
+# talossecrets.yaml under this key, written there when converge generates the
+# secrets and never regenerated -- like the rest of that file it is the
+# cluster's irreplaceable identity, and losing it means losing the encrypted
+# disks. A secrets file without the key is a cluster created before system disk
+# encryption: its machines were installed unencrypted, so no configuration may
+# carry the encryption settings -- Talos reads the EPHEMERAL encryption config
+# from the live machine config on every boot and refuses a mismatch, so the
+# settings must only ever reach machines installed (or reinstalled) with them.
+DISK_PASSPHRASE_KEY = "diskEncryptionPassphrase"
+
+
+def with_disk_passphrase(raw: str) -> str:
+    """A fresh secrets bundle with a generated disk-encryption passphrase.
+
+    Appends one top-level key to the `talosctl gen secrets` output rather than
+    round-tripping the YAML, so the bundle keeps its generated shape; talosctl
+    ignores unknown keys when it loads the bundle.
+    """
+    return f"{raw.rstrip()}\n{DISK_PASSPHRASE_KEY}: {secrets.token_urlsafe(32)}\n"
+
+
+def disk_passphrase(secrets_path: Path) -> str | None:
+    """The LUKS2 passphrase stored in the cluster's machine secrets, or None.
+
+    Anything unreadable, not a mapping, or without the key reads as None: the
+    machine configs then carry no encryption settings, which is exactly right
+    for a cluster whose secrets predate them.
+    """
+    try:
+        data = yaml.safe_load(secrets_path.read_text())
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    value = data.get(DISK_PASSPHRASE_KEY)
+    return value if isinstance(value, str) and value else None
+
+
+def _disk_encryption_patch(passphrase: str) -> dict:
+    """machine.systemDiskEncryption: STATE and EPHEMERAL as LUKS2, both keyed
+    with the cluster's static passphrase in slot 0."""
+    def luks2() -> dict:
+        return {
+            "provider": "luks2",
+            "keys": [{"slot": 0, "static": {"passphrase": passphrase}}],
+        }
+
+    return {
+        "machine": {
+            "systemDiskEncryption": {"state": luks2(), "ephemeral": luks2()},
+        }
+    }
 
 
 def _label_value(value: str) -> str:
@@ -96,7 +571,7 @@ def _cluster_patch(cfg: Config, endpoint: Endpoint, node_cidr: str | None = None
     return {
         "cluster": {
             "allowSchedulingOnControlPlanes": False,
-            "extraManifests": EXTRA_MANIFESTS,
+            "inlineManifests": EXTRA_MANIFESTS,
             "apiServer": {"certSANs": [endpoint.advertised_address]},
             # keep etcd peering on the private network, off tailscale; a node
             # off the cluster network (a metal group) advertises its own L2
@@ -283,6 +758,10 @@ def build_configs(
         raise ConfigError(
             "no provider Talos contribution for: " + ", ".join(missing)
         )
+    # the LUKS2 passphrase comes from the cluster's machine secrets, so a
+    # cluster created before system disk encryption keeps generating configs
+    # without the encryption settings
+    passphrase = disk_passphrase(secrets_path)
 
     with tempfile.TemporaryDirectory(prefix="taloscluster-mc-") as tmp:
         workdir = Path(tmp)
@@ -295,6 +774,11 @@ def build_configs(
                                       contribution.install_disk, default_tags)),
                 _write(workdir, f"{host}-hostname", _hostname_patch(m)),
             ]
+            if passphrase:
+                patches.append(
+                    _write(workdir, f"{host}-encryption",
+                           _disk_encryption_patch(passphrase))
+                )
             if m.role == "controlplane":
                 patches.append(
                     _write(workdir, f"{host}-cluster", _cluster_patch(cfg, endpoint))

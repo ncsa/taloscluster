@@ -274,6 +274,7 @@ class _DryRunNoFipBackend:
 
     name = "openstack"
     installer_platform = "openstack"
+    installer_secureboot = False
     computed = False
 
     def load_inventory(self):
@@ -335,6 +336,7 @@ class _FreshBootstrapBackend:
 
     name = "openstack"
     installer_platform = "openstack"
+    installer_secureboot = False
 
     def __init__(self, inventory):
         self.inventory = inventory
@@ -418,6 +420,7 @@ class _ScaleUpAfterUpgradeBackend:
 
     name = "openstack"
     installer_platform = "openstack"
+    installer_secureboot = False
 
     def __init__(self, inventory):
         self.inventory = inventory

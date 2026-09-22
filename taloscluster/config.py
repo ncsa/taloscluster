@@ -1952,8 +1952,16 @@ def _validate(cfg: Config) -> None:
             raise ConfigError(
                 "cluster.yaml: kubeapi_vip must be set in network.cluster or network.external"
             )
-    if cfg.login_server is not None and not isinstance(cfg.login_server, str):
-        raise ConfigError("cluster.yaml: tailscale.login_server must be a string")
+    if cfg.login_server is not None:
+        if not isinstance(cfg.login_server, str):
+            raise ConfigError("cluster.yaml: tailscale.login_server must be a string")
+        # an http login server sends the pre-auth key in the clear: the key is
+        # handed to the server on every node's registration
+        if cfg.login_server and not cfg.login_server.startswith("https://"):
+            raise ConfigError(
+                "cluster.yaml: tailscale.login_server must be an https:// URL -- "
+                "the pre-auth key travels to it in the clear over anything less"
+            )
 
     for dns in cfg.network.dns:
         try:

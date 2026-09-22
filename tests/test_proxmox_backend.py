@@ -18,6 +18,7 @@ from taloscluster.proxmox.backend import (
     ProxmoxBackend,
     _boot_iso_name,
     _cidata_name,
+    _legacy_boot_iso_name,
     _memory_mib,
 )
 from taloscluster.proxmox.inventory import ProxmoxInventory
@@ -339,16 +340,39 @@ def test_cluster_memory_gb_converts_to_proxmox_api_mib():
 
 
 def test_boot_iso_uses_shared_tailscale_image_name():
-    assert _boot_iso_name("v1.12.2", "abc123") == "talos-v1.12.2-tailscale-abc123.iso"
+    assert (
+        _boot_iso_name("v1.12.2", "abc123")
+        == "talos-v1.12.2-tailscale-abc123-secureboot.iso"
+    )
+    # the pre-secureboot name stays matched so `image remove` cleans it up
+    assert (
+        _legacy_boot_iso_name("v1.12.2", "abc123")
+        == "talos-v1.12.2-tailscale-abc123.iso"
+    )
+
+
+def test_proxmox_boots_the_secureboot_image():
+    """Proxmox VMs boot the SecureBoot ISO and install the SecureBoot (UKI)
+    installer variant; OpenStack has no enrollment story, so it stays off."""
+    assert ProxmoxBackend.installer_secureboot is True
+    from taloscluster.openstack.backend import OpenStackBackend
+
+    assert OpenStackBackend.installer_secureboot is False
 
 
 def test_remove_image_also_deletes_the_legacy_schematicless_iso(proxmox_cfg, monkeypatch):
+    """`image remove` matches the current secureboot ISO, the pre-secureboot
+    schematic ISO the previous release booted, and the schematicless name the
+    rename before that left behind, so no orphan lingers."""
     monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
     data = _data()
     legacy = "isos:iso/talos-v1.13.9-tailscale.iso"
-    current = "isos:iso/talos-v1.13.9-tailscale-abc123.iso"
+    pre_secureboot = "isos:iso/talos-v1.13.9-tailscale-abc123.iso"
+    current = "isos:iso/talos-v1.13.9-tailscale-abc123-secureboot.iso"
     for node in ("pve001", "pve002"):
-        data[f"nodes/{node}/storage/isos/content"] = [{"volid": legacy}, {"volid": current}]
+        data[f"nodes/{node}/storage/isos/content"] = [
+            {"volid": legacy}, {"volid": pre_secureboot}, {"volid": current},
+        ]
     client = FakeClient(data)
     backend = _backend(proxmox_cfg, client)
     backend.load_inventory()
@@ -356,9 +380,10 @@ def test_remove_image_also_deletes_the_legacy_schematicless_iso(proxmox_cfg, mon
     backend.remove_image(assume_yes=True)
 
     deleted = [path for method, path, _data in client.mutations if method == "DELETE"]
-    assert len(deleted) == 4  # both names on both non-shared nodes
+    assert len(deleted) == 6  # all three names on both non-shared nodes
     assert any("talos-v1.13.9-tailscale.iso" in path for path in deleted)
     assert any("talos-v1.13.9-tailscale-abc123.iso" in path for path in deleted)
+    assert any("talos-v1.13.9-tailscale-abc123-secureboot.iso" in path for path in deleted)
 
 
 def test_remove_image_refuses_when_an_owned_vm_still_boots_the_iso(proxmox_cfg, monkeypatch):
@@ -382,7 +407,7 @@ def test_remove_image_refuses_when_an_owned_vm_still_boots_the_iso(proxmox_cfg, 
 def test_remove_image_refuses_when_the_current_iso_is_still_booted(proxmox_cfg, monkeypatch):
     monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
     data = _data()
-    current = "isos:iso/talos-v1.13.9-tailscale-abc123.iso"
+    current = "isos:iso/talos-v1.13.9-tailscale-abc123-secureboot.iso"
     for node in ("pve001", "pve002"):
         data[f"nodes/{node}/storage/isos/content"] = [{"volid": current}]
     data["nodes/pve001/qemu/800/config"]["ide2"] = f"{current},media=cdrom"
@@ -469,13 +494,14 @@ def test_remove_image_prompts_with_legacy_name_when_only_it_exists(
 def test_remove_image_prompts_with_both_names_when_both_exist(
     proxmox_cfg, monkeypatch
 ):
-    """When both the schematic and legacy pre-schematic ISOs are present,
-    `image remove` asks the operator to confirm every name it will delete."""
+    """When both the secureboot and the pre-secureboot schematic ISOs are
+    present, `image remove` asks the operator to confirm every name it will
+    delete."""
     monkeypatch.setattr(factory, "schematic_id", lambda _exts: "abc123")
     monkeypatch.setattr("taloscluster.proxmox.backend.dry_run", lambda: False)
     data = _data()
-    legacy = "isos:iso/talos-v1.13.9-tailscale.iso"
-    current = "isos:iso/talos-v1.13.9-tailscale-abc123.iso"
+    legacy = "isos:iso/talos-v1.13.9-tailscale-abc123.iso"
+    current = "isos:iso/talos-v1.13.9-tailscale-abc123-secureboot.iso"
     for node in ("pve001", "pve002"):
         data[f"nodes/{node}/storage/isos/content"] = [{"volid": legacy}, {"volid": current}]
     client = FakeClient(data)
@@ -486,13 +512,14 @@ def test_remove_image_prompts_with_both_names_when_both_exist(
     monkeypatch.setattr(
         "builtins.input",
         lambda prompt: prompts.append(prompt)
-        or "talos-v1.13.9-tailscale-abc123.iso, talos-v1.13.9-tailscale.iso",
+        or "talos-v1.13.9-tailscale-abc123-secureboot.iso, talos-v1.13.9-tailscale-abc123.iso",
     )
 
     backend.remove_image()
 
     assert prompts == [
-        "type 'talos-v1.13.9-tailscale-abc123.iso, talos-v1.13.9-tailscale.iso' to confirm: "
+        "type 'talos-v1.13.9-tailscale-abc123-secureboot.iso, "
+        "talos-v1.13.9-tailscale-abc123.iso' to confirm: "
     ]
 
 
@@ -563,7 +590,7 @@ def test_ensure_boot_artifact_uses_download_url(proxmox_cfg, monkeypatch):
         assert payload["filename"] == expected_filename
         assert payload["url"] == (
             f"https://factory.talos.dev/image/abc123/"
-            f"{proxmox_cfg.talos_version}/nocloud-amd64.iso"
+            f"{proxmox_cfg.talos_version}/nocloud-amd64-secureboot.iso"
         )
     assert result.startswith(f"isos:iso/{expected_filename}")
 
@@ -787,6 +814,10 @@ def test_vm_create_uses_uefi_q35_with_efi_disk(proxmox_cfg, monkeypatch, tmp_pat
     assert payload["machine"] == "q35"
     assert "efidisk0" in payload
     assert payload["efidisk0"].startswith("vms:1,efitype=4m")
+    # no pre-enrolled vendor keys: the empty varstore leaves the firmware in
+    # setup mode, which is what lets the SecureBoot ISO's bootloader enroll the
+    # factory's own keys on first boot
+    assert "pre-enrolled-keys=0" in payload["efidisk0"]
     assert payload["scsihw"] == "virtio-scsi-single"
     assert payload["boot"] == "order=scsi0;ide2"
 

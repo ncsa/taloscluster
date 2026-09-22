@@ -12,8 +12,11 @@ of 1500. A second golden pins the shared stack around the KubeSpan patch:
 opting in with ``talos.kubespan: true`` puts it on every node -- the WireGuard
 MTU (the L2 MTU minus overhead) and, when ``network.external`` exists, its
 networks excluded from endpoint discovery -- while the default (and
-``talos.kubespan: false``) emits none. Control planes end the stack with the
-metadata-policy patch, whose embedded NetworkPolicy manifest is pinned by
+``talos.kubespan: false``) emits none. Every node also carries the system disk
+encryption patch (STATE and EPHEMERAL as LUKS2, keyed with the passphrase the
+cluster's talossecrets.yaml holds), and control planes end the stack with the
+metadata-policy patch and the vendored bootstrap manifests, whose embedded
+content is pinned by tests/test_machineconfig.py and
 tests/test_openstack_talos.py.
 
 Update the golden only when a machine-config change is intended.
@@ -55,9 +58,29 @@ HOSTNAME_PATCH = {
 CLUSTER_PATCH = {
     "cluster": {
         "allowSchedulingOnControlPlanes": False,
-        "extraManifests": machineconfig.EXTRA_MANIFESTS,
+        "inlineManifests": [
+            {"name": "kubelet-serving-cert-approver",
+             "contents": machineconfig.CERT_APPROVER_MANIFEST},
+            {"name": "metrics-server",
+             "contents": machineconfig.METRICS_SERVER_MANIFEST},
+        ],
         "apiServer": {"certSANs": [FIP]},
         "etcd": {"advertisedSubnets": ["192.168.0.0/21"]},
+    }
+}
+DISK_PASSPHRASE = "luks-passphrase-0123"
+ENCRYPTION_PATCH = {
+    "machine": {
+        "systemDiskEncryption": {
+            "state": {
+                "provider": "luks2",
+                "keys": [{"slot": 0, "static": {"passphrase": DISK_PASSPHRASE}}],
+            },
+            "ephemeral": {
+                "provider": "luks2",
+                "keys": [{"slot": 0, "static": {"passphrase": DISK_PASSPHRASE}}],
+            },
+        }
     }
 }
 TAILSCALE_PATCH = {
@@ -101,6 +124,7 @@ def _golden(cluster_mtu: int | None) -> dict[str, list]:
         "testcluster-controlplane-01": [
             [_machine_patch("controlplane", "controlplane")],
             [_named(HOSTNAME_PATCH, "testcluster-controlplane-01")],
+            [ENCRYPTION_PATCH],
             [CLUSTER_PATCH],
             "FIREWALL",
             [_named(TAILSCALE_PATCH, "testcluster-controlplane-01")],
@@ -110,6 +134,7 @@ def _golden(cluster_mtu: int | None) -> dict[str, list]:
         "testcluster-worker-01": [
             [_machine_patch("worker", "worker")],
             [_named(HOSTNAME_PATCH, "testcluster-worker-01")],
+            [ENCRYPTION_PATCH],
             "FIREWALL",
             [_named(TAILSCALE_PATCH, "testcluster-worker-01")],
             eth0,
@@ -147,7 +172,10 @@ def test_openstack_patch_stack_matches_golden(make_config, monkeypatch, tmp_path
 
     monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
     secrets_path = tmp_path / "talossecrets.yaml"
-    secrets_path.write_text("dummy")
+    secrets_path.write_text(
+        f"cluster:\n  id: abc\n"
+        f"{machineconfig.DISK_PASSPHRASE_KEY}: {DISK_PASSPHRASE}\n"
+    )
 
     machineconfig.build_configs(
         cfg,
@@ -222,6 +250,7 @@ def _kubespan_golden(kubespan_enabled: bool) -> dict[str, list]:
         "testcluster-controlplane-01": [
             [_machine_patch("controlplane", "controlplane")],
             [_named(HOSTNAME_PATCH, "testcluster-controlplane-01")],
+            [ENCRYPTION_PATCH],
             [CLUSTER_PATCH],
             "FIREWALL",
             *kubespan,
@@ -230,6 +259,7 @@ def _kubespan_golden(kubespan_enabled: bool) -> dict[str, list]:
         "testcluster-worker-01": [
             [_machine_patch("worker", "worker")],
             [_named(HOSTNAME_PATCH, "testcluster-worker-01")],
+            [ENCRYPTION_PATCH],
             "FIREWALL",
             *kubespan,
             [_named(TAILSCALE_PATCH, "testcluster-worker-01")],
@@ -252,7 +282,10 @@ def test_patch_stack_kubespan_matches_golden(make_config, monkeypatch, tmp_path,
 
     monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
     secrets_path = tmp_path / "talossecrets.yaml"
-    secrets_path.write_text("dummy")
+    secrets_path.write_text(
+        f"cluster:\n  id: abc\n"
+        f"{machineconfig.DISK_PASSPHRASE_KEY}: {DISK_PASSPHRASE}\n"
+    )
 
     machineconfig.build_configs(
         cfg,

@@ -443,6 +443,9 @@ def build_config(
     kubernetes = kubernetes_version or cfg.kubernetes_version
     host = server.name
     m = _machine(server, cfg)
+    # the cluster's LUKS2 passphrase, when the secrets carry one: a machine
+    # this installs encrypts STATE and EPHEMERAL (see machineconfig)
+    passphrase = machineconfig.disk_passphrase(secrets_path)
     with tempfile.TemporaryDirectory(prefix="taloscluster-metal-mc-") as tmp:
         workdir = Path(tmp)
         patches = [
@@ -454,6 +457,13 @@ def build_config(
                 workdir, f"{host}-hostname", machineconfig._hostname_patch(m)
             ),
         ]
+        if passphrase:
+            patches.append(
+                machineconfig._write(
+                    workdir, f"{host}-encryption",
+                    machineconfig._disk_encryption_patch(passphrase),
+                )
+            )
         if server.role == "controlplane":
             patches.append(
                 machineconfig._write(

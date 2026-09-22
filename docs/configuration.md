@@ -100,4 +100,4 @@ tailscale:
 
 ## Other files in the directory
 
-`talossecrets.yaml` is the cluster's cryptographic identity, generated on the first converge and gitignored. It cannot be regenerated for a running cluster, so back it up out of band. `talosconfig` is derived from it and refreshed by converge. `kubeconfig` is fetched during bootstrap or an API endpoint move and is otherwise retained. Keep both client files with the cluster directory, especially when moving the API endpoint.
+`talossecrets.yaml` is the cluster's cryptographic identity, generated on the first converge and gitignored — it holds the cluster CA, the etcd CA, the join tokens, and the passphrase the machines' system disks are encrypted with. It cannot be regenerated for a running cluster, so back it up out of band. `talosconfig` is derived from it and refreshed by converge. `kubeconfig` is fetched during bootstrap or an API endpoint move and is otherwise retained. Keep both client files with the cluster directory, especially when moving the API endpoint.

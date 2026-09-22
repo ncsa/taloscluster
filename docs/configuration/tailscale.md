@@ -21,9 +21,9 @@ Decide the section and its `auth_key` before the first converge: switching eithe
 
 ### `tailscale.login_server`
 
-Optional in the loader · URL · default unset
+Optional in the loader · https:// URL · default unset
 
-Set the Tailscale control-server URL explicitly when supplying an auth key, for example your Headscale server. When set, the generator emits `--login-server=<value>`. When omitted, no `--login-server` argument is emitted and the public Tailscale control plane is selected by default.
+Set the Tailscale control-server URL explicitly when supplying an auth key, for example your Headscale server. When set, the generator emits `--login-server=<value>`. When omitted, no `--login-server` argument is emitted and the public Tailscale control plane is selected by default. Only `https://` URLs are accepted — the pre-auth key travels to the login server during registration, so a plain-http one would send it in the clear, and the loader refuses the configuration.
 
 ## secrets.yaml
 

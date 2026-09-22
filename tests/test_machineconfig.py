@@ -504,6 +504,122 @@ def test_build_configs_cluster_patch_only_for_controlplane(cfg, monkeypatch, tmp
 
 
 # ---------------------------------------------------------------------------
+# system disk encryption + vendored bootstrap manifests
+# ---------------------------------------------------------------------------
+
+def _secrets_with_passphrase(tmp_path: Path, passphrase: str = "luks-passphrase-0123") -> Path:
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text(
+        f"cluster:\n  id: abc\n  secret: def\n"
+        f"{machineconfig.DISK_PASSPHRASE_KEY}: {passphrase}\n"
+    )
+    return secrets_path
+
+
+def _encryption_patches(calls):
+    """The systemDiskEncryption patch documents, in gen_config call order."""
+    found = []
+    for call in calls:
+        for docs in call["documents"]:
+            for doc in docs:
+                if isinstance(doc, dict):
+                    encryption = (doc.get("machine") or {}).get("systemDiskEncryption")
+                    if encryption:
+                        found.append(encryption)
+    return found
+
+
+def test_build_configs_emits_disk_encryption_when_secrets_carry_the_passphrase(
+    cfg, monkeypatch, tmp_path
+):
+    calls = _capture(monkeypatch)
+    secrets_path = _secrets_with_passphrase(tmp_path)
+
+    _build(cfg, tmp_path, _contributions(cfg), secrets_path=secrets_path)
+
+    patches = _encryption_patches(calls)
+    assert len(patches) == len(cfg.machines)
+    for encryption in patches:
+        assert encryption["state"]["provider"] == "luks2"
+        assert encryption["ephemeral"]["provider"] == "luks2"
+        for partition in ("state", "ephemeral"):
+            (key,) = encryption[partition]["keys"]
+            assert key["slot"] == 0
+            assert key["static"]["passphrase"] == "luks-passphrase-0123"
+
+
+def test_build_configs_omits_disk_encryption_without_the_passphrase(
+    cfg, monkeypatch, tmp_path
+):
+    """A secrets file without the key is a cluster created before system disk
+    encryption: its machines were installed unencrypted, so no config may
+    carry the settings."""
+    calls = _capture(monkeypatch)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("cluster:\n  id: abc\n  secret: def\n")
+
+    _build(cfg, tmp_path, _contributions(cfg), secrets_path=secrets_path)
+
+    assert _encryption_patches(calls) == []
+
+
+def test_build_configs_cluster_patch_vendors_the_bootstrap_manifests(
+    cfg, monkeypatch, tmp_path
+):
+    """The approver and metrics-server manifests ride inlineManifests on control
+    planes -- pinned in this repo, not fetched from GitHub by a movable URL."""
+    calls = _capture(monkeypatch)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+
+    _build(cfg, tmp_path, _contributions(cfg), secrets_path=secrets_path)
+
+    for call, (_host, m) in zip(calls, cfg.machines.items(), strict=True):
+        manifests = None
+        for docs in call["documents"]:
+            for doc in docs:
+                if isinstance(doc, dict) and "cluster" in doc:
+                    manifests = doc["cluster"].get("inlineManifests")
+        if m.role == "controlplane":
+            assert manifests is not None
+            assert {entry["name"] for entry in manifests} == {
+                "kubelet-serving-cert-approver", "metrics-server",
+            }
+            for entry in manifests:
+                docs = list(_yaml.safe_load_all(entry["contents"]))
+                assert docs and all(isinstance(doc, dict) for doc in docs)
+        else:
+            assert manifests is None
+    # the image tags the vendored manifests bake are pinned here too, so a
+    # bump to either vendored copy shows up in this test's diff
+    assert "kubelet-serving-cert-approver:0.11.0" in machineconfig.CERT_APPROVER_MANIFEST
+    assert "metrics-server:v0.9.0" in machineconfig.METRICS_SERVER_MANIFEST
+
+
+def test_disk_passphrase_reads_only_a_string_key(tmp_path):
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text(
+        f"{machineconfig.DISK_PASSPHRASE_KEY}: some-passphrase\n"
+    )
+    assert machineconfig.disk_passphrase(secrets_path) == "some-passphrase"
+    secrets_path.write_text("dummy")
+    assert machineconfig.disk_passphrase(secrets_path) is None
+    secrets_path.write_text(f"{machineconfig.DISK_PASSPHRASE_KEY}: 12345\n")
+    assert machineconfig.disk_passphrase(secrets_path) is None
+
+
+def test_with_disk_passphrase_appends_the_key():
+    raw = "cluster:\n  id: abc\n  secret: def\n"
+    combined = machineconfig.with_disk_passphrase(raw)
+    data = _yaml.safe_load(combined)
+    assert data["cluster"] == {"id": "abc", "secret": "def"}
+    passphrase = data[machineconfig.DISK_PASSPHRASE_KEY]
+    assert isinstance(passphrase, str) and len(passphrase) >= 32
+    # a second bundle gets a different passphrase
+    assert machineconfig.with_disk_passphrase(raw) != combined
+
+
+# ---------------------------------------------------------------------------
 # provider contributions
 # ---------------------------------------------------------------------------
 
@@ -521,9 +637,10 @@ def _capture(monkeypatch):
     return calls
 
 
-def _build(cfg, tmp_path, contributions, **kwargs):
-    secrets_path = tmp_path / "talossecrets.yaml"
-    secrets_path.write_text("dummy")
+def _build(cfg, tmp_path, contributions, *, secrets_path=None, **kwargs):
+    if secrets_path is None:
+        secrets_path = tmp_path / "talossecrets.yaml"
+        secrets_path.write_text("dummy")
     return machineconfig.build_configs(
         cfg, cfg.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
         secrets_path=secrets_path, installer_images=_installer_images(cfg),

@@ -220,6 +220,15 @@ def test_nocloud_installer_and_iso_urls_use_the_same_schematic():
     )
 
 
+def test_secureboot_installer_and_iso_urls():
+    assert factory.installer_image(
+        "abc123", "v1.13.9", platform="nocloud", secureboot=True
+    ) == ("factory.talos.dev/nocloud-installer-secureboot/abc123:v1.13.9")
+    assert factory.nocloud_secureboot_iso_url("abc123", "v1.13.9").endswith(
+        "/image/abc123/v1.13.9/nocloud-amd64-secureboot.iso"
+    )
+
+
 def test_metal_installer_url_uses_the_metal_platform():
     assert factory.installer_image("abc123", "v1.13.9", platform="metal") == (
         "factory.talos.dev/metal-installer/abc123:v1.13.9"

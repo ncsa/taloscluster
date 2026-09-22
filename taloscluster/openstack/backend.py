@@ -62,6 +62,8 @@ def _reconcile_errors(fn):
 class OpenStackBackend:
     name = "openstack"
     installer_platform = talos.INSTALLER_PLATFORM
+    # the disk image boots through Nova, which offers no Secure Boot enrollment
+    installer_secureboot = False
 
     def __init__(self, cfg: Config):
         if not isinstance(cfg.provider, OpenStackConfig):

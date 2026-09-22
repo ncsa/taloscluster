@@ -19,6 +19,13 @@ IMAGE_ASSET = "openstack-amd64.raw.xz"
 # installs and runs comes from the installer reference in that config, so
 # metal machines boot this asset yet install the metal installer
 NOCLOUD_ISO_ASSET = "nocloud-amd64.iso"
+# the SecureBoot UKI ISO: its systemd-boot enrolls the factory's own keys into
+# an efidisk whose varstore starts empty (Proxmox's pre-enrolled-keys=0 leaves
+# the firmware in setup mode) and then boots Talos with Secure Boot enforced,
+# all inside a virtual machine. On bare metal the enrollment is not automatic
+# (systemd-boot only auto-enrolls under virtualization), so metal keeps the
+# plain ISO.
+NOCLOUD_SECUREBOOT_ISO_ASSET = "nocloud-amd64-secureboot.iso"
 
 
 def schematic_id(extensions) -> str:
@@ -49,12 +56,15 @@ def installer_image(
     schematic: str,
     talos_version: str,
     platform: str = "openstack",
+    secureboot: bool = False,
 ) -> str:
     """The installer image ref for `machine.install.image` (keeps extensions on
-    upgrade)."""
+    upgrade). `secureboot` installs the SecureBoot (UKI) installer variant, for
+    machines booted from a SecureBoot ISO."""
     if platform not in ("openstack", "nocloud", "metal"):
         raise ValueError(f"unsupported Talos installer platform: {platform}")
-    return f"factory.talos.dev/{platform}-installer/{schematic}:{talos_version}"
+    suffix = "-secureboot" if secureboot else ""
+    return f"factory.talos.dev/{platform}-installer{suffix}/{schematic}:{talos_version}"
 
 
 def image_url(schematic: str, talos_version: str) -> str:
@@ -64,3 +74,7 @@ def image_url(schematic: str, talos_version: str) -> str:
 
 def nocloud_iso_url(schematic: str, talos_version: str) -> str:
     return f"{FACTORY}/image/{schematic}/{talos_version}/{NOCLOUD_ISO_ASSET}"
+
+
+def nocloud_secureboot_iso_url(schematic: str, talos_version: str) -> str:
+    return f"{FACTORY}/image/{schematic}/{talos_version}/{NOCLOUD_SECUREBOOT_ISO_ASSET}"

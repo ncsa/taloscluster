@@ -133,6 +133,9 @@ class InfrastructureBackend(Protocol):
     name: str
     # Talos Image Factory installer platform for this provider's boot artifacts.
     installer_platform: str
+    # True when the provider's machines boot the SecureBoot ISO and install the
+    # SecureBoot (UKI) installer variant.
+    installer_secureboot: bool
 
     def talos_contribution(
         self, machine: Machine, endpoint: Endpoint

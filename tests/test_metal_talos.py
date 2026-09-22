@@ -344,7 +344,12 @@ def test_metal_control_plane_on_another_l2_matches_golden(
     assert stack[2][0] == {
         "cluster": {
             "allowSchedulingOnControlPlanes": False,
-            "extraManifests": machineconfig.EXTRA_MANIFESTS,
+            "inlineManifests": [
+                {"name": "kubelet-serving-cert-approver",
+                 "contents": machineconfig.CERT_APPROVER_MANIFEST},
+                {"name": "metrics-server",
+                 "contents": machineconfig.METRICS_SERVER_MANIFEST},
+            ],
             "apiServer": {"certSANs": [VIP]},
             "etcd": {"advertisedSubnets": ["172.29.31.0/24"]},
         }
@@ -415,6 +420,55 @@ def test_metal_no_tailscale_patch_without_a_key(make_config, monkeypatch, tmp_pa
         doc.get("kind") != "ExtensionServiceConfig"
         for group in stack
         for doc in group
+    )
+
+
+def test_metal_machine_encrypts_system_disks_when_secrets_carry_the_passphrase(
+    make_config, monkeypatch, tmp_path
+):
+    """A metal machine installs with LUKS2 STATE/EPHEMERAL encryption when the
+    cluster's talossecrets.yaml carries the passphrase, same as the VM pools."""
+    cfg = _cfg(make_config)
+    seen: dict = {}
+
+    def fake_gen_config(**kwargs):
+        seen["names"] = [Path(p).name for p in kwargs["patches"]]
+        seen["patches"] = [
+            list(yaml.safe_load_all(Path(p).read_text())) for p in kwargs["patches"]
+        ]
+        return _GEN_OUTPUT
+
+    monkeypatch.setattr(metal_talos.talosctl, "gen_config", fake_gen_config)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text(
+        f"cluster:\n  id: abc\n"
+        f"{machineconfig.DISK_PASSPHRASE_KEY}: metal-passphrase-0123\n"
+    )
+    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    metal_talos.build_config(server, cfg, secrets_path, INSTALLER, _endpoint(cfg))
+
+    # the encryption patch rides the shared stack right after the hostname
+    assert seen["names"][2] == "rp001-encryption.yaml"
+    (encryption,) = next(
+        docs for name, docs in zip(seen["names"], seen["patches"], strict=True)
+        if name == "rp001-encryption.yaml"
+    )
+    for partition in ("state", "ephemeral"):
+        (key,) = encryption["machine"]["systemDiskEncryption"][partition]["keys"]
+        assert key["static"]["passphrase"] == "metal-passphrase-0123"
+        assert key["slot"] == 0
+
+
+def test_metal_machine_carries_no_encryption_without_the_passphrase(
+    make_config, monkeypatch, tmp_path
+):
+    stack, _ = _build(make_config, monkeypatch, tmp_path)
+
+    assert all(
+        "systemDiskEncryption" not in (doc.get("machine") or {})
+        for group in stack
+        for doc in group
+        if isinstance(doc, dict)
     )
 
 
