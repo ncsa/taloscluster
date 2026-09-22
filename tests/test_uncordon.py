@@ -418,6 +418,67 @@ def test_reconcile_talos_upgrades_a_joined_metal_node(monkeypatch, make_config):
     ]
 
 
+def test_reconcile_talos_reinstalls_a_metal_node_joined_by_an_early_dev_build(
+    monkeypatch, make_config, capsys
+):
+    """A machine joined by a pre-81696eb 0.8.0 dev build runs the schematic
+    computed before the metal trim -- the base set, qemu-guest-agent included --
+    so at the same talos version only the running schematic differs. The one-off
+    reinstall on the first converge is the accepted resolution (the changelog
+    and the metal provider guide say so): the node reports "extensions changed"
+    and is upgraded onto the metal installer, not treated as at-target."""
+    cfg = make_config(
+        {
+            "metal": {
+                "site": {
+                    "role": "worker",
+                    "redfish": False,
+                    "disk": "/dev/sda",
+                    "servers": {
+                        "rp001": {
+                            "interfaces": {
+                                "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
+                            }
+                        },
+                    },
+                }
+            }
+        }
+    )
+    # what a pre-81696eb build baked into the metal installer: the base set
+    # without the metal trim, so exactly the VM-only extensions differ
+    assert (
+        set(cfg._resolve_extensions({})) - set(cfg._resolve_extensions({}, metal=True))
+        == {"siderolabs/qemu-guest-agent"}
+    )
+    upgrades: list[tuple[str, str]] = []
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_kw: "ep")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: cfg.talos_version)
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "dev-sch")
+    monkeypatch.setattr(
+        converge.talosctl,
+        "upgrade",
+        lambda _tc, _e, node, image: upgrades.append((node, image)),
+    )
+    monkeypatch.setattr(converge, "_wait_version", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_kw: True)
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, n: n == "rp001")
+
+    converge._reconcile_talos(
+        cfg, {}, InfrastructureInventory(), NetworkResult(), {}, {},
+        Path("talosconfig"), Path("kubeconfig"),
+        metal_installer="factory.talos.dev/metal-installer/m-sch:v1.13.9",
+        metal_schematic="m-sch",
+    )
+
+    assert upgrades == [
+        ("192.168.0.5", "factory.talos.dev/metal-installer/m-sch:v1.13.9")
+    ]
+    assert "rp001: extensions changed" in capsys.readouterr().out
+
+
 def test_reconcile_talos_health_checks_a_metal_control_plane_at_target(
     monkeypatch, make_config
 ):

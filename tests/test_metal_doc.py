@@ -39,6 +39,15 @@ def test_provider_page_is_published_and_cross_linked():
     assert "cluster's own notes" in text
 
 
+def test_provider_page_documents_the_dev_build_reinstall():
+    # Machines joined with an early 0.8.0 development build carry the guest
+    # agent the metal images have since dropped; the accepted resolution of the
+    # one-off reinstall on the first converge is documented, not coded around.
+    text = PROVIDER.read_text()
+    assert "0.8.0 development build" in text
+    assert "reinstalled once" in text
+
+
 def test_reference_points_back_at_the_setup_guide():
     text = REFERENCE.read_text()
     assert "../providers/metal.md" in text
