@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Treat metal machines as cluster nodes throughout: they join at the cluster's running Kubernetes version and the tailnet when tailscale is configured, get the same firewall as VMs with every group's L2 and KubeSpan's UDP port admitted, count as desired nodes in scale-down and `check`, and scale down into maintenance mode keeping the Talos install so the machine can join another cluster.
 - Add `--metal` to `init` to scaffold the bare-metal section and its BMC credentials beside a provider.
 - Add `link_name` and `vlan` overrides to metal interfaces for the generated external VLAN child link and its ingress return-path pod.
+- Add `metal.<group>.extensions`, merged with the cluster-wide set into the installer image the bare-metal machines share.
 - Add `talos.kubespan` (default false) enabling Talos KubeSpan, sized to the L2 MTU, advertising every node address except the external network's, and required for metal machines on another L2.
 - Document the KubeSpan reachability contract for clusters spanning layer-2 networks, including the API VIP and proxy requirements.
 - Document the MTU rules for jumbo layer-2 networks, including the jumbo-frame ping recipe.

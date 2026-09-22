@@ -1680,11 +1680,70 @@ def test_metal_interface_can_override_the_vlan_child(make_config):
             },
             r"metal\.worker\.servers\.rp001: unknown key\(s\): role2",
         ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "extensions": "siderolabs/i915",
+                }
+            },
+            r"metal\.worker\.extensions must be a list of non-empty strings",
+        ),
+        (
+            {
+                "worker": {
+                    "role": "worker",
+                    "disk": "/dev/sda",
+                    "extensions": ["siderolabs/i915", ""],
+                }
+            },
+            r"metal\.worker\.extensions must be a list of non-empty strings",
+        ),
     ],
 )
 def test_metal_schema_is_checked(make_config, metal, message):
     with pytest.raises(ConfigError, match=message):
         make_config({"metal": metal})
+
+
+def test_metal_group_carries_extensions(make_config):
+    """A group's `extensions` parse, and a server's list replaces the group's
+    for its own machine like every other plain setting."""
+    cfg = make_config({"metal": {"phoenix": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "extensions": ["siderolabs/nvidia"],
+        "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
+        "servers": {"rp001": {"extensions": ["siderolabs/ice"]}},
+    }}})
+
+    group = cfg.metal.groups["phoenix"]
+    assert group.extensions == ("siderolabs/nvidia",)
+    assert group.servers["rp001"].extensions == ("siderolabs/ice",)
+
+
+def test_metal_extensions_merge_into_the_metal_installer_set(make_config):
+    """`metal_extensions()` resolves the base metal set plus the cluster-wide
+    and every group's and server's `extensions` -- the machines share one
+    installer -- and the VM pools' resolved sets stay untouched."""
+    cfg = make_config({
+        "talos": {"extensions": ["siderolabs/i915"]},
+        "metal": {"phoenix": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "extensions": ["siderolabs/nvidia"],
+            "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
+            "servers": {"rp001": {"extensions": ["siderolabs/ice"]}},
+        }},
+    })
+
+    resolved = cfg.metal_extensions()
+    assert "siderolabs/nvidia" in resolved
+    assert "siderolabs/ice" in resolved
+    assert "siderolabs/i915" in resolved
+    assert "siderolabs/qemu-guest-agent" not in resolved
+    assert all("siderolabs/nvidia" not in s for s in cfg.extension_sets())
 
 
 def test_metal_server_name_must_be_unique_across_groups(make_config):

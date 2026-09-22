@@ -851,6 +851,31 @@ def test_metal_still_honours_an_explicitly_requested_extension(make_config):
     assert "siderolabs/qemu-guest-agent" in cfg._resolve_extensions({}, metal=True)
 
 
+def test_metal_group_extensions_reach_the_metal_installer(make_config, monkeypatch):
+    """A GPU group names its driver under `extensions` and the shared metal
+    installer carries it -- without the driver landing on any VM pool's image."""
+    cfg = make_config({"metal": {"gpu": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "extensions": ["siderolabs/nvidia"],
+        "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
+        "servers": {"rp001": {}},
+    }}})
+    seen: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        metal_talos.factory,
+        "schematic_id",
+        lambda extensions: seen.append(tuple(extensions)) or "abc123",
+    )
+
+    schematic, image = metal_talos.installer(cfg)
+
+    assert "siderolabs/nvidia" in seen[0]
+    assert schematic == "abc123"
+    assert image == "factory.talos.dev/metal-installer/abc123:v1.13.9"
+    assert all("siderolabs/nvidia" not in s for s in cfg.extension_sets())
+
+
 def test_metal_base_extensions_is_the_base_set_without_the_vm_only_ones():
     from taloscluster.naming import BASE_EXTENSIONS, METAL_BASE_EXTENSIONS
 

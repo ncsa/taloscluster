@@ -61,6 +61,12 @@ Required · non-empty string
 
 The device the machines install Talos onto, such as `/dev/sda`; a server may override it for hardware that names its disks differently.
 
+### `metal.<group>.extensions`
+
+Optional · list of strings
+
+Additional Talos extensions for this group's machines, such as the drivers a GPU group needs. They merge with the cluster-wide [`talos.extensions`](general.md#talosextensions) and the base set into the one installer image all bare-metal machines share, so a driver lands on the metal machines without being installed on every VM pool. A server may override the group's list for its own machine, and anything any group or server asks for is baked into that shared installer. See [Talos extensions](general.md#talosextensions) for activation and upgrade limitations.
+
 ### `metal.<group>.network`
 
 Optional · mapping · default [`network.cluster`](network.md#networkcluster)

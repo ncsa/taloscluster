@@ -70,7 +70,7 @@ _PROXMOX_EXTERNAL_KEYS = {"bridge"}
 #: Direct keys a `metal` group accepts. A group is the defaults its `servers`
 #: start from: each server carries the same keys and overrides its own.
 _METAL_GROUP_KEYS = {"role", "redfish", "disk", "network", "interfaces", "bmc",
-                     "boot_timeout", "auto_join", "servers"}
+                     "boot_timeout", "auto_join", "extensions", "servers"}
 #: Direct keys one `metal.<group>.servers` entry accepts: the group settings it
 #: may override, minus the servers list itself.
 _METAL_SERVER_KEYS = _METAL_GROUP_KEYS - {"servers"}
@@ -321,6 +321,7 @@ class MetalGroup:
     boot_timeout: int = DEFAULT_METAL_BOOT_TIMEOUT_S   # seconds to maintenance mode
     interfaces: dict[str, MetalInterface] = field(default_factory=dict)
     bmc: MetalBmc = field(default_factory=MetalBmc)
+    extensions: tuple[str, ...] = ()   # extra system extensions for the machines
     servers: dict[str, MetalServer] = field(default_factory=dict)
 
 
@@ -338,6 +339,7 @@ class MetalServer:
     boot_timeout: int = DEFAULT_METAL_BOOT_TIMEOUT_S   # seconds to maintenance mode
     interfaces: dict[str, MetalInterface] = field(default_factory=dict)
     bmc: MetalBmc = field(default_factory=MetalBmc)
+    extensions: tuple[str, ...] = ()   # extra system extensions for the machine
 
 
 @dataclass(frozen=True)
@@ -578,6 +580,23 @@ class Config:
     def extension_sets(self) -> set[tuple[str, ...]]:
         """The distinct resolved extension sets in use -> one image per set."""
         return {m.extensions for m in self.machines.values()}
+
+    def metal_extensions(self) -> tuple[str, ...]:
+        """The resolved extension set of the metal machines' shared installer.
+
+        The base metal set (tailscale only when configured, never the VM-only
+        ones -- bare metal has no QEMU host for qemu-guest-agent to reach) plus
+        the cluster-wide `talos.extensions` plus every metal group's and
+        server's own `extensions`: the machines share one installer, so
+        anything any of them asks for is baked into it.
+        """
+        asked: set[str] = set()
+        if self.metal is not None:
+            for group in self.metal.groups.values():
+                asked.update(group.extensions)
+                for server in group.servers.values():
+                    asked.update(server.extensions)
+        return self._resolve_extensions({"extensions": sorted(asked)}, metal=True)
 
     def _resolve_extensions(
         self, pool: dict[str, Any], *, metal: bool = False
@@ -1055,6 +1074,9 @@ def _metal_fields(
         ),
         "interfaces": _metal_interfaces(raw.get("interfaces"), f"{where}.interfaces"),
         "bmc": _metal_bmc(_mapping(raw.get("bmc"), f"{where}.bmc"), f"{where}.bmc"),
+        "extensions": tuple(
+            _string_list(raw.get("extensions"), f"{where}.extensions")
+        ),
     }
 
 

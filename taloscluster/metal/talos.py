@@ -81,11 +81,12 @@ def installer(cfg: Config) -> tuple[str, str]:
     """(schematic id, installer image ref) for the cluster's metal machines.
 
     Metal machines belong to no VM pool, so the resolved extension set is the
-    base extensions (tailscale only when configured, and never the VM-only ones
-    -- bare metal has no QEMU host for qemu-guest-agent to reach) plus the
-    cluster-wide ones, and the installer reference rides the metal platform.
+    one `Config.metal_extensions` resolves -- the base extensions (tailscale
+    only when configured, and never the VM-only ones -- bare metal has no QEMU
+    host for qemu-guest-agent to reach) plus the cluster-wide and group-level
+    ones -- and the installer reference rides the metal platform.
     """
-    schematic = factory.schematic_id(cfg._resolve_extensions({}, metal=True))
+    schematic = factory.schematic_id(cfg.metal_extensions())
     return schematic, factory.installer_image(schematic, cfg.talos_version, platform="metal")
 
 
@@ -480,9 +481,10 @@ def build_config(
         # the patch rides the same predicate `build_configs` applies to the VM
         # machines: the key is set and the resolved extensions carry tailscale
         # (on metal, the set the installer bakes, which honours an explicit
-        # `talos.extensions` entry even without a `tailscale:` section; the
-        # section may live in any merged file, secrets.yaml included)
-        extensions = cfg._resolve_extensions({}, metal=True)
+        # `talos.extensions` or group `extensions` entry even without a
+        # `tailscale:` section; the section may live in any merged file,
+        # secrets.yaml included)
+        extensions = cfg.metal_extensions()
         auth_key = cfg.tailscale_auth_key
         if auth_key and "siderolabs/tailscale" in extensions:
             patches.append(
