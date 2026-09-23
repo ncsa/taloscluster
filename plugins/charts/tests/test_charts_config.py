@@ -20,7 +20,7 @@ from taloscluster_charts.config import (
 
 def _write_cluster(root: Path, charts: dict | None) -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    doc = {"name": "test"}
+    doc: dict[str, object] = {"name": "test"}
     if charts is not None:
         doc["charts"] = charts
     (root / "cluster.yaml").write_text(yaml.safe_dump(doc))

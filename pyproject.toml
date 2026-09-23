@@ -36,6 +36,7 @@ dev = [
     "taloscluster-charts",
     "taloscluster-rancher",
     "mkdocs-material>=9.7.7",
+    "mkdocs>=1.6.1,<2",
     "pytest-timeout>=2.4",
     "pytest-cov>=7",
 ]
@@ -80,5 +81,7 @@ select = ["E", "F", "W", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.10"
+# the shipped packages: tests/ carries fixtures mypy was never run against
+files = ["taloscluster", "plugins"]
 ignore_missing_imports = true   # openstacksdk ships no stubs
 warn_unused_ignores = true
