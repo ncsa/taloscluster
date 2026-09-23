@@ -21,7 +21,7 @@ from taloscluster.errors import ConfigError, ReconcileError, preflight_tools
 from taloscluster.output import action, dry_run, info, log, show_yaml, warn
 
 from . import charts, helm, kube, upstream
-from .config import Config, Entry, Namespace, is_newer, merge_values, same_version
+from .config import CephSecrets, Config, Entry, Namespace, is_newer, merge_values, same_version
 
 # dependency order: gateway CRDs before traefik's gateway provider, the
 # metallb chart (and its pool) before traefik claims an address from it; the
@@ -85,7 +85,7 @@ def still_installed(ctx: Context) -> bool:
             elif entry.name == "ceph":
                 if any(
                     helm.release(ctx.kubeconfig, chart, chart)
-                    for chart in charts.ceph_charts(entry)
+                    for chart in charts.CEPH_CHARTS
                 ):
                     return True
             elif helm.release(ctx.kubeconfig, entry.name, _namespace_of(entry)):
@@ -384,24 +384,36 @@ def _converge_ceph(entry: Entry, ctx: Context) -> dict:
     Each chart gets its own privileged namespace (release name == chart name),
     the shared csiConfig, and -- when the entry carries userID/userKey (usually
     from secrets.yaml) -- its CephX Secret delivered here so the provisioners
-    can actually work.
+    can actually work. Both charts are probed every run, so one whose
+    rbd:/fs: flag was turned off is uninstalled with its Secret and namespace
+    instead of staying behind orphaned.
     """
     root, kubeconfig = ctx.root, ctx.kubeconfig
     charts_wanted = charts.ceph_charts(entry)
     secrets = entry.ceph_secrets
 
     if not entry.enabled:
+        # everything ceph goes, whether the flags still name it or not: a
+        # chart turned off before the disable would otherwise be left behind
         present = any(
-            helm.release(kubeconfig, chart, chart) is not None for chart in charts_wanted
+            helm.release(kubeconfig, chart, chart) is not None for chart in charts.CEPH_CHARTS
         )
-        for chart in reversed(charts_wanted):
+        for chart in reversed(charts.CEPH_CHARTS):
             if helm.release(kubeconfig, chart, chart) is not None:
                 helm.uninstall(kubeconfig, chart, chart)
         if secrets:
-            _delete_ceph_secrets(root, secrets, entry)
-        for chart in charts_wanted:
+            _delete_ceph_secrets(root, secrets)
+        for chart in charts.CEPH_CHARTS:
             _delete_namespace(root, chart)
         return {"action": "removed" if present else "absent", "kind": "chart"}
+
+    charts_result: dict[str, Any] = {}
+    # a chart whose rbd:/fs: flag was turned off is invisible to the deploy
+    # loop below, so both charts are probed and the unwanted one -- with its
+    # csi Secret and namespace -- goes first
+    for chart in charts.CEPH_CHARTS:
+        if chart not in charts_wanted and _remove_ceph_chart(root, kubeconfig, chart, secrets):
+            charts_result[chart] = "removed"
 
     for chart in charts_wanted:
         _converge_namespace(charts.ceph_namespace(chart), root)
@@ -414,7 +426,6 @@ def _converge_ceph(entry: Entry, ctx: Context) -> dict:
             "(however you manage them) or the provisioners cannot reach ceph"
         )
 
-    charts_result = {}
     taken = "up_to_date"
     for chart in charts_wanted:
         # each chart's StorageClass comes from its own rbd:/fs: mapping
@@ -440,10 +451,41 @@ def _converge_ceph_secrets(root, secrets, entry: Entry) -> None:
     kube.apply(root, "-", label="ceph csi secrets", input=manifest)
 
 
-def _delete_ceph_secrets(root, secrets, entry: Entry) -> None:
-    manifest = charts.ceph_secrets_manifest(secrets, entry)
+def _delete_ceph_secret(root, secrets: CephSecrets, chart: str) -> None:
+    """Delete one chart's csi Secret when it exists.
+
+    Each Secret is probed alone: a both-charts probe reads one missing Secret
+    as all of them gone and would skip the delete entirely.
+    """
+    manifest = yaml.safe_dump(charts.ceph_secret(secrets, chart))
     if kube.exists(root, "-", input=manifest):
         kube.delete(root, "-", label="ceph csi secrets", input=manifest)
+
+
+def _delete_ceph_secrets(root, secrets: CephSecrets) -> None:
+    """Delete both charts' csi Secrets, whether their flags still name them or
+    not: a chart turned off leaves its Secret behind in the namespace, which
+    is only removed with the chart itself when the plugin created it."""
+    for chart in charts.CEPH_CHARTS:
+        _delete_ceph_secret(root, secrets, chart)
+
+
+def _remove_ceph_chart(root, kubeconfig, chart: str, secrets: CephSecrets | None) -> bool:
+    """Uninstall one no-longer-wanted ceph chart with its Secret and namespace.
+
+    The deploy loop only ever touches the charts the entry's rbd:/fs: flags
+    still enable, so a chart whose flag was turned off is invisible to it;
+    probing both charts and removing the unwanted one keeps the release from
+    being orphaned with the privileged namespace it ships with. Returns
+    whether the release was present.
+    """
+    present = helm.release(kubeconfig, chart, chart) is not None
+    if present:
+        helm.uninstall(kubeconfig, chart, chart)
+    if secrets:
+        _delete_ceph_secret(root, secrets, chart)
+    _delete_namespace(root, chart)
+    return present
 
 
 def _converge_pool(root, pool: tuple[str, ...], namespace: str) -> None:
@@ -655,10 +697,18 @@ def _check_entry(
     root, kubeconfig = ctx.root, ctx.kubeconfig
     if entry.name == "ceph":
         secrets = entry.ceph_secrets
-        for chart in charts.ceph_charts(entry):
+        wanted = charts.ceph_charts(entry)
+        for chart in charts.CEPH_CHARTS:
+            record = helm.release(kubeconfig, chart, chart)
             if not entry.enabled:
-                if helm.release(kubeconfig, chart, chart) is not None:
+                if record is not None:
                     return False, "present"
+                continue
+            if chart not in wanted:
+                # a chart whose rbd:/fs: flag was turned off: converge
+                # uninstalls it, so a release still present is drift
+                if record is not None:
+                    return False, "drifted"
                 continue
             drift = _chart_drift(
                 entry, kubeconfig, chart, chart, _ceph_chart_values(entry, chart), chart=chart
@@ -753,13 +803,14 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
                     kube.delete(root, url, label=url)
             continue
         if entry.name == "ceph":
-            for chart in reversed(charts.ceph_charts(entry)):
+            # both charts go, whether the flags still name them or not
+            for chart in reversed(charts.CEPH_CHARTS):
                 if helm.release(kubeconfig, chart, chart) is not None:
                     helm.uninstall(kubeconfig, chart, chart)
             secrets = entry.ceph_secrets
             if secrets:
-                _delete_ceph_secrets(root, secrets, entry)
-            for chart in charts.ceph_charts(entry):
+                _delete_ceph_secrets(root, secrets)
+            for chart in charts.CEPH_CHARTS:
                 _delete_namespace(root, chart)
             continue
         namespace = _namespace_of(entry)

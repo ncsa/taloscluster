@@ -203,6 +203,15 @@ def test_still_installed_sees_a_ceph_chart(tmp_path, fake_helm):
     assert reconcile.still_installed(ctx) is True
 
 
+def test_still_installed_sees_a_turned_off_ceph_chart(tmp_path, fake_helm):
+    # the fs flag no longer names the installed cephfs release, but the
+    # plugin must stay configured until converge has removed it
+    (tmp_path / "kubeconfig").write_text("")
+    ctx = _pool_ctx(tmp_path, {"ceph": dict(CEPH, enabled=False)})
+    fake_helm.installed["ceph-csi-cephfs"] = "3.0.0"
+    assert reconcile.still_installed(ctx) is True
+
+
 def test_still_installed_sees_an_applied_manifest(tmp_path, monkeypatch):
     (tmp_path / "kubeconfig").write_text("")
     monkeypatch.setattr(reconcile.kube, "exists", lambda root, target, **k: True)
@@ -273,6 +282,55 @@ def test_plan_never_prints_the_ceph_key(tmp_path, fake_helm, no_kube, dry, capsy
     assert "name: csi-rbd-secret" in out
     assert "AQC0secretkey" not in out
     assert "userKey: REDACTED" in out
+
+
+def test_converge_uninstalls_a_ceph_chart_whose_flag_was_turned_off(
+    tmp_path, fake_helm, no_kube, monkeypatch
+):
+    # both charts were installed; turning fs off must uninstall the cephfs
+    # release and remove its namespace, not leave them behind orphaned
+    monkeypatch.setattr(
+        reconcile.kube, "namespace_labels",
+        lambda root, name: {MANAGED_BY_KEY: MANAGED_BY_VALUE},
+    )
+    deleted = []
+    monkeypatch.setattr(
+        reconcile.kube, "delete",
+        lambda root, target, **k: deleted.append(k.get("label") or target),
+    )
+    fake_helm.installed["ceph-csi-rbd"] = "3.0.0"
+    fake_helm.installed["ceph-csi-cephfs"] = "3.0.0"
+    fake_helm.values["ceph-csi-rbd"] = CEPH_RBD_VALUES
+    result = reconcile.converge(_pool_ctx(tmp_path, {"ceph": dict(CEPH)}))
+    assert fake_helm.uninstalls == ["ceph-csi-cephfs"]
+    assert not fake_helm.upgrades  # the wanted rbd chart is left up to date
+    assert deleted == ["namespace ceph-csi-cephfs"]
+    assert result["entries"]["ceph"]["charts"] == {
+        "ceph-csi-cephfs": "removed", "ceph-csi-rbd": "up_to_date",
+    }
+
+
+def test_converge_takes_the_turned_off_chart_s_secret_with_it(
+    tmp_path, fake_helm, no_kube, monkeypatch
+):
+    # the csi Secret of the chart whose flag was turned off goes too, while
+    # the wanted chart's Secret is left in place
+    monkeypatch.setattr(reconcile.kube, "exists", lambda root, target, **k: True)
+    monkeypatch.setattr(
+        reconcile.kube, "namespace_labels",
+        lambda root, name: {MANAGED_BY_KEY: MANAGED_BY_VALUE},
+    )
+    deleted = []
+    monkeypatch.setattr(
+        reconcile.kube, "delete",
+        lambda root, target, **k: deleted.append(yaml.safe_load(k["input"])["metadata"]["name"]),
+    )
+    fake_helm.installed["ceph-csi-cephfs"] = "3.0.0"
+    reconcile.converge(_pool_ctx(tmp_path, {
+        "ceph": dict(CEPH, userID="kubernetes", userKey="AQC0secretkey==")
+    }))
+    assert fake_helm.uninstalls == ["ceph-csi-cephfs"]
+    assert deleted == ["csi-cephfs-secret", "ceph-csi-cephfs"]
 
 
 def test_values_change_triggers_upgrade(tmp_path, fake_helm, no_kube):
@@ -496,6 +554,20 @@ def test_destroy_leaves_an_unlabelled_ceph_namespace(tmp_path, monkeypatch):
     assert log == ["uninstall ceph-csi-rbd"]
 
 
+def test_destroy_removes_a_ceph_chart_whose_flag_was_turned_off(tmp_path, monkeypatch):
+    # destroy probes both charts: the release of a flag turned off earlier
+    # goes with its namespace, same as the wanted one
+    log = []
+    _stub(monkeypatch, log, releases=("ceph-csi-rbd", "ceph-csi-cephfs"), exists=True)
+    reconcile.destroy(_pool_ctx(tmp_path, {"ceph": dict(CEPH)}))
+    assert log == [
+        "uninstall ceph-csi-cephfs",
+        "uninstall ceph-csi-rbd",
+        "delete namespace ceph-csi-rbd",
+        "delete namespace ceph-csi-cephfs",
+    ]
+
+
 class LiveCluster:
     """A kube stand-in whose apply really merges labels onto live namespaces.
 
@@ -662,7 +734,8 @@ def test_disabled_entry_removes_a_namespace_no_enabled_entry_needs(
 
 
 def test_disabled_ceph_clears_leftover_namespaces(tmp_path, fake_helm, no_kube, monkeypatch):
-    # the releases are already gone but the plugin's namespaces remain
+    # the releases are already gone but the plugin's namespaces remain; both
+    # charts are cleared, including one whose rbd:/fs: flag no longer names it
     (tmp_path / "kubeconfig").write_text("")
     monkeypatch.setattr(
         reconcile.kube, "namespace_labels",
@@ -675,7 +748,38 @@ def test_disabled_ceph_clears_leftover_namespaces(tmp_path, fake_helm, no_kube, 
     )
     result = reconcile.converge(_pool_ctx(tmp_path, {"ceph": dict(CEPH, enabled=False)}))
     assert result["entries"]["ceph"]["action"] == "absent"
-    assert deleted == ["namespace ceph-csi-rbd"]
+    assert deleted == ["namespace ceph-csi-rbd", "namespace ceph-csi-cephfs"]
+
+
+def test_disabled_ceph_removes_a_chart_whose_flag_was_turned_off(
+    tmp_path, fake_helm, no_kube, monkeypatch
+):
+    # fs was turned off (and the entry disabled) while the cephfs release was
+    # still installed: the disable still probes both charts and takes it down
+    monkeypatch.setattr(
+        reconcile.kube, "namespace_labels",
+        lambda root, name: {MANAGED_BY_KEY: MANAGED_BY_VALUE},
+    )
+    fake_helm.installed["ceph-csi-cephfs"] = "3.0.0"
+    result = reconcile.converge(_pool_ctx(tmp_path, {"ceph": dict(CEPH, enabled=False)}))
+    assert result["entries"]["ceph"]["action"] == "removed"
+    assert fake_helm.uninstalls == ["ceph-csi-cephfs"]
+
+
+def test_disabled_ceph_deletes_both_charts_secrets(tmp_path, fake_helm, no_kube, monkeypatch):
+    # both Secrets are probed alone, so one missing never reads as both gone;
+    # a flag no longer naming a chart does not keep its Secret either
+    monkeypatch.setattr(reconcile.kube, "exists", lambda root, target, **k: True)
+    deleted = []
+    monkeypatch.setattr(
+        reconcile.kube, "delete",
+        lambda root, target, **k: deleted.append(yaml.safe_load(k["input"])["metadata"]["name"]),
+    )
+    result = reconcile.converge(_pool_ctx(tmp_path, {
+        "ceph": dict(CEPH, enabled=False, userID="kubernetes", userKey="AQC0secretkey==")
+    }))
+    assert result["entries"]["ceph"]["action"] == "absent"
+    assert deleted == ["csi-rbd-secret", "csi-cephfs-secret"]
 
 
 def test_namespace_labels_reads_the_live_labels(tmp_path, monkeypatch):
@@ -1039,3 +1143,14 @@ def test_check_reports_ceph_not_installed(tmp_path, fake_helm, no_kube):
     report = reconcile.check(_pool_ctx(tmp_path, {"ceph": dict(CEPH)}))
     assert report["ok"] is False
     assert report["entries"]["ceph"] == "not_installed"
+
+
+def test_check_fails_while_a_turned_off_chart_is_still_installed(tmp_path, fake_helm, no_kube):
+    # converge would uninstall the chart the fs flag no longer names, so its
+    # presence is drift -- the same contract every other release answers to
+    fake_helm.installed["ceph-csi-rbd"] = "3.0.0"
+    fake_helm.installed["ceph-csi-cephfs"] = "3.0.0"
+    fake_helm.values["ceph-csi-rbd"] = CEPH_RBD_VALUES
+    report = reconcile.check(_pool_ctx(tmp_path, {"ceph": dict(CEPH)}))
+    assert report["ok"] is False
+    assert report["entries"]["ceph"] == "drifted"

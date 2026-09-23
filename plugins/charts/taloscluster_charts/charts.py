@@ -259,6 +259,12 @@ CEPH_SECRET_NAMES = {
 CEPH_PSA = ("privileged", "privileged", "privileged")
 
 
+# both ceph-csi charts, in driver order. Disable and destroy probe every one
+# of them, so a chart whose rbd:/fs: flag was turned off goes away with its
+# Secret and namespace instead of staying behind orphaned.
+CEPH_CHARTS = ("ceph-csi-rbd", "ceph-csi-cephfs")
+
+
 def ceph_charts(entry: Entry) -> tuple[str, ...]:
     """The ceph-csi charts the entry enables; release name == chart name."""
     charts: tuple[str, ...] = ()
@@ -317,16 +323,24 @@ def ceph_namespace(chart: str) -> Namespace:
     return Namespace(chart, *CEPH_PSA)
 
 
+def ceph_secret(secrets: CephSecrets, chart: str) -> dict[str, Any]:
+    """One ceph-csi chart's csi Secret document.
+
+    A removal probes each Secret alone: a both-charts probe reads one missing
+    Secret as all of them gone and would skip the delete entirely.
+    """
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": CEPH_SECRET_NAMES[chart], "namespace": chart},
+        "stringData": {"userID": secrets.user_id, "userKey": secrets.user_key},
+    }
+
+
 def ceph_secrets_manifest(secrets: CephSecrets, entry: Entry) -> str:
     """The csi Secret(s) the enabled charts' provisioners and node plugins read."""
-    documents = []
-    for chart in ceph_charts(entry):
-        documents.append(
-            {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {"name": CEPH_SECRET_NAMES[chart], "namespace": chart},
-                "stringData": {"userID": secrets.user_id, "userKey": secrets.user_key},
-            }
-        )
-    return yaml.safe_dump_all(documents, explicit_start=True, default_flow_style=False)
+    return yaml.safe_dump_all(
+        [ceph_secret(secrets, chart) for chart in ceph_charts(entry)],
+        explicit_start=True,
+        default_flow_style=False,
+    )
