@@ -63,7 +63,7 @@ Extra Talos system extensions merged with the QEMU guest agent (VM pools only �
 
 Optional · list of YAML documents as strings · default empty
 
-Freeform machine-config patches applied to every node. Pool-level `config_patches` are applied after these, so a pool patch wins on conflict.
+Freeform machine-config patches applied to every node. Pool-level `config_patches` are applied after these, so a pool patch wins on conflict. Patches must match the machine-config document layout of the Talos version the node runs: up to 1.13 that is the `v1alpha1` fields (`machine.install`, `machine.kubelet`, `machine.nodeLabels`, `cluster.apiServer`), from 1.14 those fields moved into typed documents (`UnattendedInstallConfig`, `KubeNodeConfig`, `KubeletConfig`, `KubeAPIServerConfig`), and Talos refuses a patch that sets the retired `v1alpha1` home. Converge generates each node's config for the version that node runs, so during a Talos minor upgrade the same patch cannot serve both layouts — one that reaches an existing 1.13 node must be written in the `v1alpha1` form, and switched to the typed documents once the node has been upgraded. Settings that kept their shape, such as `machine.time` or `cluster.inlineManifests`, patch the same on both.
 
 ### `talos.kubespan`
 

@@ -17,9 +17,10 @@ The hostname rides the same ``HostnameConfig`` document every node's
 configuration carries -- Talos has accepted it, and
 ``machine.install.grubUseUKICmdline``, since 1.12, older than the minimum
 supported ``talos.version`` -- so the generated config is used as the client
-emits it, whatever ``--talos-version`` says. A metal machine is configured in
-maintenance mode where the running Talos matches the version its install media
-was built for.
+emits it, following the document layout of the ``--talos-version`` it names
+(v1alpha1 fields up to 1.13, typed documents from 1.14 on). A metal machine is
+configured in maintenance mode where the running Talos matches the version its
+install media was built for.
 """
 
 from __future__ import annotations
@@ -118,16 +119,15 @@ def _machine(server: MetalServer, cfg: Config) -> Machine:
     )
 
 
-def _machine_patch(server: MetalServer, cfg: Config, endpoint: Endpoint,
-                   installer_image: str,
-                   default_tags: dict[str, str] | None = None) -> dict:
+def _machine_patch(server: MetalServer, cfg: Config,
+                   default_tags: dict[str, str] | None = None,
+                   talos_version: str | None = None) -> dict | list[dict]:
     m = _machine(server, cfg)
-    patch = machineconfig._machine_patch(
-        m, cfg, endpoint, installer_image, server.disk, default_tags
-    )
     # a group on its own L2 pins the pod node IP to that L2, not the cluster's
-    patch["machine"]["kubelet"]["nodeIP"]["validSubnets"] = [server.network.cidr]
-    return patch
+    return machineconfig._machine_patch(
+        m, cfg, server.disk, default_tags,
+        node_cidr=server.network.cidr, talos_version=talos_version,
+    )
 
 
 def _with_prefix(address: str, cidr: str) -> str:
@@ -419,6 +419,7 @@ def build_config(
     endpoint: Endpoint,
     default_tags: dict[str, str] | None = None,
     kubernetes_version: str | None = None,
+    talos_version: str | None = None,
 ) -> str:
     """Return one metal machine's machine-config YAML string.
 
@@ -438,9 +439,14 @@ def build_config(
     and the return-path pod's kube-proxy image: `metal apply` passes the
     running cluster's version so a machine joined after a `kubernetes.version`
     bump never starts newer than the API server -- the target is only for a
-    cluster that has never been bootstrapped.
+    cluster that has never been bootstrapped. `talos_version` overrides the
+    document layout the same way (the version a joined machine RUNS decides
+    the layout its config push is generated in); a machine being configured in
+    maintenance mode runs its install media, so the default target is right
+    for it.
     """
     kubernetes = kubernetes_version or cfg.kubernetes_version
+    talos = talos_version or cfg.talos_version
     host = server.name
     m = _machine(server, cfg)
     # the cluster's LUKS2 passphrase, when the secrets carry one: a machine
@@ -451,7 +457,7 @@ def build_config(
         patches = [
             machineconfig._write(
                 workdir, f"{host}-machine",
-                _machine_patch(server, cfg, endpoint, installer_image, default_tags),
+                _machine_patch(server, cfg, default_tags, talos_version=talos),
             ),
             machineconfig._write(
                 workdir, f"{host}-hostname", machineconfig._hostname_patch(m)
@@ -469,7 +475,7 @@ def build_config(
                 machineconfig._write(
                     workdir, f"{host}-cluster",
                     machineconfig._cluster_patch(
-                        cfg, endpoint, node_cidr=server.network.cidr
+                        cfg, node_cidr=server.network.cidr, talos_version=talos,
                     ),
                 )
             )
@@ -533,8 +539,9 @@ def build_config(
             install_image=installer_image,
             install_disk=server.disk,
             kubernetes_version=kubernetes,
-            talos_version=cfg.talos_version,
+            talos_version=talos,
             patches=patches,
+            additional_sans=[endpoint.advertised_address],
         )
     generated = [doc for doc in yaml.safe_load_all(raw) if doc]
     return yaml.safe_dump_all(generated, sort_keys=False, explicit_start=True)

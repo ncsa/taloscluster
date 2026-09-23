@@ -253,6 +253,65 @@ def test_running_install_disk_targets_the_machineconfig_resource(monkeypatch):
     assert "get" in seen["args"] and "machineconfig" in seen["args"]
 
 
+# A 1.14 machine config: the install left the v1alpha1 document for the typed
+# `UnattendedInstallConfig` one, whose diskSelector is generated from
+# `--install-disk` as `disk.dev_path == "<disk>"`.
+UNATTENDED_OUTPUT = """\
+node: 192.0.2.61
+---
+metadata:
+    namespace: config
+    type: MachineConfigs.config.talos.dev
+    id: v1alpha1
+    version: 2
+    phase: running
+spec: |
+    version: v1alpha1
+    machine:
+        type: worker
+    ---
+    apiVersion: v1alpha1
+    kind: UnattendedInstallConfig
+    installer:
+        image: factory.talos.dev/metal-installer/abc:v1.14.0
+    provisioning:
+        diskSelector:
+            match: disk.dev_path == "/dev/sda"
+        wipe: true
+"""
+
+
+def test_running_install_disk_reads_the_unattended_install_document(monkeypatch):
+    """On Talos 1.14 the v1alpha1 document carries no machine.install any more;
+    the disk is read from the UnattendedInstallConfig document's selector, so
+    the metal disk-move guard keeps working against a 1.14 node."""
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: UNATTENDED_OUTPUT)
+    got = talosctl.running_install_disk(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    assert got == "/dev/sda"
+
+
+def test_running_install_disk_empty_when_the_selector_does_not_name_a_disk(monkeypatch):
+    out = (
+        "node: 192.0.2.61\n"
+        "---\n"
+        "metadata:\n"
+        "    id: v1alpha1\n"
+        "spec: |\n"
+        "    version: v1alpha1\n"
+        "    machine:\n"
+        "        type: worker\n"
+        "    ---\n"
+        "    apiVersion: v1alpha1\n"
+        "    kind: UnattendedInstallConfig\n"
+        "    provisioning:\n"
+        "        wipe: true\n"
+    )
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: out)
+    assert talosctl.running_install_disk(
+        Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+    ) == ""
+
+
 # A realistic `get members -o json` stream: separate JSON objects, NOT an array.
 # controlplane-01 carries the shared kube-api VIP among its private ips, and the
 # members differ in talos version (a rollout in flight).

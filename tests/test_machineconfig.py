@@ -39,6 +39,20 @@ def cfg(make_config):
 
 
 @pytest.fixture
+def cfg_typed(make_config):
+    """The same cluster pinned to a Talos minor whose generated config carries
+    the typed document layout instead of the v1alpha1 fields (at a kubernetes
+    version the pinned Talos runs)."""
+    return make_config({
+        "controlplane": {"count": 1, "flavor": "gp.medium", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "gp.xlarge", "disk": 50}},
+        "tailscale": {"login_server": "https://headscale.example.com"},
+        "talos": {"version": "v1.14.0"},
+        "kubernetes": {"version": "v1.33.0"},
+    })
+
+
+@pytest.fixture
 def cfg_with_key(make_config):
     """The same cluster with a tailscale pre-auth key configured."""
     return make_config({
@@ -57,49 +71,56 @@ def ep() -> Endpoint:
 
 
 # ---------------------------------------------------------------------------
-# _machine_patch
+# typed_documents
 # ---------------------------------------------------------------------------
 
-def test_machine_patch_has_no_provider_networking(cfg, ep):
+def test_typed_documents_follows_the_talos_minor():
+    assert machineconfig.typed_documents("v1.13.9") is False
+    assert machineconfig.typed_documents("v1.14.0") is True
+    assert machineconfig.typed_documents("v1.15.1") is True
+    assert machineconfig.typed_documents("nonsense") is False
+
+
+# ---------------------------------------------------------------------------
+# _machine_patch (v1alpha1 layout, Talos up to 1.13)
+# ---------------------------------------------------------------------------
+
+def test_machine_patch_has_no_provider_networking(cfg):
     """Networking is a provider contribution; the shared patch never sets it."""
     for m in cfg.machines.values():
-        patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER, DISK)
+        patch = machineconfig._machine_patch(m, cfg, DISK)
         assert "network" not in patch["machine"]
         assert "pods" not in patch["machine"]
 
 
-def test_machine_patch_certsans_contains_fip(cfg, ep):
-    m = cfg.machines["testcluster-controlplane-01"]
-    patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER, DISK)
-    assert FIP in patch["machine"]["certSANs"]
+def test_machine_patch_carries_no_certsans(cfg):
+    """The endpoint SAN rides `--additional-sans` on gen config, which fills
+    the machine and API-server certSANs on every supported version."""
+    for m in cfg.machines.values():
+        patch = machineconfig._machine_patch(m, cfg, DISK)
+        assert "certSANs" not in patch["machine"]
 
 
-def test_machine_patch_install_image_is_installer_ref(cfg, ep):
-    for host in cfg.machines:
-        m = cfg.machines[host]
-        patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER, DISK)
-        assert patch["machine"]["install"]["image"] == INSTALLER
-        assert patch["machine"]["install"]["wipe"] is True
+def test_machine_patch_install_adds_only_the_wipe(cfg):
+    """`--install-disk`/`--install-image` fill the disk and image on gen
+    config; the patch only forces the wipe."""
+    for m in cfg.machines.values():
+        patch = machineconfig._machine_patch(m, cfg, DISK)
+        assert patch["machine"]["install"] == {"wipe": True}
 
 
-def test_machine_patch_install_disk_comes_from_contribution(cfg, ep):
-    m = cfg.machines["testcluster-controlplane-01"]
-    patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER, FAKE_DISK)
-    assert patch["machine"]["install"]["disk"] == FAKE_DISK
-
-
-def test_machine_patch_nodelabels_carry_role_and_pool(cfg, ep):
+def test_machine_patch_nodelabels_carry_role_and_pool(cfg):
     cp = cfg.machines["testcluster-controlplane-01"]
     wk = cfg.machines["testcluster-worker-01"]
-    cp_patch = machineconfig._machine_patch(cp, cfg, ep, INSTALLER, DISK)
-    wk_patch = machineconfig._machine_patch(wk, cfg, ep, INSTALLER, DISK)
+    cp_patch = machineconfig._machine_patch(cp, cfg, DISK)
+    wk_patch = machineconfig._machine_patch(wk, cfg, DISK)
     assert cp_patch["machine"]["nodeLabels"] == {
         "ncsa/role": "controlplane", "ncsa/pool": "controlplane"
     }
     assert wk_patch["machine"]["nodeLabels"] == {"ncsa/role": "worker", "ncsa/pool": "worker"}
 
 
-def test_machine_patch_nodelabels_include_tags_and_defaults(make_config, ep):
+def test_machine_patch_nodelabels_include_tags_and_defaults(make_config):
     cfg = make_config({
         "tags": {"team": "platform"},
         "workers": {"worker": {
@@ -108,7 +129,7 @@ def test_machine_patch_nodelabels_include_tags_and_defaults(make_config, ep):
         }},
     })
     m = cfg.machines["testcluster-worker-01"]
-    patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER, DISK,
+    patch = machineconfig._machine_patch(m, cfg, DISK,
                                          default_tags={"ncsa/project": "my project"})
     assert patch["machine"]["nodeLabels"] == {
         "ncsa/role": "worker",
@@ -119,25 +140,93 @@ def test_machine_patch_nodelabels_include_tags_and_defaults(make_config, ep):
     }
 
 
-def test_machine_patch_user_tag_overrides_default(make_config, ep):
+def test_machine_patch_user_tag_overrides_default(make_config):
     cfg = make_config({"tags": {"ncsa/project": "override"}})
     m = cfg.machines["testcluster-controlplane-01"]
-    patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER, DISK,
+    patch = machineconfig._machine_patch(m, cfg, DISK,
                                          default_tags={"ncsa/project": "bbdb"})
     assert patch["machine"]["nodeLabels"]["ncsa/project"] == "override"
 
 
-def test_machine_patch_kubelet_node_ip_pinned_to_cidr(cfg, ep):
+def test_machine_patch_kubelet_node_ip_pinned_to_cidr(cfg):
     m = cfg.machines["testcluster-controlplane-01"]
-    patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER, DISK)
+    patch = machineconfig._machine_patch(m, cfg, DISK)
     assert patch["machine"]["kubelet"]["nodeIP"]["validSubnets"] == [cfg.network.cluster.cidr]
     assert patch["machine"]["kubelet"]["extraArgs"]["rotate-server-certificates"] is True
 
 
-def test_machine_patch_time_servers_from_cfg(cfg, ep):
+def test_machine_patch_node_cidr_overrides_the_cluster_cidr(cfg):
+    """A node off the cluster network (a metal server) pins the pod node IP to
+    its own L2."""
+    m = cfg.machines["testcluster-worker-01"]
+    patch = machineconfig._machine_patch(m, cfg, DISK, node_cidr="203.0.113.0/24")
+    assert patch["machine"]["kubelet"]["nodeIP"]["validSubnets"] == ["203.0.113.0/24"]
+
+
+def test_machine_patch_time_servers_from_cfg(cfg):
     m = cfg.machines["testcluster-controlplane-01"]
-    patch = machineconfig._machine_patch(m, cfg, ep, INSTALLER, DISK)
+    patch = machineconfig._machine_patch(m, cfg, DISK)
     assert patch["machine"]["time"]["servers"] == cfg.network.ntp
+
+
+# ---------------------------------------------------------------------------
+# _machine_patch (typed document layout, Talos 1.14+)
+# ---------------------------------------------------------------------------
+
+def test_typed_machine_patch_moves_the_fields_into_the_typed_documents(cfg_typed):
+    """The settings 1.14 moved out of v1alpha1 ride the typed documents that
+    own them -- patching the v1alpha1 homes there is rejected as already set.
+    The kubelet arg is a string on the typed KubeletConfig, and the install
+    patch must restate the disk selector the UnattendedInstallConfig merge
+    would otherwise drop."""
+    m = cfg_typed.machines["testcluster-controlplane-01"]
+    patch = machineconfig._machine_patch(m, cfg_typed, DISK)
+    assert patch == [
+        {
+            "apiVersion": "v1alpha1",
+            "kind": "KubeNodeConfig",
+            "labels": {"ncsa/role": "controlplane", "ncsa/pool": "controlplane"},
+            "nodeIP": {"validSubnets": [cfg_typed.network.cluster.cidr]},
+        },
+        {
+            "apiVersion": "v1alpha1",
+            "kind": "KubeletConfig",
+            "extraArgs": {"rotate-server-certificates": "true"},
+        },
+        {
+            "apiVersion": "v1alpha1",
+            "kind": "UnattendedInstallConfig",
+            "provisioning": {
+                "diskSelector": {"match": f'disk.dev_path == "{DISK}"'},
+                "wipe": True,
+            },
+        },
+        {"machine": {"time": {"servers": cfg_typed.network.ntp}}},
+    ]
+
+
+def test_typed_machine_patch_node_cidr_overrides_the_cluster_cidr(cfg_typed):
+    m = cfg_typed.machines["testcluster-worker-01"]
+    patch = machineconfig._machine_patch(m, cfg_typed, DISK, node_cidr="203.0.113.0/24")
+    (kubenode,) = [d for d in patch if d.get("kind") == "KubeNodeConfig"]
+    assert kubenode["nodeIP"]["validSubnets"] == ["203.0.113.0/24"]
+
+
+def test_machine_patch_layout_follows_the_version_argument(cfg, cfg_typed):
+    """The layout comes from the version the config is generated for -- the
+    node's RUNNING one during a rollout -- not from cluster.yaml alone."""
+    # the config pins 1.14, but the node still runs 1.13: v1alpha1 layout
+    m = cfg_typed.machines["testcluster-controlplane-01"]
+    patch = machineconfig._machine_patch(m, cfg_typed, DISK, talos_version="v1.13.9")
+    assert patch["machine"]["nodeLabels"] == {
+        "ncsa/role": "controlplane", "ncsa/pool": "controlplane"
+    }
+    # and the reverse: a 1.13 cluster.yaml generating for a 1.14 node
+    m = cfg.machines["testcluster-controlplane-01"]
+    patch = machineconfig._machine_patch(m, cfg, DISK, talos_version="v1.14.0")
+    assert [d.get("kind") for d in patch if isinstance(d, dict)] == [
+        "KubeNodeConfig", "KubeletConfig", "UnattendedInstallConfig", None,
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +244,34 @@ def test_hostname_patch_auto_is_patch_delete(cfg):
     m = cfg.machines["testcluster-worker-01"]
     patch = machineconfig._hostname_patch(m)
     assert patch["auto"] == {"$patch": "delete"}
+
+
+# ---------------------------------------------------------------------------
+# _cluster_patch
+# ---------------------------------------------------------------------------
+
+def test_cluster_patch_schedules_off_the_control_planes(cfg):
+    """The v1alpha1 layout keeps the flag that keeps pods off the control
+    planes; the API-server certSANs are no patch (they ride --additional-sans)."""
+    patch = machineconfig._cluster_patch(cfg)
+    assert patch["cluster"]["allowSchedulingOnControlPlanes"] is False
+    assert "apiServer" not in patch["cluster"]
+    assert "certSANs" not in patch["cluster"]
+    assert patch["cluster"]["etcd"]["advertisedSubnets"] == [cfg.network.cluster.cidr]
+
+
+def test_typed_cluster_patch_drops_allow_scheduling(cfg_typed):
+    """1.14's generated KubeNodeConfig already taints control planes
+    NoSchedule, and the v1alpha1 flag is refused there as already set."""
+    patch = machineconfig._cluster_patch(cfg_typed)
+    assert "allowSchedulingOnControlPlanes" not in patch["cluster"]
+    assert patch["cluster"]["inlineManifests"] == machineconfig.EXTRA_MANIFESTS
+    assert patch["cluster"]["etcd"]["advertisedSubnets"] == [cfg_typed.network.cluster.cidr]
+
+
+def test_cluster_patch_node_cidr_keys_the_etcd_advertisement(cfg):
+    patch = machineconfig._cluster_patch(cfg, node_cidr="203.0.113.0/24")
+    assert patch["cluster"]["etcd"]["advertisedSubnets"] == ["203.0.113.0/24"]
 
 
 # ---------------------------------------------------------------------------
@@ -351,12 +468,11 @@ def test_build_configs_output_type_matches_role(cfg, monkeypatch, tmp_path):
 
 
 def test_build_configs_passes_contribution_disk_to_talosctl(cfg, monkeypatch, tmp_path, ep):
-    """A provider chooses its own install disk without touching this module."""
+    """A provider chooses its own install disk without touching this module:
+    it rides gen config's --install-disk (and the typed layout's UnattendedInstallConfig)."""
     calls = []
 
     def fake_gen_config(**kwargs):
-        # read the patch before the temporary workdir is cleaned up
-        kwargs["machine_patch"] = _yaml.safe_load(Path(kwargs["patches"][0]).read_text())
         calls.append(kwargs)
         return "CONFIG"
 
@@ -372,9 +488,68 @@ def test_build_configs_passes_contribution_disk_to_talosctl(cfg, monkeypatch, tm
 
     assert calls
     assert all(call["install_disk"] == FAKE_DISK for call in calls)
-    assert all(
-        call["machine_patch"]["machine"]["install"]["disk"] == FAKE_DISK for call in calls
+
+
+def test_build_configs_passes_the_advertised_address_as_additional_sans(
+    cfg, monkeypatch, tmp_path, ep
+):
+    """The endpoint SAN is a gen config flag, not a patch: it fills the machine
+    certSANs and the API server's on every supported layout."""
+    calls = []
+
+    def fake_gen_config(**kwargs):
+        calls.append(kwargs)
+        return "CONFIG"
+
+    monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+
+    machineconfig.build_configs(
+        cfg, cfg.machines, endpoint=ep, secrets_path=secrets_path,
+        installer_images=_installer_images(cfg),
+        contributions=_contributions(cfg),
     )
+
+    assert calls
+    assert all(call["additional_sans"] == [FIP] for call in calls)
+
+
+def test_build_configs_generates_the_running_layout_per_host(cfg_typed, monkeypatch, tmp_path):
+    """Each node's config is generated at the Talos version it RUNS: a node
+    still on 1.13 gets the v1alpha1 layout while a 1.14 node gets the typed
+    documents, and gen config's --talos-version matches the layout."""
+    calls = []
+
+    def fake_gen_config(**kwargs):
+        kwargs["documents"] = [
+            list(_yaml.safe_load_all(Path(p).read_text())) for p in kwargs["patches"]
+        ]
+        calls.append(kwargs)
+        return "CONFIG"
+
+    monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
+    secrets_path = tmp_path / "talossecrets.yaml"
+    secrets_path.write_text("dummy")
+
+    hosts = list(cfg_typed.machines)
+    assert len(hosts) == 2
+    machineconfig.build_configs(
+        cfg_typed, cfg_typed.machines, endpoint=Endpoint(vip=VIP, advertised_address=FIP),
+        secrets_path=secrets_path, installer_images=_installer_images(cfg_typed),
+        contributions=_contributions(cfg_typed),
+        talos_versions={hosts[0]: "v1.13.9"},  # hosts[1] absent -> the target
+    )
+
+    by_host = {Path(c["patches"][0]).name.removesuffix("-machine.yaml"): c for c in calls}
+    old, new = by_host[hosts[0]], by_host[hosts[1]]
+    assert old["talos_version"] == "v1.13.9"
+    assert new["talos_version"] == "v1.14.0"
+    (old_patch,) = old["documents"][0]
+    assert "nodeLabels" in old_patch["machine"]  # v1alpha1 layout
+    assert [d.get("kind") for d in new["documents"][0] if isinstance(d, dict)] == [
+        "KubeNodeConfig", "KubeletConfig", "UnattendedInstallConfig", None,
+    ]
 
 
 def test_build_configs_tailscale_patch_present_when_key_set(

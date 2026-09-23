@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from taloscluster import converge, versions
 from taloscluster.errors import ReconcileError
@@ -24,7 +25,7 @@ from taloscluster.infrastructure import (
     NetworkResult,
     TalosContribution,
 )
-from taloscluster.talos import machineconfig
+from taloscluster.talos import machineconfig, talosctl
 
 CFG = SimpleNamespace(kubernetes_version="v1.36.4")
 
@@ -133,6 +134,115 @@ def test_build_configs_passes_the_override_to_talosctl(make_config, monkeypatch,
     machineconfig.build_configs(cfg, cfg.machines, endpoint, tmp_path / "s",
                                 images, contributions)
     assert set(seen) == {cfg.kubernetes_version}
+
+
+# ---- talos document layout: the version a node RUNS decides ----------------
+
+def test_config_talos_versions_reads_the_running_versions_from_discovery(monkeypatch):
+    """Discovery reports each member's talos version in one call; that decides
+    the document layout each node's config is generated in."""
+    def fake_members(_talosconfig, _endpoint, exclude_vip=""):
+        return {
+            "c-01": talosctl.Member(address="192.0.2.1", version="v1.13.9"),
+            "w-01": talosctl.Member(address="192.0.2.2", version="v1.14.0"),
+        }
+
+    monkeypatch.setattr(converge.talosctl, "members", fake_members)
+    assert converge._config_talos_versions(
+        Path("talosconfig"), "cp-01", up=True
+    ) == {"c-01": "v1.13.9", "w-01": "v1.14.0"}
+
+
+def test_config_talos_versions_down_cluster_reads_nothing(monkeypatch):
+    monkeypatch.setattr(
+        converge.talosctl, "members",
+        lambda *_a: pytest.fail("must not ask a cluster that is down"),
+    )
+    assert converge._config_talos_versions(
+        Path("talosconfig"), "cp-01", up=False
+    ) == {}
+
+
+def test_config_talos_versions_unreadable_members_fall_back_to_the_target(monkeypatch):
+    """Discovery that answers nothing (a cluster never bootstrapped) leaves the
+    target version for every node, which is also what new nodes and metal
+    joins bake."""
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
+    assert converge._config_talos_versions(
+        Path("talosconfig"), "cp-01", up=True
+    ) == {}
+
+
+def test_converge_pushes_the_running_layout_to_a_13_node_while_the_target_is_14(
+    make_config, monkeypatch, tmp_path
+):
+    """End-to-end wiring of the layout choice: a 1.13 -> 1.14 rollout applies
+    configs BEFORE the Talos upgrade phase, so the config pushed to a node
+    still running 1.13 must be the v1alpha1 layout that Talos accepts (a 1.13
+    apid refuses the typed documents), while a node already on 1.14 gets the
+    typed documents. The upgrade then moves the 1.13 node to the target, and
+    the next apply switches it to the target layout."""
+    cfg = make_config({
+        "controlplane": {"count": 1, "flavor": "f", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
+        "talos": {"version": "v1.14.0"},
+        "kubernetes": {"version": "v1.33.0"},
+    })
+    backend = _ScaleUpAfterUpgradeBackend(InfrastructureInventory(machines={
+        "testcluster-controlplane-01": InfrastructureMachine(
+            "testcluster-controlplane-01"
+        ),
+        "testcluster-worker-01": InfrastructureMachine("testcluster-worker-01"),
+    }))
+    state = _ExistingSecretsState(tmp_path)
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+
+    calls = []
+
+    def fake_gen_config(**kwargs):
+        kwargs["documents"] = [
+            list(yaml.safe_load_all(Path(p).read_text())) for p in kwargs["patches"]
+        ]
+        calls.append(kwargs)
+        return "machine: {}"
+
+    monkeypatch.setattr(machineconfig.talosctl, "gen_config", fake_gen_config)
+    # the control plane still runs 1.13; the worker already runs the target
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {
+        "testcluster-controlplane-01": SimpleNamespace(
+            address="192.0.2.1", version="v1.13.9"),
+        "testcluster-worker-01": SimpleNamespace(
+            address="192.0.2.2", version="v1.14.0"),
+    })
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.33.0")
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_apply_configs", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    converge.converge(tmp_path)
+
+    assert len(calls) == 2
+    by_host = {Path(c["patches"][0]).name.removesuffix("-machine.yaml"): c for c in calls}
+    cp = by_host["testcluster-controlplane-01"]
+    wk = by_host["testcluster-worker-01"]
+    # the running minor decides the layout, not the cluster.yaml pin
+    assert cp["talos_version"] == "v1.13.9"
+    assert wk["talos_version"] == "v1.14.0"
+    (cp_machine,) = cp["documents"][0]
+    assert "nodeLabels" in cp_machine["machine"]  # the v1alpha1 layout
+    assert [d.get("kind") for d in wk["documents"][0] if isinstance(d, dict)] == [
+        "KubeNodeConfig", "KubeletConfig", "UnattendedInstallConfig", None,
+    ]  # the typed document layout
 
 
 # ---- scale-up during the same run as a kubernetes upgrade -----------------
@@ -494,6 +604,7 @@ def test_converge_scales_up_nodes_at_the_upgraded_version(
     def fake_build_configs(
         _cfg, machines, _endpoint, _secrets_path, _images,
         _contributions, default_tags=None, kubernetes_version=None,
+        talos_versions=None,
     ):
         calls.append(kubernetes_version)
         return {h: f"config/{h}" for h in machines}
@@ -503,6 +614,9 @@ def test_converge_scales_up_nodes_at_the_upgraded_version(
     # exercised: running (v1.34.4) is below the target (v1.36.4), a genuine upgrade
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: running)
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    # no talosctl binary on CI: discovery only decides the layout, which the
+    # stubbed build_configs absorbs
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
     monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
     monkeypatch.setattr(converge, "_apply_configs", lambda *a, **k: None)
     monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: None)
@@ -578,6 +692,7 @@ def test_converge_joins_metal_at_the_upgraded_version(make_config, monkeypatch, 
     def fake_build_configs(
         _cfg, machines, _endpoint, _secrets_path, _images,
         _contributions, default_tags=None, kubernetes_version=None,
+        talos_versions=None,
     ):
         vm_calls.append(kubernetes_version)
         return {h: f"config/{h}" for h in machines}
@@ -585,7 +700,8 @@ def test_converge_joins_metal_at_the_upgraded_version(make_config, monkeypatch, 
     metal_calls: list[tuple[str, str | None]] = []
 
     def fake_metal_build(server, _cfg, _secrets, _installer, _endpoint,
-                         default_tags=None, kubernetes_version=None):
+                         default_tags=None, kubernetes_version=None,
+                         talos_version=None):
         metal_calls.append((server.name, kubernetes_version))
         return f"metal-config/{server.name}@{kubernetes_version}"
 
@@ -598,6 +714,9 @@ def test_converge_joins_metal_at_the_upgraded_version(make_config, monkeypatch, 
     # exercised: running (v1.34.4) is below the target (v1.36.4), a genuine upgrade
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: running)
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    # no talosctl binary on CI: discovery only decides the layout, which the
+    # stubbed build_configs absorb
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
     # rp001 has no kube Node, so the compute phase joins it from maintenance mode,
     # which needs no BMC and is what `redfish: false` expects
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
@@ -780,6 +899,7 @@ def test_converge_recovers_a_missing_kubeconfig_and_keeps_upgrade_before_scale_u
     def fake_build_configs(
         _cfg, machines, _endpoint, _secrets_path, _images,
         _contributions, default_tags=None, kubernetes_version=None,
+        talos_versions=None,
     ):
         calls.append(kubernetes_version)
         return {h: f"config/{h}" for h in machines}
@@ -790,6 +910,9 @@ def test_converge_recovers_a_missing_kubeconfig_and_keeps_upgrade_before_scale_u
     monkeypatch.setattr(converge, "_recover_missing_kubeconfig", recover)
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: running)
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    # no talosctl binary on CI: discovery only decides the layout, which the
+    # stubbed build_configs absorbs
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
     monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
     monkeypatch.setattr(converge, "_apply_configs", lambda *a, **k: None)
     monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: None)
@@ -868,6 +991,7 @@ def test_converge_recovers_a_missing_kubeconfig_via_the_real_address_without_tai
     def fake_build_configs(
         _cfg, machines, _endpoint, _secrets_path, _images,
         _contributions, default_tags=None, kubernetes_version=None,
+        talos_versions=None,
     ):
         return {h: f"config/{h}" for h in machines}
 
@@ -875,6 +999,9 @@ def test_converge_recovers_a_missing_kubeconfig_via_the_real_address_without_tai
     monkeypatch.setattr(converge, "_recover_missing_kubeconfig", recover)
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.36.4")
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    # no talosctl binary on CI: discovery only decides the layout, which the
+    # stubbed build_configs absorbs
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
     monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
     monkeypatch.setattr(converge, "_apply_configs", lambda *a, **k: None)
     monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: None)
@@ -932,6 +1059,7 @@ def test_converge_plan_recovers_without_stubbing_phase_functions(
     def fake_build_configs(
         _cfg, _machines, _endpoint, _secrets_path, _images,
         _contributions, default_tags=None, kubernetes_version=None,
+        talos_versions=None,
     ):
         return {}
 
@@ -941,6 +1069,7 @@ def test_converge_plan_recovers_without_stubbing_phase_functions(
     # _scale_down/_upgrade reclaim paths, not membership discovery or node state,
     # so keep those probes from shelling out
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
     # dry-run recovery prognoses the cluster UP with no kubeconfig on disk, so
     # the running version read is empty -- exactly what kubectl returns against

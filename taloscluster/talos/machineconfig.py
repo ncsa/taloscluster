@@ -5,6 +5,13 @@ stacked as `--config-patch` on `talosctl gen config`, in this order:
   machine -> hostname -> (disk encryption) -> (cluster, controlplane only) ->
   firewall -> (kubespan) -> tailscale -> freeform.
 
+The patches follow the document layout the `--talos-version` given to gen
+config emits: the v1alpha1 fields up to 1.13, and from 1.14 on the typed
+documents (KubeNodeConfig, KubeletConfig, UnattendedInstallConfig) that own
+those fields -- a config that patches the v1alpha1 homes there is rejected.
+Converge picks the layout from the version each node RUNS, since configs are
+applied before the Talos upgrade phase.
+
 Kept as separate patch files on purpose: hostname (HostnameConfig) and tailscale
 (ExtensionServiceConfig) are their own machine-config documents, and the
 hostname patch relies on the `$patch: delete` directive to drop the `auto` field
@@ -28,6 +35,7 @@ from pathlib import Path
 
 import yaml
 
+from .. import versions
 from ..config import KUBESPAN_PORT, Config, ConfigError, Machine
 from ..infrastructure import Endpoint, TalosContribution
 from . import talosctl
@@ -535,22 +543,70 @@ def _node_labels(m: Machine, default_tags: dict[str, str] | None) -> dict[str, s
     return {k: _label_value(v) for k, v in labels.items()}
 
 
-def _machine_patch(m: Machine, cfg: Config, endpoint: Endpoint, installer_image: str,
-                   install_disk: str, default_tags: dict[str, str] | None = None) -> dict:
+# The first Talos minor whose generated config moves the machine and cluster
+# fields below into typed config documents; a config generated for an older
+# minor keeps the v1alpha1 fields, and a node refuses the layout its running
+# Talos does not know.
+TYPED_DOCUMENTS_MINOR = 14
+
+
+def typed_documents(talos_version: str) -> bool:
+    """Whether a config generated for this Talos version carries the typed
+    document layout (1.14+) instead of the v1alpha1 fields."""
+    parsed = versions.parse(talos_version)
+    return len(parsed) >= 2 and parsed[1] >= TYPED_DOCUMENTS_MINOR
+
+
+def _machine_patch(m: Machine, cfg: Config, install_disk: str,
+                   default_tags: dict[str, str] | None = None,
+                   node_cidr: str | None = None,
+                   talos_version: str | None = None) -> dict | list[dict]:
+    """The machine patch(es) for one node, in the layout `talos_version`'s gen
+    config emits (the cluster's target when not given).
+
+    The v1alpha1 layout (up to 1.13) patches the classic fields; from 1.14 the
+    same settings ride the typed documents that own them -- patching the
+    v1alpha1 homes there is rejected as already set. The install patch only
+    adds `wipe`: `--install-disk`/`--install-image` fill the disk and image on
+    the v1alpha1 layout and the installer image and disk selector on the typed
+    one, and the UnattendedInstallConfig merge drops the generated disk
+    selector unless the patch restates it. The endpoint certSANs are no patch
+    at all: `--additional-sans` fills machine.certSANs and the API server's on
+    both layouts. `node_cidr` keys the pod node IP on a node sitting off the
+    cluster network -- a metal server's own L2.
+    """
+    node_ip = {"validSubnets": [node_cidr or cfg.network.cluster.cidr]}
+    if typed_documents(talos_version or cfg.talos_version):
+        return [
+            {
+                "apiVersion": "v1alpha1",
+                "kind": "KubeNodeConfig",
+                "labels": _node_labels(m, default_tags),
+                "nodeIP": node_ip,
+            },
+            {
+                "apiVersion": "v1alpha1",
+                "kind": "KubeletConfig",
+                "extraArgs": {"rotate-server-certificates": "true"},
+            },
+            {
+                "apiVersion": "v1alpha1",
+                "kind": "UnattendedInstallConfig",
+                "provisioning": {
+                    "diskSelector": {"match": f'disk.dev_path == "{install_disk}"'},
+                    "wipe": True,
+                },
+            },
+            {"machine": {"time": {"servers": cfg.network.ntp}}},
+        ]
     return {
         "machine": {
-            "certSANs": [endpoint.advertised_address],
             "nodeLabels": _node_labels(m, default_tags),
             "kubelet": {
                 "extraArgs": {"rotate-server-certificates": True},
-                # pin node ip to the private net so pod traffic never rides tailscale
-                "nodeIP": {"validSubnets": [cfg.network.cluster.cidr]},
+                "nodeIP": node_ip,
             },
-            "install": {
-                "disk": install_disk,
-                "image": installer_image,
-                "wipe": True,
-            },
+            "install": {"wipe": True},
             "time": {"servers": cfg.network.ntp},
         }
     }
@@ -567,17 +623,19 @@ def _hostname_patch(m: Machine) -> dict:
     }
 
 
-def _cluster_patch(cfg: Config, endpoint: Endpoint, node_cidr: str | None = None) -> dict:
-    return {
-        "cluster": {
-            "allowSchedulingOnControlPlanes": False,
-            "inlineManifests": EXTRA_MANIFESTS,
-            "apiServer": {"certSANs": [endpoint.advertised_address]},
-            # keep etcd peering on the private network, off tailscale; a node
-            # off the cluster network (a metal group) advertises its own L2
-            "etcd": {"advertisedSubnets": [node_cidr or cfg.network.cluster.cidr]},
-        }
+def _cluster_patch(cfg: Config, node_cidr: str | None = None,
+                   talos_version: str | None = None) -> dict:
+    cluster: dict = {
+        "inlineManifests": EXTRA_MANIFESTS,
+        # keep etcd peering on the private network, off tailscale; a node
+        # off the cluster network (a metal group) advertises its own L2
+        "etcd": {"advertisedSubnets": [node_cidr or cfg.network.cluster.cidr]},
     }
+    if not typed_documents(talos_version or cfg.talos_version):
+        # 1.14's generated KubeNodeConfig already taints control planes
+        # NoSchedule; the v1alpha1 flag is refused there as already set
+        cluster["allowSchedulingOnControlPlanes"] = False
+    return {"cluster": cluster}
 
 
 # Ports the tailscale extension answers on for direct (non-relayed) peers.
@@ -738,6 +796,7 @@ def build_configs(
     contributions: dict[str, TalosContribution],
     default_tags: dict[str, str] | None = None,
     kubernetes_version: str | None = None,
+    talos_versions: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Return {hostname -> machine-config YAML string} for every machine.
 
@@ -749,7 +808,11 @@ def build_configs(
     through `talosctl upgrade-k8s` instead of a config push. It also retags the
     provider's return-path static pod (whose kube-proxy image is baked with the
     target) to the same running version so an upgrade never pulls the target
-    kube-proxy before its minor-by-minor step.
+    kube-proxy before its minor-by-minor step. `talos_versions` overrides
+    `cfg.talos_version` per hostname the same way -- the version a node RUNS
+    decides the document layout its config is generated in, since converge
+    applies configs before the Talos upgrade phase; a node absent from the map
+    (a fresh cluster, a scale-up, a metal join) gets the target version.
     """
     cluster_endpoint = f"https://{endpoint.advertised_address}:6443"
     configs: dict[str, str] = {}
@@ -768,10 +831,11 @@ def build_configs(
         for host, m in machines.items():
             installer_image = installer_images[m.extensions]
             contribution = contributions[host]
+            talos_version = (talos_versions or {}).get(host) or cfg.talos_version
             patches: list[Path] = [
                 _write(workdir, f"{host}-machine",
-                       _machine_patch(m, cfg, endpoint, installer_image,
-                                      contribution.install_disk, default_tags)),
+                       _machine_patch(m, cfg, contribution.install_disk,
+                                      default_tags, talos_version=talos_version)),
                 _write(workdir, f"{host}-hostname", _hostname_patch(m)),
             ]
             if passphrase:
@@ -781,7 +845,8 @@ def build_configs(
                 )
             if m.role == "controlplane":
                 patches.append(
-                    _write(workdir, f"{host}-cluster", _cluster_patch(cfg, endpoint))
+                    _write(workdir, f"{host}-cluster",
+                           _cluster_patch(cfg, talos_version=talos_version))
                 )
             patches.append(_write(workdir, f"{host}-firewall", _firewall_docs(cfg)))
             if cfg.kubespan:
@@ -816,7 +881,8 @@ def build_configs(
                 install_image=installer_image,
                 install_disk=contribution.install_disk,
                 kubernetes_version=kubernetes_version or cfg.kubernetes_version,
-                talos_version=cfg.talos_version,
+                talos_version=talos_version,
                 patches=patches,
+                additional_sans=[endpoint.advertised_address],
             )
     return configs

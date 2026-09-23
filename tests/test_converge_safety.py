@@ -1111,6 +1111,9 @@ def test_scale_down_wipes_a_vm_completely_and_leaves_metal_reusable(
         converge.talosctl, "etcd_members",
         lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
     )
+    # no talosctl binary on CI: the addresses under test come from the provider
+    # inventory and kubectl, not membership discovery
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
     inv = InfrastructureInventory(
         machines={
             "old-worker": InfrastructureMachine(
@@ -3541,12 +3544,13 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     built: list[dict] = []
 
     def fake_build(server, _cfg, _secrets, installer, endpoint,
-                   default_tags=None, kubernetes_version=None):
+                   default_tags=None, kubernetes_version=None, talos_version=None):
         built.append({
             "server": server.name,
             "installer": installer,
             "endpoint": endpoint,
             "kubernetes_version": kubernetes_version,
+            "talos_version": talos_version,
         })
         return f"metal-config:{server.name}"
 
@@ -3556,6 +3560,7 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
     monkeypatch.setattr(converge, "_require_final_health", lambda *a, **k: None)
     waited: list[set[str]] = []
 
@@ -3604,6 +3609,7 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
         "installer": "factory.talos.dev/metal-installer/m-sch:v1.13.0",
         "endpoint": SimpleNamespace(advertised_address="192.0.2.5", vip="192.0.2.5"),
         "kubernetes_version": "v1.31.0",
+        "talos_version": None,  # discovery reports no members: the target layout
     }]
     assert backend.seen_configs == {
         "phoenix-controlplane-01": "vm-config",
@@ -3669,6 +3675,7 @@ def test_converge_reports_a_failed_metal_join_as_incomplete(monkeypatch, tmp_pat
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
     monkeypatch.setattr(converge, "_require_final_health", lambda *a, **k: None)
     waited: list[set[str]] = []
 
@@ -3750,6 +3757,7 @@ def test_converge_leaves_a_machine_without_auto_join_to_metal_join(monkeypatch, 
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
     monkeypatch.setattr(converge, "_require_final_health", lambda *a, **k: None)
     waited: list[set[str]] = []
 

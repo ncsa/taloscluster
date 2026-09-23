@@ -83,9 +83,15 @@ def gen_config(
     kubernetes_version: str,
     talos_version: str,
     patches: list[Path],
+    additional_sans: list[str] | None = None,
 ) -> str:
     """Generate a single node's machine config to stdout, with the patch files
-    stacked in order (later patches win)."""
+    stacked in order (later patches win).
+
+    `additional_sans` names the endpoint in both the machine certSANs and the
+    API server's (certExtraSANs on the 1.14 typed-document layout) without a
+    version-specific patch for either.
+    """
     args = [
         "gen", "config", cluster, endpoint,
         "--with-secrets", str(secrets_path),
@@ -98,6 +104,8 @@ def gen_config(
         "--with-docs=false",
         "--with-examples=false",
     ]
+    for san in additional_sans or []:
+        args += ["--additional-sans", san]
     for p in patches:
         args += ["--config-patch", f"@{p}"]
     return _run(args, capture=True, quiet_stderr=True)
@@ -818,6 +826,11 @@ def running_extensions(talosconfig: Path, endpoint: str, node: str) -> list[str]
     return names
 
 
+# The disk selector a 1.14 UnattendedInstallConfig document states, generated
+# from `--install-disk` as `disk.dev_path == "<disk>"`.
+_DISK_SELECTOR_MATCH = re.compile(r'disk\.dev_path\s*==\s*"([^"]+)"')
+
+
 def running_install_disk(talosconfig: Path, endpoint: str, node: str) -> str:
     """The install disk the node's ACTIVE machine configuration names, or "".
 
@@ -827,6 +840,11 @@ def running_install_disk(talosconfig: Path, endpoint: str, node: str) -> str:
     the node runs names the disk its next Talos upgrade would install to, so
     this is the thing to compare a metal machine's configured `disk` against --
     before the apply phase rewrites the node's configuration to the new disk.
+
+    On Talos 1.14 the install left the v1alpha1 document for the typed
+    `UnattendedInstallConfig` one (`machine.install` is gone), so its
+    `provisioning.diskSelector.match` -- which `--install-disk` generates as
+    `disk.dev_path == "<disk>"` -- is parsed for the disk the same way.
     Raises when the node does not answer, so a caller that must tell
     "unreachable" from "no disk recorded" can catch it; "" covers a reply the
     disk cannot be read from, which is compared as unknown, never as a match.
@@ -837,6 +855,16 @@ def running_install_disk(talosconfig: Path, endpoint: str, node: str) -> str:
         capture=True,
     )
     for doc in _resource_docs(out):
+        # a 1.14 UnattendedInstallConfig document arrives as its own resource
+        # document, its fields at the top level
+        if doc.get("kind") == "UnattendedInstallConfig":
+            match = str(
+                ((doc.get("provisioning") or {}).get("diskSelector") or {}).get("match") or ""
+            )
+            found = _DISK_SELECTOR_MATCH.search(match)
+            if found:
+                return found.group(1)
+            continue
         spec = doc.get("spec")
         if isinstance(spec, str):
             try:

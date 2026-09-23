@@ -17,7 +17,8 @@ encryption patch (STATE and EPHEMERAL as LUKS2, keyed with the passphrase the
 cluster's talossecrets.yaml holds), and control planes end the stack with the
 metadata-policy patch and the vendored bootstrap manifests, whose embedded
 content is pinned by tests/test_machineconfig.py and
-tests/test_openstack_talos.py.
+tests/test_openstack_talos.py. The endpoint's certSANs ride gen config's
+``--additional-sans`` (machine and API server alike), so no patch carries them.
 
 Update the golden only when a machine-config change is intended.
 """
@@ -39,13 +40,12 @@ FIP = "203.0.113.10"
 
 MACHINE_PATCH = {
     "machine": {
-        "certSANs": [FIP],
         "nodeLabels": {"ncsa/role": "ROLE", "ncsa/pool": "POOL"},
         "kubelet": {
             "extraArgs": {"rotate-server-certificates": True},
             "nodeIP": {"validSubnets": ["192.168.0.0/21"]},
         },
-        "install": {"disk": "/dev/vda", "image": INSTALLER, "wipe": True},
+        "install": {"wipe": True},
         "time": {"servers": ["ntp.example.com"]},
     }
 }
@@ -64,7 +64,6 @@ CLUSTER_PATCH = {
             {"name": "metrics-server",
              "contents": machineconfig.METRICS_SERVER_MANIFEST},
         ],
-        "apiServer": {"certSANs": [FIP]},
         "etcd": {"advertisedSubnets": ["192.168.0.0/21"]},
     }
 }

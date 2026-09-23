@@ -270,6 +270,9 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             host: backend.talos_contribution(m, refs.kubernetes) for host, m in machines.items()
         }
         config_kubernetes_version = _config_kubernetes_version(cfg, kubeconfig_path, up)
+        config_talos_versions = _config_talos_versions(
+            talosconfig_path, cp1_endpoint, up
+        )
         configs = machineconfig.build_configs(
             cfg,
             machines,
@@ -279,12 +282,15 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             contributions,
             default_tags=default_tags,
             kubernetes_version=config_kubernetes_version,
+            talos_versions=config_talos_versions,
         )
         # a joined metal machine gets the same config push as the VM pools: its
         # configuration is generated from its own cabling plan and the metal
         # installer, at the same running kubernetes version the VMs bake, and
         # against the same provider-resolved endpoint (the vip a metal control
-        # plane holds, the advertised address in the certSANs)
+        # plane holds, the advertised address in the certSANs) -- and at the
+        # running Talos layout, which discovery does not report for a machine
+        # still waiting to join, so that one bakes the target
         for server in metal_servers:
             configs[server.name] = metal_talos.build_config(
                 server,
@@ -294,6 +300,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
                 refs.kubernetes,
                 default_tags=default_tags,
                 kubernetes_version=config_kubernetes_version,
+                talos_version=config_talos_versions.get(server.name),
             )
 
     # ---- 5. SCALE-DOWN ---------------------------------------------------
@@ -1469,6 +1476,31 @@ def _config_kubernetes_version(cfg: Config, kubeconfig: Path, up: bool) -> str:
         )
     info(f"machine configs keep kubernetes {cur}; upgrade-k8s moves the cluster to {want}")
     return cur
+
+
+def _config_talos_versions(
+    talosconfig: Path, endpoint: str, up: bool
+) -> dict[str, str]:
+    """The Talos version each joined node RUNS, keyed by hostname.
+
+    Converge applies machine configs before the Talos upgrade phase, so the
+    config a node is pushed must follow the document layout its RUNNING Talos
+    accepts -- a node still on 1.13 refuses the typed documents (KubeletConfig,
+    KubeNodeConfig, ...) a 1.14 layout is built from. Discovery reports each
+    member's version, so one call answers it for the whole cluster; a node the
+    discovery cannot place (or a cluster that is not up) reads as absent and
+    gets the target version, which is also what new nodes and metal joins
+    bake. The upgrade phase then moves a node to the target, and the next
+    apply switches it to the target layout.
+    """
+    if not up:
+        return {}
+    discovered = talosctl.members(talosconfig, endpoint)
+    return {
+        host: m.version
+        for host, m in discovered.items()
+        if m.version
+    }
 
 
 def _running_kubernetes_version(kubeconfig: Path) -> str | None:

@@ -144,7 +144,6 @@ def _build(
 
 MACHINE_PATCH = {
     "machine": {
-        "certSANs": [VIP],
         "nodeLabels": {
             "ncsa/role": "worker", "ncsa/pool": "phoenix",
             "ncsa/project": "bbdb", "team": "platform",
@@ -153,7 +152,7 @@ MACHINE_PATCH = {
             "extraArgs": {"rotate-server-certificates": True},
             "nodeIP": {"validSubnets": ["172.29.21.0/24"]},
         },
-        "install": {"disk": "/dev/sda", "image": INSTALLER, "wipe": True},
+        "install": {"wipe": True},
         "time": {"servers": ["ntp.example.com"]},
     }
 }
@@ -331,13 +330,12 @@ def test_metal_control_plane_on_another_l2_matches_golden(
 
     assert stack[0][0] == {
         "machine": {
-            "certSANs": [VIP],
             "nodeLabels": {"ncsa/role": "controlplane", "ncsa/pool": "phoenix"},
             "kubelet": {
                 "extraArgs": {"rotate-server-certificates": True},
                 "nodeIP": {"validSubnets": ["172.29.31.0/24"]},
             },
-            "install": {"disk": "/dev/sda", "image": INSTALLER, "wipe": True},
+            "install": {"wipe": True},
             "time": {"servers": ["ntp.example.com"]},
         }
     }
@@ -350,7 +348,6 @@ def test_metal_control_plane_on_another_l2_matches_golden(
                 {"name": "metrics-server",
                  "contents": machineconfig.METRICS_SERVER_MANIFEST},
             ],
-            "apiServer": {"certSANs": [VIP]},
             "etcd": {"advertisedSubnets": ["172.29.31.0/24"]},
         }
     }
@@ -790,23 +787,21 @@ def test_metal_on_openstack_uses_the_provider_endpoint(
         Endpoint(vip=OPENSTACK_TENANT_VIP, advertised_address=OPENSTACK_FLOATING_IP),
     )
 
-    # the floating ip is the endpoint and the only certSAN, as for the VMs
+    # the floating ip is the endpoint (the certSANs ride --additional-sans),
+    # as for the VMs
     assert seen["endpoint"] == f"https://{OPENSTACK_FLOATING_IP}:6443"
     assert seen["patches"][0] == [{
         "machine": {
-            "certSANs": [OPENSTACK_FLOATING_IP],
             "nodeLabels": {"ncsa/role": "controlplane", "ncsa/pool": "phoenix"},
             "kubelet": {
                 "extraArgs": {"rotate-server-certificates": True},
                 "nodeIP": {"validSubnets": ["192.168.0.0/21"]},
             },
-            "install": {"disk": "/dev/sda", "image": INSTALLER, "wipe": True},
+            "install": {"wipe": True},
             "time": {"servers": ["ntp.example.com"]},
         },
     }]
-    assert seen["patches"][2][0]["cluster"]["apiServer"] == {
-        "certSANs": [OPENSTACK_FLOATING_IP],
-    }
+    assert "apiServer" not in seen["patches"][2][0]["cluster"]
     # the control plane holds the tenant-network VIP on its cluster link
     vip = next(
         doc for group in seen["patches"] for doc in group
