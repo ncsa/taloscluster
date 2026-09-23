@@ -6,14 +6,20 @@ restricts them, intra-SG allow-all tcp+udp, and -- when a `metal` group sits on
 another L2 -- tcp+udp plus KubeSpan's UDP/51820 from that group's CIDR. Editing
 an allowlist in cluster.yaml converges here.
 
-This is the one place true diffing matters: we compute the desired ingress rule
-set as comparable tuples, then add the missing ones and delete the extra ones.
-Only INGRESS rules are touched -- Neutron's default egress allow-all rules are
-left alone.
+Egress is the metadata-service block: Neutron seeds every new security group
+with two allow-all egress rules, which are removed and replaced by rules
+allowing every destination except the Nova metadata address (IPv4 and the IPv6
+link-local form Neutron also answers on). That cuts node and masqueraded pod
+traffic to it under any CNI, in every namespace.
+
+This is the one place true diffing matters: we compute the desired ingress and
+egress rule sets as comparable tuples, then add the missing ones and delete the
+extra ones.
 """
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 
 from openstack.connection import Connection
@@ -29,11 +35,50 @@ from .tags import create_tagged
 # sg id at create time), None for open-to-all, or a foreign security-group id.
 SELF = "@self"
 
+# The metadata address Nova serves user_data at, and the IPv6 link-local form
+# Neutron also answers it on. Both are denied by egress rules: pod traffic is
+# masqueraded behind the node, so the security group cuts off every namespace
+# under any CNI.
+METADATA_V4 = "169.254.169.254/32"
+METADATA_V6 = "fe80::/10"
+
 
 def _normalize_cidr(cidr: str | None) -> str | None:
     """Normalize the wildcard prefix to None so clouds that materialize the
     default prefix don't flap add/delete against clouds that store null."""
     return None if cidr == "0.0.0.0/0" else cidr
+
+
+def _complement(cidr: str) -> list[str]:
+    """The CIDR set covering the whole address space minus `cidr`.
+
+    Each block keeps `cidr`'s first i prefix bits, flips bit i and clears
+    everything below it, so a /32 hole yields 32 blocks and a /10 hole 10.
+    """
+    net = ipaddress.ip_network(cidr)
+    addr = int(net.network_address)
+    # (int, prefix) tuples infer IPv4 when they fit, so pick the class directly
+    cls = ipaddress.IPv4Network if net.version == 4 else ipaddress.IPv6Network
+    blocks = []
+    for i in range(net.prefixlen):
+        bit = 1 << (net.max_prefixlen - 1 - i)
+        flipped = (addr ^ bit) & ~(bit - 1)
+        blocks.append(str(cls((flipped, i + 1))))
+    return blocks
+
+
+def _desired_egress_rules() -> dict[tuple, str]:
+    """desired egress rule tuple -> human description.
+
+    All-protocol rules for every CIDR around the metadata address, so the two
+    default allow-all egress rules can go away without opening anything else.
+    """
+    rules: dict[tuple, str] = {}
+    for cidr in _complement(METADATA_V4):
+        rules[("IPv4", None, None, None, cidr, None)] = f"egress allow {cidr}"
+    for cidr in _complement(METADATA_V6):
+        rules[("IPv6", None, None, None, cidr, None)] = f"egress allow {cidr}"
+    return rules
 
 
 def _desired_rules(cfg: Config) -> dict[tuple, str]:
@@ -82,6 +127,24 @@ def _rule_key(r: Any, sg_id: str) -> tuple | None:
     )
 
 
+def _egress_key(r: Any, sg_id: str) -> tuple | None:
+    """Normalize an existing Neutron rule to an egress-comparable tuple, or None
+    if it's not an egress rule we manage. Every egress rule is managed: the
+    desired set is the exact allowlist, so anything else (Neutron's seeded
+    allow-all pair included) is an extra to delete."""
+    ether = getattr(r, "ether_type", None) or getattr(r, "ethertype", None)
+    if r.direction != "egress" or ether not in ("IPv4", "IPv6"):
+        return None
+    return (
+        ether,
+        r.protocol,
+        r.port_range_min,
+        r.port_range_max,
+        _normalize_cidr(r.remote_ip_prefix),
+        r.remote_group_id,
+    )
+
+
 def reconcile(conn: Connection, cfg: Config, inv: Inventory) -> Any:
     cluster = cfg.name
     name = naming.secgroup_name(cluster)
@@ -107,22 +170,40 @@ def reconcile(conn: Connection, cfg: Config, inv: Inventory) -> Any:
         return None
 
     desired = _desired_rules(cfg)
+    desired_egress = _desired_egress_rules()
     existing = list(conn.network.security_group_rules(security_group_id=sg.id))
-    existing_keys = {}
+    ingress_keys: dict[tuple, Any] = {}
+    egress_keys: dict[tuple, Any] = {}
     for r in existing:
         key = _rule_key(r, sg.id)
         if key is not None:
-            existing_keys[key] = r
+            ingress_keys[key] = r
+            continue
+        key = _egress_key(r, sg.id)
+        if key is not None:
+            egress_keys[key] = r
 
     # add missing
     for key, desc in desired.items():
-        if key in existing_keys:
+        if key in ingress_keys:
             continue
         _create_rule(conn, sg, key, desc)
+    for key, desc in desired_egress.items():
+        if key in egress_keys:
+            continue
+        _create_egress_rule(conn, sg, key, desc)
 
     # delete extra ingress rules we manage but no longer want
-    for key, r in existing_keys.items():
+    for key, r in ingress_keys.items():
         if key not in desired:
+            action(f"delete security group rule {key}")
+            if not dry_run():
+                conn.network.delete_security_group_rule(r.id)
+
+    # delete extra egress rules -- Neutron seeds allow-all ones that would
+    # otherwise keep the metadata address reachable
+    for key, r in egress_keys.items():
+        if key not in desired_egress:
             action(f"delete security group rule {key}")
             if not dry_run():
                 conn.network.delete_security_group_rule(r.id)
@@ -132,13 +213,29 @@ def reconcile(conn: Connection, cfg: Config, inv: Inventory) -> Any:
 
 def _create_rule(conn, sg, key, desc) -> None:
     proto, pmin, pmax, remote_ip, remote_group = key
+    _post_rule(
+        conn, sg, direction="ingress", ethertype="IPv4", proto=proto, pmin=pmin,
+        pmax=pmax, remote_ip=remote_ip, remote_group=remote_group, desc=desc,
+    )
+
+
+def _create_egress_rule(conn, sg, key, desc) -> None:
+    ether, proto, pmin, pmax, remote_ip, _ = key
+    _post_rule(
+        conn, sg, direction="egress", ethertype=ether, proto=proto, pmin=pmin,
+        pmax=pmax, remote_ip=remote_ip, remote_group=None, desc=desc,
+    )
+
+
+def _post_rule(conn, sg, *, direction, ethertype, proto, pmin, pmax, remote_ip,
+               remote_group, desc) -> None:
     action(f"create security group rule: {desc}")
     if dry_run():
         return
     kwargs = dict(
         security_group_id=sg.id,
-        direction="ingress",
-        ethertype="IPv4",
+        direction=direction,
+        ethertype=ethertype,
         protocol=proto,
         description=desc,
     )

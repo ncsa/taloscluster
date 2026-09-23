@@ -32,7 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Exit nonzero from `check` when version data is incomplete, with `incomplete` and `incomplete_reasons` in the report.
 - Detect extension-only changes from the running schematic so adding or removing an extension reinstalls the node.
 - Refuse OpenStack flavor, disk and availability-zone changes with recreation guidance; update an existing subnet's DNS in place.
-- Deny pods in the default namespace the OpenStack metadata service with a NetworkPolicy shipped in the bootstrap manifests.
+- Block the OpenStack metadata service with security-group egress rules, keeping the bootstrap NetworkPolicy as defence in depth.
 - Warn that `network.dns` is not applied on DHCP-backed Proxmox networks.
 - Warn when a Proxmox cluster or external bridge MTU is below the configured `mtu`.
 - Refuse duplicate Proxmox VM names that involve a cluster-managed machine.

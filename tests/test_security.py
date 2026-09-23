@@ -1,6 +1,7 @@
 """Tests for taloscluster.openstack.security: desired-rule construction, the
 ``_rule_key`` normalizer that maps Neutron rule objects to comparable tuples,
-and the ``reconcile`` pass against a pre-populated rule set.
+the egress complement around the metadata service, and the ``reconcile`` pass
+against a pre-populated rule set.
 
 ``_desired_rules`` and ``_rule_key`` are pure functions over a :class:`Config`
 and a rule-like object. ``reconcile`` drives a fake network API carrying a
@@ -9,12 +10,22 @@ pre-populated rule set, so no OpenStack connection is needed.
 
 from __future__ import annotations
 
+import ipaddress
 import types
 
 import pytest
 
 from taloscluster import naming
-from taloscluster.openstack.security import SELF, _desired_rules, _rule_key, reconcile
+from taloscluster.openstack.security import (
+    METADATA_V4,
+    METADATA_V6,
+    SELF,
+    _desired_egress_rules,
+    _desired_rules,
+    _egress_key,
+    _rule_key,
+    reconcile,
+)
 from taloscluster.openstack.session import Inventory
 from taloscluster.output import set_dry_run
 
@@ -49,6 +60,12 @@ def _fake_rule(**kw) -> types.SimpleNamespace:
     )
     defaults.update(kw)
     return types.SimpleNamespace(**defaults)
+
+
+def _default_egress_rule(ether: str, id: str) -> types.SimpleNamespace:
+    """The allow-all egress rule Neutron seeds into every security group."""
+    return _fake_rule(id=id, direction="egress", ether_type=ether,
+                      ethertype=ether, protocol=None)
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +281,72 @@ def test_desired_rules_no_metal_cidr_rules_without_another_l2(make_config):
 
 
 # ---------------------------------------------------------------------------
+# desired egress rules (the metadata-service block)
+# ---------------------------------------------------------------------------
+
+def test_desired_egress_rules_exclude_the_metadata_address():
+    rules = _desired_egress_rules()
+    assert len(rules) == 42  # 32 IPv4 blocks around a /32, 10 IPv6 around a /10
+    for (ether, proto, pmin, pmax, remote_ip, group) in rules:
+        assert proto is None and pmin is None and pmax is None and group is None
+        assert ether in ("IPv4", "IPv6") and remote_ip is not None
+    assert not any(METADATA_V4 in k for k in rules)
+    assert not any(METADATA_V6 in k for k in rules)
+    # the default allow-all egress rules must never be a desired key
+    assert ("IPv4", None, None, None, None, None) not in rules
+    assert ("IPv6", None, None, None, None, None) not in rules
+
+
+def test_ipv4_egress_complement_covers_everything_but_the_metadata_address():
+    """Collapsing the 32 blocks with the metadata /32 back together must yield
+    exactly 0.0.0.0/0, and no block may contain the metadata address."""
+    blocks = [ipaddress.ip_network(k[4]) for k in _desired_egress_rules()
+              if k[0] == "IPv4"]
+    assert len(blocks) == 32
+    metadata = ipaddress.ip_network(METADATA_V4)
+    assert all(metadata not in b for b in blocks)
+    assert list(ipaddress.collapse_addresses([*blocks, metadata])) == [
+        ipaddress.ip_network("0.0.0.0/0")
+    ]
+
+
+def test_ipv6_egress_complement_covers_everything_but_link_local():
+    """The same complement around fe80::/10, so the link-local metadata
+    address Neutron also answers on stays denied."""
+    blocks = [ipaddress.ip_network(k[4]) for k in _desired_egress_rules()
+              if k[0] == "IPv6"]
+    assert len(blocks) == 10
+    link_local = ipaddress.ip_network(METADATA_V6)
+    assert all(link_local not in b for b in blocks)
+    # fe80::a9fe:a9fe is the link-local metadata form
+    assert all(ipaddress.ip_address("fe80::a9fe:a9fe") not in b for b in blocks)
+    assert list(ipaddress.collapse_addresses([*blocks, link_local])) == [
+        ipaddress.ip_network("::/0")
+    ]
+
+
+def test_egress_key_normalizes_an_egress_rule():
+    rules = _desired_egress_rules()
+    (ether, proto, pmin, pmax, cidr, _) = next(iter(rules))
+    r = _fake_rule(direction="egress", ethertype=ether, ether_type=ether,
+                   protocol=proto, port_range_min=pmin, port_range_max=pmax,
+                   remote_ip_prefix=cidr)
+    assert _egress_key(r, SG_ID) in rules
+
+
+def test_egress_key_returns_none_for_ingress_rules():
+    assert _egress_key(_fake_rule(direction="ingress"), SG_ID) is None
+
+
+def test_egress_key_materialized_wildcard_stays_an_extra():
+    """A re-materialized default allow-all rule (0.0.0.0/0 spelled out) still
+    normalizes to the null-form extra, never to a desired CIDR."""
+    r = _fake_rule(direction="egress", protocol=None,
+                   remote_ip_prefix="0.0.0.0/0")
+    assert _egress_key(r, SG_ID) == ("IPv4", None, None, None, None, None)
+
+
+# ---------------------------------------------------------------------------
 # reconcile against a pre-populated rule set
 # ---------------------------------------------------------------------------
 
@@ -283,6 +366,9 @@ class _FakeNetwork:
         self.created.append(kwargs)
         self._store.append(_fake_rule(
             id=f"r{self._seq}",
+            direction=kwargs.get("direction", "ingress"),
+            ethertype=kwargs.get("ethertype", "IPv4"),
+            ether_type=kwargs.get("ethertype", "IPv4"),
             protocol=kwargs.get("protocol"),
             port_range_min=kwargs.get("port_range_min"),
             port_range_max=kwargs.get("port_range_max"),
@@ -345,3 +431,61 @@ def test_reconcile_zero_cidr_host_is_idempotent_across_runs(make_config):
     _reconcile(net2, cfg)
     assert net2.created == []
     assert net2.deleted == []
+
+
+def test_reconcile_removes_the_default_egress_rules_and_installs_the_block(make_config):
+    """Neutron seeds two allow-all egress rules; reconcile deletes both and
+    creates the 42 CIDR rules around the metadata address instead."""
+    cfg = make_config()
+    net = _FakeNetwork([
+        _default_egress_rule("IPv4", "d1"),
+        _default_egress_rule("IPv6", "d2"),
+    ])
+    _reconcile(net, cfg)
+    assert sorted(net.deleted) == ["d1", "d2"]
+    egress = [c for c in net.created if c.get("direction") == "egress"]
+    assert len(egress) == 42
+    assert len([c for c in egress if c["ethertype"] == "IPv4"]) == 32
+    assert len([c for c in egress if c["ethertype"] == "IPv6"]) == 10
+    for c in egress:
+        assert c["protocol"] is None
+        assert c["remote_ip_prefix"] not in (None, METADATA_V4, METADATA_V6)
+    # the ingress diff is unchanged: every created ingress rule names a protocol
+    assert not any(c.get("direction") == "ingress" and c.get("protocol") is None
+                   for c in net.created)
+
+
+def test_reconcile_egress_is_idempotent_across_runs(make_config):
+    """A second reconcile over the converged rule set makes no changes: the
+    created egress rules normalize back into the desired set."""
+    cfg = make_config()
+    net = _FakeNetwork([
+        _default_egress_rule("IPv4", "d1"),
+        _default_egress_rule("IPv6", "d2"),
+    ])
+    _reconcile(net, cfg)
+    net2 = _FakeNetwork(net._store)
+    _reconcile(net2, cfg)
+    assert net2.created == []
+    assert net2.deleted == []
+
+
+def test_reconcile_picks_the_block_up_on_an_existing_cluster(make_config):
+    """An existing cluster's SG (ingress-only, defaults still seeded) gets the
+    egress block on its next converge without disturbing converged ingress
+    rules."""
+    cfg = make_config(SECURITY_OVERRIDES)
+    net = _FakeNetwork([
+        _default_egress_rule("IPv4", "d1"),
+        _default_egress_rule("IPv6", "d2"),
+        _fake_rule(id="i1", protocol="tcp", port_range_min=50000,
+                   port_range_max=50000, remote_ip_prefix="10.0.0.0/24"),
+    ])
+    _reconcile(net, cfg)
+    assert sorted(net.deleted) == ["d1", "d2"]
+    # the converged talos rule is neither duplicated nor re-created
+    assert not any(
+        c.get("direction") == "ingress"
+        and c.get("remote_ip_prefix") == "10.0.0.0/24"
+        for c in net.created
+    )

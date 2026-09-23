@@ -2,8 +2,8 @@
 
 OpenStack needs the virtio boot disk and the network documents that keep DHCP
 on ``eth0`` and put the Layer 2 API VIP on it. Control planes also carry a
-bootstrap NetworkPolicy keeping pods off the Nova metadata service, which
-serves the machine config delivered as user_data for the instance's lifetime.
+bootstrap NetworkPolicy denying pods the Nova metadata service as defence in
+depth behind the security group's egress block (see ``security.py``).
 """
 
 from __future__ import annotations
@@ -23,12 +23,11 @@ INSTALLER_PLATFORM = "openstack"
 # the metadata address for the instance's whole lifetime -- pod egress to it is
 # masqueraded behind the node, so an unprivileged pod could read a control
 # plane's config (the CA keys, the join tokens, the tailscale key) and take
-# over the cluster. The Talos firewall is ingress-only, so the block ships as a
-# NetworkPolicy in the bootstrap manifests instead: pods in the default
-# namespace may egress anywhere except the metadata address. It enforces
-# nothing under a CNI that ignores NetworkPolicy (Talos's default, Flannel),
-# and namespaces created after bootstrap are not covered -- the residual
-# exposure is stated in docs/providers/openstack.md.
+# over the cluster. The Talos firewall is ingress-only and no CNI is shipped,
+# so the real block lives in the cluster security group's egress rules
+# (openstack.security): they deny every namespace under any CNI. This
+# NetworkPolicy repeats the block for pods in the default namespace as defence
+# in depth on CNIs that do enforce NetworkPolicy.
 CLOUD_METADATA_CIDR = "169.254.169.254/32"
 METADATA_POLICY_NAME = "block-cloud-metadata"
 
@@ -46,7 +45,8 @@ def _subnet_gateway(cidr: str) -> str:
 def metadata_policy_patch() -> TalosPatch:
     """The bootstrap NetworkPolicy denying pods the metadata service.
 
-    The control plane's cluster config embeds the manifest under
+    Defence in depth behind the security group's egress block. The control
+    plane's cluster config embeds the manifest under
     ``cluster.inlineManifests``, so Talos applies it with the rest of the
     bootstrap manifests. Egress is allowed everywhere except the metadata
     address, so the policy changes nothing else about pod networking.
