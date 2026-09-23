@@ -1075,7 +1075,9 @@ def test_converge_plan_recovers_without_stubbing_phase_functions(
     # so keep those probes from shelling out
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
     monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
-    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
+    # with the real kubectl against the missing kubeconfig this answers None
+    # (query failed), not False (node absent) -- the plan must still complete
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: None)
     # dry-run recovery prognoses the cluster UP with no kubeconfig on disk, so
     # the running version read is empty -- exactly what kubectl returns against
     # a missing file. The plan must complete rather than abort.

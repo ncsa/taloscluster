@@ -2031,7 +2031,17 @@ def _node_present(kubeconfig: Path, name: str) -> bool:
     and Talos upgrade would be silently dropped while the run still exits
     clean. The failure is raised instead, and a re-run once the api answers
     again applies to whatever was missed.
+
+    A dry run with no non-empty kubeconfig on disk is the one exception: the
+    query there can never succeed (a real run writes the file, or recovers it
+    from the restored identity, before any probe), so it reads as "absent" and
+    the node is skipped, like `_scale_down` reading the missing file as an
+    empty live set -- raising would abort every such plan.
     """
+    if dry_run() and not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
+        # a dry run with no non-empty kubeconfig on disk probes no node list;
+        # with no nodes known present there is nothing to configure or upgrade
+        return False
     exists = kubectl.node_exists(kubeconfig, name)
     if exists is None:
         raise ReconcileError(
