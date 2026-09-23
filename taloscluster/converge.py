@@ -2985,8 +2985,19 @@ def destroy(root: Path, assume_yes: bool = False) -> int:
 
     # Plugins still run before provider teardown, while the cluster is
     # reachable, but only after the user has confirmed the entire destroy.
+    # Without a kubeconfig the cluster never bootstrapped, so converge never
+    # reached its plugin phase and the destroy hooks have nothing to remove;
+    # charts and argocd cannot even query it without the file. Skip them
+    # instead of failing a destroy that was already confirmed.
     ctx = Context(root=root, cfg=cfg)
-    failed = _run_plugins(ctx, "destroy", reverse=True, assume_yes=assume_yes)
+    if ctx.kubeconfig.is_file() and ctx.kubeconfig.stat().st_size > 0:
+        failed = _run_plugins(ctx, "destroy", reverse=True, assume_yes=assume_yes)
+    else:
+        info(
+            "no kubeconfig: the cluster never bootstrapped, "
+            "so the plugin destroy hooks have nothing to remove"
+        )
+        failed = 0
 
     backend.destroy_resources(inv)
 

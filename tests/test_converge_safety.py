@@ -1559,6 +1559,7 @@ def test_destroy_decline_happens_before_plugin_teardown(monkeypatch, tmp_path):
         converge, "_run_plugins", lambda *_a, **_kw: plugin_calls.append("destroy") or 0
     )
     monkeypatch.setattr("builtins.input", lambda _prompt: "no")
+    (tmp_path / "kubeconfig").write_text("apiVersion: v1\n")
 
     with pytest.raises(SystemExit, match="aborted"):
         converge.destroy(tmp_path)
@@ -1578,6 +1579,7 @@ def test_destroy_yes_skips_prompt_and_runs_plugin_teardown(monkeypatch, tmp_path
     monkeypatch.setattr(
         "builtins.input", lambda _prompt: pytest.fail("--yes must not prompt")
     )
+    (tmp_path / "kubeconfig").write_text("apiVersion: v1\n")
 
     assert converge.destroy(tmp_path, assume_yes=True) == 0
     assert plugin_calls == ["destroy"]
@@ -1594,8 +1596,62 @@ def test_destroy_continues_teardown_after_plugin_destroy_failure(monkeypatch, tm
     monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
     monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_kw: 1)
     monkeypatch.setattr("builtins.input", lambda _prompt: cfg.name)
+    (tmp_path / "kubeconfig").write_text("apiVersion: v1\n")
 
     assert converge.destroy(tmp_path, assume_yes=True) == 1
+    assert backend.mutations == ["destroy"]
+
+
+def test_destroy_without_kubeconfig_skips_plugin_teardown(monkeypatch, tmp_path, capsys):
+    """A cluster that never bootstrapped has no kubeconfig, so its destroy
+    hooks have nothing to remove and cannot even query the cluster (charts
+    needs `helm list`, argocd renders the secret from the kubeconfig): they
+    are skipped instead of failing a destroy that was already confirmed."""
+    cfg = SimpleNamespace(name="testcluster")
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    backend = FakeBackend()
+    monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
+    monkeypatch.setattr(
+        converge, "_run_plugins", lambda *_a, **_kw: pytest.fail("plugins must not run")
+    )
+
+    assert converge.destroy(tmp_path, assume_yes=True) == 0
+    assert backend.mutations == ["destroy"]
+    assert "never bootstrapped" in capsys.readouterr().out
+
+
+def test_destroy_with_empty_kubeconfig_skips_plugin_teardown(monkeypatch, tmp_path):
+    """A zero-byte kubeconfig is no kubeconfig: converge only treats the file
+    as a bootstrapped cluster when it has content, and destroy skips its
+    plugin hooks on the same terms."""
+    cfg = SimpleNamespace(name="testcluster")
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    backend = FakeBackend()
+    monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
+    monkeypatch.setattr(
+        converge, "_run_plugins", lambda *_a, **_kw: pytest.fail("plugins must not run")
+    )
+    (tmp_path / "kubeconfig").write_text("")
+
+    assert converge.destroy(tmp_path, assume_yes=True) == 0
+    assert backend.mutations == ["destroy"]
+
+
+def test_destroy_with_kubeconfig_still_runs_plugin_teardown(monkeypatch, tmp_path):
+    """A bootstrapped cluster keeps its plugin cleanup: the external
+    registrations (Rancher, ArgoCD) must be removed before the destroy."""
+    cfg = SimpleNamespace(name="testcluster")
+    plugin_calls: list[str] = []
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    backend = FakeBackend()
+    monkeypatch.setattr(converge, "backend_for", lambda *_a: backend)
+    monkeypatch.setattr(
+        converge, "_run_plugins", lambda *_a, **_kw: plugin_calls.append("destroy") or 0
+    )
+    (tmp_path / "kubeconfig").write_text("apiVersion: v1\n")
+
+    assert converge.destroy(tmp_path, assume_yes=True) == 0
+    assert plugin_calls == ["destroy"]
     assert backend.mutations == ["destroy"]
 
 
