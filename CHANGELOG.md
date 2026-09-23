@@ -53,7 +53,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Fail config applies, bootstraps, upgrades image removal and truncated image downloads with the same reconcile error type plugins already catch.
+- Fail config applies, bootstraps, upgrades image removal and image download failures with the same reconcile error type plugins already catch.
 - Give plugins the cluster's provider name in their context on every provider.
 - **Breaking:** require Proxmox 9 or newer (refusing `destroy` as well as converge); pin 0.7.x to tear down a Proxmox 8 cluster.
 - **Breaking:** merge `secrets.yaml` into the cluster configuration through the `include` list (the scaffold lists it), so credentials — plugin ones included — can live in any included file; a `cluster.yaml` that does not include it no longer reads it, and a listed file that is missing refuses to load — `check` reads it as empty, with a warning, so it still gates CI.

@@ -99,19 +99,22 @@ def _build_image(conn: Connection, talos_version: str, schematic: str, name: str
 def _download_and_decompress(url: str, dest_raw: Path) -> None:
     """Stream the .raw.xz from the factory and lzma-decompress it to dest_raw,
     without holding the whole image in memory."""
-    with requests.get(url, stream=True, timeout=(30, 600)) as resp:
-        resp.raise_for_status()
-        decomp = lzma.LZMADecompressor()
-        n = 0
-        with open(dest_raw, "wb") as out:
-            for chunk in resp.iter_content(chunk_size=_CHUNK):
-                if chunk:
-                    n += len(chunk)
-                    out.write(decomp.decompress(chunk))
-        expected = resp.headers.get("Content-Length")
-        if expected is not None and n != int(expected):
-            raise ReconcileError(f"truncated download from {url}: got {n} of {expected} bytes")
-        if not decomp.eof:
-            raise ReconcileError(
-                f"truncated download from {url} -- refusing to upload a corrupt image"
-            )
+    try:
+        with requests.get(url, stream=True, timeout=(30, 600)) as resp:
+            resp.raise_for_status()
+            decomp = lzma.LZMADecompressor()
+            n = 0
+            with open(dest_raw, "wb") as out:
+                for chunk in resp.iter_content(chunk_size=_CHUNK):
+                    if chunk:
+                        n += len(chunk)
+                        out.write(decomp.decompress(chunk))
+            expected = resp.headers.get("Content-Length")
+            if expected is not None and n != int(expected):
+                raise ReconcileError(f"truncated download from {url}: got {n} of {expected} bytes")
+            if not decomp.eof:
+                raise ReconcileError(
+                    f"truncated download from {url} -- refusing to upload a corrupt image"
+                )
+    except (requests.RequestException, lzma.LZMAError) as e:
+        raise ReconcileError(f"image download from {url} failed: {e}") from e

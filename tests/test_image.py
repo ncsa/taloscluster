@@ -15,6 +15,7 @@ import lzma
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 from taloscluster.errors import ReconcileError
 from taloscluster.openstack import image
@@ -209,6 +210,52 @@ def test_download_and_decompress_truncated_does_not_produce_full_image(monkeypat
         image._download_and_decompress("http://factory/img.raw.xz", dest)
     # whatever landed on disk is not the complete original
     assert dest.read_bytes() != original
+
+
+# ---------------------------------------------------------------------------
+# download failures surface as ReconcileError, not a raw exception
+# ---------------------------------------------------------------------------
+
+def test_download_and_decompress_wraps_http_error(monkeypatch, tmp_path):
+    """A factory response with an error status raises ReconcileError, the typed
+    error `cli.main` reports as one ERROR: line."""
+    class ErrorResponse(FakeResponse):
+        def raise_for_status(self):
+            raise requests.HTTPError("404 Client Error: Not Found")
+
+    _patch_get(monkeypatch, ErrorResponse([], content_length=None))
+
+    dest = tmp_path / "talos.raw"
+    with pytest.raises(ReconcileError, match="image download from .* failed"):
+        image._download_and_decompress("http://factory/img.raw.xz", dest)
+    assert not dest.exists()
+
+
+def test_download_and_decompress_wraps_connection_error(monkeypatch, tmp_path):
+    """A download that cannot connect at all raises ReconcileError."""
+
+    def refused(*a, **k):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(image.requests, "get", refused)
+
+    dest = tmp_path / "talos.raw"
+    with pytest.raises(ReconcileError, match="image download from .* failed"):
+        image._download_and_decompress("http://factory/img.raw.xz", dest)
+    assert not dest.exists()
+
+
+def test_download_and_decompress_wraps_corrupt_stream(monkeypatch, tmp_path):
+    """A stream whose xz payload is corrupt raises ReconcileError instead of a
+    raw lzma error."""
+    compressed = lzma.compress(b"hello talos" * 1000)
+    corrupt = compressed[:40] + b"GARBAGE" * 10
+    fake = FakeResponse(_chunked(corrupt), content_length=len(corrupt))
+    _patch_get(monkeypatch, fake)
+
+    dest = tmp_path / "talos.raw"
+    with pytest.raises(ReconcileError, match="image download from .* failed"):
+        image._download_and_decompress("http://factory/img.raw.xz", dest)
 
 
 def test_nocloud_installer_and_iso_urls_use_the_same_schematic():
