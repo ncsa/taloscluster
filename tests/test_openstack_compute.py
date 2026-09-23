@@ -222,31 +222,71 @@ def test_validate_tolerates_an_unreadable_boot_volume(make_config):
 # ---- restart -------------------------------------------------------------------
 
 class FakeRebootConn:
-    def __init__(self):
+    """A compute proxy cycling one server through a soft reboot.
+
+    ``get_server`` hands out the scripted statuses in order and repeats the
+    last one; ``wait_for_server`` records the status of the server it was
+    handed, so a wait fed the cached already-ACTIVE inventory object (which
+    the SDK returns from immediately) cannot pass for a waited-out reboot.
+    """
+
+    def __init__(self, statuses=("ACTIVE", "REBOOT", "REBOOT")):
         self.calls = []
+        self._statuses = list(statuses)
         self.compute = types.SimpleNamespace(
-            reboot_server=self._reboot, wait_for_server=self._wait
+            reboot_server=self._reboot, get_server=self._get, wait_for_server=self._wait
         )
 
     def _reboot(self, server_id, reboot_type):
         self.calls.append(("reboot", server_id, reboot_type))
 
+    def _get(self, server_id):
+        status = self._statuses.pop(0) if len(self._statuses) > 1 else self._statuses[0]
+        self.calls.append(("get", status))
+        return types.SimpleNamespace(id=server_id, status=status)
+
     def _wait(self, server, status, wait):
-        self.calls.append(("wait", status, wait))
+        self.calls.append(("wait", getattr(server, "status", None), status, wait))
 
 
 def _owned_server():
     server = _server()
     server.id = "server-1"
+    # Nova keeps a server ACTIVE until the guest starts shutting down, so the
+    # inventory object carries exactly the stale-ACTIVE status a soft reboot
+    # starts from
+    server.status = "ACTIVE"
     return server
 
 
-def test_restart_node_soft_reboots_the_server_and_waits_for_it(make_config):
+def test_restart_node_polls_a_fresh_server_until_the_reboot_starts(make_config, monkeypatch):
+    monkeypatch.setattr("taloscluster.openstack.compute.time.sleep", lambda _s: None)
     conn = FakeRebootConn()
 
     compute.restart_node(conn, "testcluster-controlplane-01", _inventory_with(_owned_server()))
 
-    assert conn.calls == [("reboot", "server-1", "SOFT"), ("wait", "ACTIVE", 300)]
+    # the inventory object is already ACTIVE; the reboot is only waited out
+    # through fresh get_server polls -- down first, then the SDK's wait for the
+    # new boot, fed the freshly fetched (non-ACTIVE) server
+    assert conn.calls == [
+        ("reboot", "server-1", "SOFT"),
+        ("get", "ACTIVE"),
+        ("get", "REBOOT"),
+        ("get", "REBOOT"),
+        ("wait", "REBOOT", "ACTIVE", 300),
+    ]
+
+
+def test_restart_node_fails_when_the_server_never_leaves_active(make_config, monkeypatch):
+    monkeypatch.setattr("taloscluster.openstack.compute.time.sleep", lambda _s: None)
+    clock = iter([0, 301])
+    monkeypatch.setattr(
+        "taloscluster.openstack.compute.time.monotonic", lambda: next(clock)
+    )
+    conn = FakeRebootConn(["ACTIVE"])
+
+    with pytest.raises(ReconcileError, match="never left ACTIVE after the soft reboot"):
+        compute.restart_node(conn, "testcluster-controlplane-01", _inventory_with(_owned_server()))
 
 
 def test_restart_node_refuses_an_unknown_server(make_config):

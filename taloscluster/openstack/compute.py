@@ -19,6 +19,7 @@ delete_on_termination.
 from __future__ import annotations
 
 import base64
+import time
 
 from openstack.connection import Connection
 
@@ -27,6 +28,9 @@ from ..config import Config, Machine
 from ..errors import ReconcileError
 from ..output import action, dry_run, info
 from .session import Inventory
+
+_RESTART_TIMEOUT_S = 300
+_RESTART_POLL_S = 2
 
 
 def reconcile(
@@ -240,7 +244,33 @@ def restart_node(conn: Connection, host: str, inv: Inventory) -> None:
     action(f"restart server {host}")
     if not dry_run():
         conn.compute.reboot_server(server.id, reboot_type="SOFT")
-        conn.compute.wait_for_server(server, status="ACTIVE", wait=300)
+        _wait_rebooted(conn, server.id)
+
+
+def _wait_rebooted(conn: Connection, server_id: str) -> None:
+    """Wait out a just-issued soft reboot: down first, then active again.
+
+    The reboot is async and Nova keeps reporting ACTIVE until the guest has
+    actually started shutting down, so ``wait_for_server`` handed the cached
+    inventory object -- already ACTIVE when the reboot was issued -- returns
+    immediately and the restart would end before the reboot happened. A fresh
+    ``get_server`` is polled until the status leaves ACTIVE (the signal the
+    reboot really started); the SDK then waits out the new boot from the
+    freshly fetched server.
+    """
+    deadline = time.monotonic() + _RESTART_TIMEOUT_S
+    while True:
+        status = str(getattr(conn.compute.get_server(server_id), "status", "") or "")
+        if status.upper() != "ACTIVE":
+            break
+        if time.monotonic() >= deadline:
+            raise ReconcileError(
+                f"server {server_id} never left ACTIVE after the soft reboot"
+            )
+        time.sleep(_RESTART_POLL_S)
+    conn.compute.wait_for_server(
+        conn.compute.get_server(server_id), status="ACTIVE", wait=_RESTART_TIMEOUT_S
+    )
 
 
 def delete_node(conn: Connection, host: str, inv: Inventory) -> None:

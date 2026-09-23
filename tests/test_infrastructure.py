@@ -223,6 +223,8 @@ def test_openstack_restart_machine_soft_reboots_through_nova(make_config):
     backend.conn = types.SimpleNamespace(
         compute=types.SimpleNamespace(
             reboot_server=lambda sid, reboot_type: calls.append(("reboot", sid, reboot_type)),
+            # already cycling: the fresh fetch the down-wait polls reports REBOOT
+            get_server=lambda sid: types.SimpleNamespace(id=sid, status="REBOOT"),
             wait_for_server=lambda _s, status, wait: calls.append(("wait", status, wait)),
         )
     )
