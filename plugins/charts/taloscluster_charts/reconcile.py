@@ -184,7 +184,7 @@ def converge(ctx: Context, assume_yes: bool = False) -> dict:
     failed: list[str] = []
     for entry in _ordered(cfg.entries):
         try:
-            result[entry.name] = _converge_entry(entry, ctx, pool, gateway_on)
+            result[entry.name] = _converge_entry(entry, ctx, cfg.entries, pool, gateway_on)
         except ReconcileError as e:
             warn(f"charts: {e}")
             failed.append(entry.name)
@@ -193,12 +193,14 @@ def converge(ctx: Context, assume_yes: bool = False) -> dict:
     return {"entries": result}
 
 
-def _converge_entry(entry: Entry, ctx: Context, pool: tuple[str, ...], gateway_on: bool) -> dict:
+def _converge_entry(
+    entry: Entry, ctx: Context, entries: dict[str, Entry], pool: tuple[str, ...], gateway_on: bool
+) -> dict:
     if entry.is_manifest:
         return _converge_manifest(entry, ctx)
     if entry.name == "ceph":
         return _converge_ceph(entry, ctx)
-    return _converge_chart(entry, ctx, pool, gateway_on)
+    return _converge_chart(entry, ctx, entries, pool, gateway_on)
 
 
 def _converge_manifest(entry: Entry, ctx: Context) -> dict:
@@ -233,7 +235,9 @@ def _converge_manifest(entry: Entry, ctx: Context) -> dict:
     }
 
 
-def _converge_chart(entry: Entry, ctx: Context, pool: tuple[str, ...], gateway_on: bool) -> dict:
+def _converge_chart(
+    entry: Entry, ctx: Context, entries: dict[str, Entry], pool: tuple[str, ...], gateway_on: bool
+) -> dict:
     root, kubeconfig = ctx.root, ctx.kubeconfig
     namespace = _namespace_of(entry)
     record = helm.release(kubeconfig, entry.name, namespace)
@@ -245,10 +249,13 @@ def _converge_chart(entry: Entry, ctx: Context, pool: tuple[str, ...], gateway_o
             _delete_pool(root, pool)
         if entry.name == "cert-manager":
             _delete_issuers(root, entry)
-        if record is None:
-            return {"action": "absent", "kind": "chart"}
-        helm.uninstall(kubeconfig, entry.name, namespace)
-        return {"action": "removed", "kind": "chart"}
+        if record is not None:
+            helm.uninstall(kubeconfig, entry.name, namespace)
+        if entry.namespace:
+            _delete_namespace(
+                root, entry.namespace.name, shared_with=_namespace_sharers(entries, entry)
+            )
+        return {"action": "removed" if record is not None else "absent", "kind": "chart"}
 
     if entry.namespace:
         _converge_namespace(entry.namespace, root)
@@ -387,20 +394,14 @@ def _converge_ceph(entry: Entry, ctx: Context) -> dict:
         present = any(
             helm.release(kubeconfig, chart, chart) is not None for chart in charts_wanted
         )
-        if not present:
-            return {"action": "absent", "kind": "chart"}
         for chart in reversed(charts_wanted):
             if helm.release(kubeconfig, chart, chart) is not None:
                 helm.uninstall(kubeconfig, chart, chart)
         if secrets:
             _delete_ceph_secrets(root, secrets, entry)
         for chart in charts_wanted:
-            kube.delete(
-                root, "-", label=f"namespace {chart}", input=charts.namespace_manifest(
-                    charts.ceph_namespace(chart)
-                )
-            )
-        return {"action": "removed", "kind": "chart"}
+            _delete_namespace(root, chart)
+        return {"action": "removed" if present else "absent", "kind": "chart"}
 
     for chart in charts_wanted:
         _converge_namespace(charts.ceph_namespace(chart), root)
@@ -468,8 +469,28 @@ def _converge_pool(root, pool: tuple[str, ...], namespace: str) -> None:
     kube.apply(root, "-", label="metallb pool resources", input=manifest)
 
 
+def _namespace_manifest_for(root, namespace: Namespace) -> str:
+    """The namespace manifest converge and check target on this cluster.
+
+    A namespace that does not exist yet, or one already carrying the
+    managed-by label -- the plugin created it -- is converged to the full,
+    labelled manifest; a namespace that pre-existed without the label is
+    converged to its PSA labels only, so the ownership marker disable and
+    destroy delete on is never stamped onto a namespace the plugin did not
+    create. A failed label read counts as not ours: the marker is never
+    added on a guess.
+    """
+    full = charts.namespace_manifest(namespace)
+    if not kube.exists(root, "-", input=full):
+        return full
+    labels = kube.namespace_labels(root, namespace.name)
+    if labels is not None and labels.get(charts.MANAGED_BY_KEY) == charts.MANAGED_BY_VALUE:
+        return full
+    return charts.namespace_manifest(namespace, owned=False)
+
+
 def _converge_namespace(namespace: Namespace, root) -> None:
-    manifest = charts.namespace_manifest(namespace)
+    manifest = _namespace_manifest_for(root, namespace)
     if kube.exists(root, "-", input=manifest) and kube.matches(root, "-", input=manifest):
         info(f"namespace {namespace.name} up to date")
         return
@@ -479,6 +500,55 @@ def _converge_namespace(namespace: Namespace, root) -> None:
         return
     log(f"ensure namespace {namespace.name}")
     kube.apply(root, "-", label=f"namespace {namespace.name}", input=manifest)
+
+
+# namespaces a cluster cannot live without; the api server refuses to delete
+# them and that failure would abort the rest of the run
+PROTECTED_NAMESPACES = frozenset({"default", "kube-system", "kube-public"})
+
+
+def _namespace_sharers(entries: dict[str, Entry], entry: Entry) -> tuple[str, ...]:
+    """The other enabled entries converging into this entry's namespace.
+
+    A disable may not remove a namespace another enabled entry still uses;
+    destroy passes none, since every entry goes and nothing shares it after.
+    """
+    if not entry.namespace:
+        return ()
+    return tuple(
+        name
+        for name, other in entries.items()
+        if name != entry.name
+        and other.enabled
+        and other.namespace
+        and other.namespace.name == entry.namespace.name
+    )
+
+
+def _delete_namespace(root, name: str, *, shared_with: tuple[str, ...] = ()) -> None:
+    """Delete a namespace the plugin created, and only such a namespace.
+
+    The plugin's namespace manifests carry the managed-by label, so one that
+    pre-existed or was created by something else -- which never carries it --
+    is left alone, as is a namespace another enabled entry still converges
+    into. The cluster's own namespaces are never deleted: the api server
+    refuses that and the failure would abort the rest of the run.
+    """
+    if name in PROTECTED_NAMESPACES:
+        warn(f"charts: namespace {name} is one of the cluster's own; leaving it in place")
+        return
+    if shared_with:
+        info(f"namespace {name} is still used by {', '.join(shared_with)}; leaving it in place")
+        return
+    labels = kube.namespace_labels(root, name)
+    if labels is None:
+        return
+    if labels.get(charts.MANAGED_BY_KEY) != charts.MANAGED_BY_VALUE:
+        info(f"namespace {name} was not created by the plugin; leaving it in place")
+        return
+    kube.delete(
+        root, "-", label=f"namespace {name}", input=charts.namespace_manifest(Namespace(name))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +713,7 @@ def _check_entry(
         upgrade_available[entry.name] = drift.detail
 
     if entry.namespace and not kube.matches(
-        root, "-", input=charts.namespace_manifest(entry.namespace)
+        root, "-", input=_namespace_manifest_for(root, entry.namespace)
     ):
         return False, "drifted"
     if entry.name == "metallb" and pool:
@@ -690,12 +760,7 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
             if secrets:
                 _delete_ceph_secrets(root, secrets, entry)
             for chart in charts.ceph_charts(entry):
-                kube.delete(
-                    root,
-                    "-",
-                    label=f"namespace {chart}",
-                    input=charts.namespace_manifest(charts.ceph_namespace(chart)),
-                )
+                _delete_namespace(root, chart)
             continue
         namespace = _namespace_of(entry)
         if entry.name == "metallb" and pool:
@@ -709,12 +774,7 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
         if helm.release(kubeconfig, entry.name, namespace) is not None:
             helm.uninstall(kubeconfig, entry.name, namespace)
         if entry.namespace:
-            kube.delete(
-                root,
-                "-",
-                label=f"namespace {entry.namespace.name}",
-                input=charts.namespace_manifest(Namespace(entry.namespace.name)),
-            )
+            _delete_namespace(root, entry.namespace.name)
     info("done")
 
 

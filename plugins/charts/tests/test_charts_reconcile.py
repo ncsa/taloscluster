@@ -12,6 +12,7 @@ from taloscluster import output
 from taloscluster.errors import ConfigError, PreflightError, ReconcileError
 
 from taloscluster_charts import reconcile
+from taloscluster_charts.charts import MANAGED_BY_KEY, MANAGED_BY_VALUE
 from taloscluster_charts.config import Config
 
 
@@ -88,7 +89,7 @@ def fake_helm(monkeypatch):
 
 @pytest.fixture
 def no_kube(monkeypatch):
-    """Stub kubectl; by default everything matches (nothing to apply)."""
+    """Stub kubectl; by default the cluster is empty and everything matches."""
     calls = {"apply": [], "delete": [], "matches": True}
     monkeypatch.setattr(reconcile.kube, "matches", lambda *a, **k: calls["matches"])
     monkeypatch.setattr(
@@ -98,6 +99,7 @@ def no_kube(monkeypatch):
         reconcile.kube, "delete", lambda root, target, **k: calls["delete"].append(target)
     )
     monkeypatch.setattr(reconcile.kube, "exists", lambda root, target, **k: False)
+    monkeypatch.setattr(reconcile.kube, "namespace_labels", lambda root, name: None)
     monkeypatch.setattr(reconcile.kube, "wait_deployment_available", lambda *a, **k: True)
     monkeypatch.setattr(reconcile, "preflight_tools", lambda tools=None: None)
     return calls
@@ -354,11 +356,19 @@ def test_disabled_metallb_deletes_pool_before_uninstall(tmp_path, monkeypatch):
     _stub(monkeypatch, log, releases=("metallb",), exists=True)
     result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {"enabled": False}}))
     assert result["entries"]["metallb"]["action"] == "removed"
-    assert log == ["delete metallb pool resources", "uninstall metallb"]
+    assert log == [
+        "delete metallb pool resources",
+        "uninstall metallb",
+        "delete namespace metallb-system",
+    ]
 
 
-def _stub(monkeypatch, log, releases=(), exists=True):
-    """Wire helm/kubectl stubs that append human-readable steps to `log`."""
+def _stub(monkeypatch, log, releases=(), exists=True, managed=True):
+    """Wire helm/kubectl stubs that append human-readable steps to `log`.
+
+    `managed` controls whether the live namespaces carry the plugin's
+    managed-by label, the ownership marker deletes go through.
+    """
 
     def release(kubeconfig, name, namespace):
         if name in releases:
@@ -375,6 +385,11 @@ def _stub(monkeypatch, log, releases=(), exists=True):
         reconcile.kube,
         "delete",
         lambda root, target, label="", input=None: log.append(f"delete {label}"),
+    )
+    monkeypatch.setattr(
+        reconcile.kube,
+        "namespace_labels",
+        lambda root, name: {MANAGED_BY_KEY: MANAGED_BY_VALUE} if managed else {},
     )
 
 
@@ -444,6 +459,244 @@ def test_destroy_skips_unresolvable_latest_gateway(tmp_path, monkeypatch, capsys
         "delete namespace metallb-system",
     ]
     assert "cannot resolve the latest release" in capsys.readouterr().err
+
+
+def test_destroy_leaves_a_namespace_it_did_not_create(tmp_path, monkeypatch):
+    # a namespace carrying no managed-by label -- one that pre-existed or was
+    # created by something else -- is never deleted
+    log = []
+    _stub(monkeypatch, log, releases=("metallb",), exists=True, managed=False)
+    reconcile.destroy(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert log == ["delete metallb pool resources", "uninstall metallb"]
+
+
+def test_destroy_never_deletes_the_clusters_own_namespaces(tmp_path, monkeypatch, capsys):
+    # the api server refuses a delete of default/kube-system/kube-public; the
+    # refusal must not abort the entries after it either
+    log = []
+    _stub(monkeypatch, log, releases=("aaa", "zzz"))
+    charts = {
+        "aaa": {"repo": "https://charts.example.com", "namespace": "kube-system"},
+        "zzz": {"repo": "https://charts.example.com", "namespace": "zzz-ns"},
+    }
+    reconcile.destroy(_pool_ctx(tmp_path, charts))
+    assert log == [
+        "uninstall zzz",
+        "delete namespace zzz-ns",
+        "uninstall aaa",  # processed after the skipped namespace: no abort
+    ]
+    assert "delete namespace kube-system" not in log
+    assert "one of the cluster's own" in capsys.readouterr().err
+
+
+def test_destroy_leaves_an_unlabelled_ceph_namespace(tmp_path, monkeypatch):
+    log = []
+    _stub(monkeypatch, log, releases=("ceph-csi-rbd",), exists=True, managed=False)
+    reconcile.destroy(_pool_ctx(tmp_path, {"ceph": dict(CEPH)}))
+    assert log == ["uninstall ceph-csi-rbd"]
+
+
+class LiveCluster:
+    """A kube stand-in whose apply really merges labels onto live namespaces.
+
+    `namespace_labels` reads the same live state `apply` writes, the way
+    kubectl does, so a test can start from a pre-existing, unlabelled
+    namespace and watch whether converge stamps the managed-by marker a
+    later delete trusts -- the static stubs cannot see that.
+    """
+
+    def __init__(self):
+        self.namespaces: dict[str, dict[str, str]] = {}
+        self.applied: list[str] = []
+        self.deleted: list[str] = []
+
+    def exists(self, root, target, *, input=None):
+        return yaml.safe_load(input)["metadata"]["name"] in self.namespaces
+
+    def matches(self, root, target, *, input=None):
+        doc = yaml.safe_load(input)
+        live = self.namespaces.get(doc["metadata"]["name"])
+        if live is None:
+            return False
+        wanted = doc["metadata"].get("labels") or {}
+        return all(live.get(key) == value for key, value in wanted.items())
+
+    def apply(self, root, target, *, label="", input=None):
+        doc = yaml.safe_load(input)
+        name = doc["metadata"]["name"]
+        self.applied.append(name)
+        self.namespaces.setdefault(name, {}).update(doc["metadata"].get("labels") or {})
+
+    def delete(self, root, target, *, label="", input=None):
+        name = yaml.safe_load(input)["metadata"]["name"]
+        self.namespaces.pop(name, None)
+        self.deleted.append(label or target)
+
+    def namespace_labels(self, root, name):
+        live = self.namespaces.get(name)
+        return None if live is None else dict(live)
+
+
+@pytest.fixture
+def live_cluster(monkeypatch):
+    live = LiveCluster()
+    for attr in ("exists", "matches", "apply", "delete", "namespace_labels"):
+        monkeypatch.setattr(reconcile.kube, attr, getattr(live, attr))
+    monkeypatch.setattr(reconcile, "preflight_tools", lambda tools=None: None)
+    return live
+
+
+CUSTOM = {"custom": {"repo": "https://charts.example.com", "namespace": "mine"}}
+
+
+def test_converge_leaves_a_preexisting_namespace_unlabelled(tmp_path, fake_helm, live_cluster):
+    # a namespace that pre-existed unlabelled must not come out of converge
+    # carrying the managed-by marker: the old code labelled it, and destroy
+    # then removed a namespace the plugin never created
+    live_cluster.namespaces["mine"] = {}
+    fake_helm.installed["custom"] = "1.0.0"
+    reconcile.converge(_pool_ctx(tmp_path, CUSTOM))
+    assert live_cluster.applied == []  # its PSA-only target already matches
+    assert MANAGED_BY_KEY not in live_cluster.namespaces["mine"]
+    reconcile.destroy(_pool_ctx(tmp_path, CUSTOM))
+    assert "namespace mine" not in live_cluster.deleted
+    assert "mine" in live_cluster.namespaces
+
+
+def test_converge_labels_a_created_namespace_and_destroy_removes_it(
+    tmp_path, fake_helm, live_cluster
+):
+    reconcile.converge(_pool_ctx(tmp_path, CUSTOM))
+    assert live_cluster.namespaces["mine"] == {MANAGED_BY_KEY: MANAGED_BY_VALUE}
+    reconcile.destroy(_pool_ctx(tmp_path, CUSTOM))
+    assert "namespace mine" in live_cluster.deleted
+
+
+def test_converge_applies_psa_labels_to_a_preexisting_namespace_without_the_marker(
+    tmp_path, fake_helm, live_cluster
+):
+    # the PSA labels still converge onto a namespace the plugin did not
+    # create, and check does not read its missing marker as drift
+    live_cluster.namespaces["mine"] = {}
+    entry = {
+        "custom": {
+            "repo": "https://charts.example.com", "version": "1.0.0",
+            "namespace": {"name": "mine", "enforce": "restricted"},
+        }
+    }
+    fake_helm.installed["custom"] = "1.0.0"
+    reconcile.converge(_pool_ctx(tmp_path, entry))
+    assert live_cluster.namespaces["mine"] == {
+        "pod-security.kubernetes.io/enforce": "restricted"
+    }
+    assert reconcile.check(_pool_ctx(tmp_path, entry))["entries"]["custom"] == "ok"
+
+
+def test_disabled_entry_removes_a_leftover_namespace(tmp_path, monkeypatch):
+    # the release is already gone but the plugin's namespace remains: disable
+    # clears it, the way destroy does
+    log = []
+    _stub(monkeypatch, log, releases=(), exists=False)
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {"enabled": False}}))
+    assert result["entries"]["metallb"]["action"] == "absent"
+    assert log == ["delete namespace metallb-system"]
+
+
+def test_disabled_entry_keeps_a_namespace_it_did_not_create(tmp_path, monkeypatch):
+    log = []
+    _stub(monkeypatch, log, releases=("metallb",), exists=True, managed=False)
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {"enabled": False}}))
+    assert result["entries"]["metallb"]["action"] == "removed"
+    assert log == ["delete metallb pool resources", "uninstall metallb"]
+
+
+def test_disabled_entry_keeps_a_namespace_another_entry_uses(
+    tmp_path, fake_helm, no_kube, monkeypatch
+):
+    # disabling one of two entries sharing a namespace must not yank it from
+    # the one still enabled
+    (tmp_path / "kubeconfig").write_text("")
+    monkeypatch.setattr(
+        reconcile.kube, "namespace_labels",
+        lambda root, name: {MANAGED_BY_KEY: MANAGED_BY_VALUE},
+    )
+    deleted = []
+    monkeypatch.setattr(
+        reconcile.kube, "delete",
+        lambda root, target, **k: deleted.append(k.get("label") or target),
+    )
+    charts = {
+        "traefik": {"namespace": "shared"},
+        "custom": {
+            "repo": "https://charts.example.com", "namespace": "shared", "enabled": False,
+        },
+    }
+    fake_helm.installed["custom"] = "1.0.0"
+    result = reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert result["entries"]["custom"]["action"] == "removed"
+    assert "namespace shared" not in deleted
+
+
+def test_disabled_entry_removes_a_namespace_no_enabled_entry_needs(
+    tmp_path, fake_helm, no_kube, monkeypatch
+):
+    # once no enabled entry converges into it anymore, a disable removes the
+    # shared namespace; a disabled co-entry does not keep it alive
+    (tmp_path / "kubeconfig").write_text("")
+    monkeypatch.setattr(
+        reconcile.kube, "namespace_labels",
+        lambda root, name: {MANAGED_BY_KEY: MANAGED_BY_VALUE},
+    )
+    deleted = []
+    monkeypatch.setattr(
+        reconcile.kube, "delete",
+        lambda root, target, **k: deleted.append(k.get("label") or target),
+    )
+    charts = {
+        "traefik": {"namespace": "shared", "enabled": False},
+        "custom": {"repo": "https://charts.example.com", "namespace": "shared", "enabled": False},
+    }
+    result = reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert result["entries"]["traefik"]["action"] == "absent"
+    assert "namespace shared" in deleted
+
+
+def test_disabled_ceph_clears_leftover_namespaces(tmp_path, fake_helm, no_kube, monkeypatch):
+    # the releases are already gone but the plugin's namespaces remain
+    (tmp_path / "kubeconfig").write_text("")
+    monkeypatch.setattr(
+        reconcile.kube, "namespace_labels",
+        lambda root, name: {MANAGED_BY_KEY: MANAGED_BY_VALUE},
+    )
+    deleted = []
+    monkeypatch.setattr(
+        reconcile.kube, "delete",
+        lambda root, target, **k: deleted.append(k.get("label") or target),
+    )
+    result = reconcile.converge(_pool_ctx(tmp_path, {"ceph": dict(CEPH, enabled=False)}))
+    assert result["entries"]["ceph"]["action"] == "absent"
+    assert deleted == ["namespace ceph-csi-rbd"]
+
+
+def test_namespace_labels_reads_the_live_labels(tmp_path, monkeypatch):
+    calls = []
+
+    def run(root, args, **k):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout='{"metadata": {"labels": {"a": "b"}}}')
+
+    monkeypatch.setattr(reconcile.kube, "_run", run)
+    assert reconcile.kube.namespace_labels(tmp_path, "ns") == {"a": "b"}
+    assert calls == [["get", "namespace", "ns", "-o", "json"]]
+
+
+def test_namespace_labels_reads_none_when_the_get_fails(tmp_path, monkeypatch):
+    # an absent namespace or an unreachable api must never read as owned
+    monkeypatch.setattr(
+        reconcile.kube, "_run",
+        lambda root, args, **k: SimpleNamespace(returncode=1, stdout="", stderr="boom"),
+    )
+    assert reconcile.kube.namespace_labels(tmp_path, "ns") is None
 
 
 def test_status_tolerates_unresolvable_latest_gateway(tmp_path, fake_helm, no_kube, monkeypatch):
@@ -717,6 +970,7 @@ def test_cert_manager_issuers_deleted_before_uninstall(tmp_path, monkeypatch):
     assert log == [
         "delete cert-manager ClusterIssuers",  # webhook must still be serving
         "uninstall cert-manager",
+        "delete namespace cert-manager",
     ]
 
 

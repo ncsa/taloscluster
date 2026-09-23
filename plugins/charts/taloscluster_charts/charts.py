@@ -25,8 +25,22 @@ def first_pool_address(pool: tuple[str, ...]) -> str:
     return pool[0].split("-")[0].strip()
 
 
-def namespace_manifest(ns: Namespace) -> str:
-    """A Namespace document carrying the PSA labels configured for it."""
+# marks a namespace this plugin created, the same managed-by marker the core
+# tags provider resources with (taloscluster.naming); disable and destroy
+# remove only namespaces carrying it, so one that pre-existed -- or belongs to
+# something else entirely -- is never deleted
+MANAGED_BY_KEY = "app.kubernetes.io/managed-by"
+MANAGED_BY_VALUE = "taloscluster"
+
+
+def namespace_manifest(ns: Namespace, *, owned: bool = True) -> str:
+    """A Namespace document carrying the PSA labels configured for it.
+
+    The managed-by label marks a namespace the plugin created, the marker
+    disable and destroy remove on, so it is written for one the plugin is
+    creating or already owns and left off (`owned=False`) when converge
+    targets a namespace that pre-existed.
+    """
     metadata: dict[str, Any] = {"name": ns.name}
     labels = {
         f"pod-security.kubernetes.io/{key}": value
@@ -37,6 +51,8 @@ def namespace_manifest(ns: Namespace) -> str:
         )
         if value
     }
+    if owned:
+        labels[MANAGED_BY_KEY] = MANAGED_BY_VALUE
     if labels:
         metadata["labels"] = labels
     return yaml.safe_dump({"apiVersion": "v1", "kind": "Namespace", "metadata": metadata})

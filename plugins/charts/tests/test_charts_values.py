@@ -46,7 +46,22 @@ def test_namespace_manifest_labels():
     assert doc["metadata"]["labels"] == {
         "pod-security.kubernetes.io/enforce": "restricted",
         "pod-security.kubernetes.io/audit": "restricted",
+        "app.kubernetes.io/managed-by": "taloscluster",
     }
+
+
+def test_namespace_manifest_labels_an_unlabelled_namespace():
+    doc = yaml.safe_load(namespace_manifest(Namespace("plain")))
+    assert doc["metadata"]["labels"] == {"app.kubernetes.io/managed-by": "taloscluster"}
+
+
+def test_namespace_manifest_without_ownership_leaves_the_marker_off():
+    # the variant converge targets a pre-existing namespace with: its PSA
+    # labels only, never the marker disable and destroy delete on
+    plain = yaml.safe_load(namespace_manifest(Namespace("plain"), owned=False))
+    assert "labels" not in plain["metadata"]
+    psa = yaml.safe_load(namespace_manifest(Namespace("traefik", "restricted"), owned=False))
+    assert psa["metadata"]["labels"] == {"pod-security.kubernetes.io/enforce": "restricted"}
 
 
 def test_traefik_common_values_classic(tmp_path):

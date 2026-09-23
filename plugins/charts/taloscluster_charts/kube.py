@@ -7,6 +7,7 @@ kubeconfig, like argocd's downstream helpers.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -28,6 +29,23 @@ def _run(
 def exists(root: Path, target: str, *, input: str | None = None) -> bool:
     """Every resource in `target` is present (kubectl get -f). Read-only."""
     return _run(root, ["get", "-f", target], input=input).returncode == 0
+
+
+def namespace_labels(root: Path, name: str) -> dict[str, str] | None:
+    """The live namespace's labels, or None when it cannot be read.
+
+    Read-only. A failed get -- an absent namespace, an api that will not
+    answer -- reads as None, so a caller deciding whether a namespace is the
+    plugin's own never deletes on a guess.
+    """
+    proc = _run(root, ["get", "namespace", name, "-o", "json"])
+    if proc.returncode != 0:
+        return None
+    try:
+        metadata = json.loads(proc.stdout).get("metadata") or {}
+    except ValueError:
+        return None
+    return metadata.get("labels") or {}
 
 
 def wait_deployment_available(
