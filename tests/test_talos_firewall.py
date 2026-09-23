@@ -149,15 +149,20 @@ def test_no_kubespan_rule_without_another_l2(make_config):
     plain = _rules(machineconfig._firewall_docs(make_config()))
     assert "kubespan" not in plain
 
-    same_l2 = make_config({"metal": {
-        "rack": {
-            "role": "worker",
-            "disk": "/dev/sda",
-            "servers": {
-                "rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}},
+    same_l2 = make_config({
+        "network": {"cluster": {"gateway": "192.168.0.1"}},
+        "metal": {
+            "rack": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "servers": {
+                    "rp001": {
+                        "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
+                    },
+                },
             },
         },
-    }})
+    })
     rules = _rules(machineconfig._firewall_docs(same_l2))
     assert "kubespan" not in rules
     assert rules["cluster-tcp"]["ingress"] == [{"subnet": same_l2.network.cluster.cidr}]

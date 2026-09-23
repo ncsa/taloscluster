@@ -324,6 +324,7 @@ def test_new_metal_configs_carry_the_target_version(make_config, monkeypatch, tm
     cfg = make_config({
         "controlplane": {"count": 1, "flavor": "f", "disk": 40},
         "kubernetes": {"version": "v1.36.4"},
+        "network": {"cluster": {"gateway": "192.168.0.1"}},
         "metal": {
             "worker": {
                 "role": "worker",
@@ -660,6 +661,7 @@ def test_converge_joins_metal_at_the_upgraded_version(make_config, monkeypatch, 
     cfg = make_config({
         "controlplane": {"count": 1, "flavor": "f", "disk": 40},
         "kubernetes": {"version": "v1.36.4"},
+        "network": {"cluster": {"gateway": "192.168.0.1"}},
         "metal": {
             "worker": {
                 "role": "worker",

@@ -1685,9 +1685,11 @@ def _validate_proxmox_sdn(raw: Any, cfg: Config, cluster_vip: Any) -> None:
 def _validate_metal_l2(l2: L2Network, cluster: L2Network, where: str) -> None:
     """One metal group's or server's L2 must be joinable against the cluster's.
 
-    An L2 of its own needs a `gateway`, the machine's only route to the cluster
-    (and its API VIP) without the overlay; one claiming the cluster L2's `cidr`
-    must agree with it on the `mtu` and `vlan` tag every host on the wire shares.
+    Every metal L2 needs a `gateway` -- the machine's links are static, so
+    without one it has no default route at all -- and an L2 of its own needs
+    it as the machine's only route to the cluster (and its API VIP) without
+    the overlay. One claiming the cluster L2's `cidr` must also agree with it
+    on the `mtu` and `vlan` tag every host on the wire shares.
     """
     if l2.cidr == cluster.cidr:
         if l2.mtu != cluster.mtu:
@@ -1700,11 +1702,20 @@ def _validate_metal_l2(l2: L2Network, cluster: L2Network, where: str) -> None:
                 f"cluster.yaml: {where}.network.vlan must agree with "
                 "network.cluster: every host on one L2 shares the VLAN tag"
             )
-    elif not l2.gateway:
+    if not l2.gateway:
+        if l2 is cluster:
+            # _metal_l2 returns the cluster L2 itself for a group without a
+            # network block, so the key to set is network.cluster.gateway
+            raise ConfigError(
+                f"cluster.yaml: {where} rides network.cluster, whose gateway "
+                "is unset: every metal link is static, so the machine has no "
+                "default route without it -- set network.cluster.gateway (on "
+                "a managed SDN or an OpenStack tenant network, the first host "
+                "of the cidr)"
+            )
         raise ConfigError(
-            f"cluster.yaml: {where}.network.gateway is required when the L2 "
-            "differs from network.cluster: the machine has no route to the "
-            "cluster without it"
+            f"cluster.yaml: {where}.network.gateway is required: every metal "
+            "link is static, so the machine has no default route without it"
         )
 
 

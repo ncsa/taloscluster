@@ -369,6 +369,7 @@ def test_reconcile_talos_upgrades_a_joined_metal_node(monkeypatch, make_config):
     joined and is skipped."""
     cfg = make_config(
         {
+            "network": {"cluster": {"gateway": "192.168.0.1"}},
             "metal": {
                 "site": {
                     "role": "worker",
@@ -429,6 +430,7 @@ def test_reconcile_talos_reinstalls_a_metal_node_joined_by_an_early_dev_build(
     and is upgraded onto the metal installer, not treated as at-target."""
     cfg = make_config(
         {
+            "network": {"cluster": {"gateway": "192.168.0.1"}},
             "metal": {
                 "site": {
                     "role": "worker",
@@ -487,6 +489,7 @@ def test_reconcile_talos_health_checks_a_metal_control_plane_at_target(
     is touched -- its apid answering proves nothing about etcd."""
     cfg = make_config(
         {
+            "network": {"cluster": {"gateway": "192.168.0.1"}},
             "metal": {
                 "site": {
                     "role": "controlplane",

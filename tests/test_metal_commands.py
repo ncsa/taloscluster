@@ -508,6 +508,7 @@ def _openstack_cfg(make_config):
     """The openstack section stays: the metal group sits on the tenant network
     the provider creates, and no kubeapi_vip exists anywhere in cluster.yaml."""
     return make_config({
+        "network": {"cluster": {"gateway": "192.168.0.1"}},
         "metal": {
             "phoenix": {
                 "role": "worker",

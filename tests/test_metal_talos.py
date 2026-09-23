@@ -734,6 +734,7 @@ OPENSTACK_FLOATING_IP = "203.0.113.79"
 
 def _openstack_cfg(make_config, role="worker"):
     return make_config({
+        "network": {"cluster": {"gateway": "192.168.0.1"}},
         "metal": {
             "phoenix": {
                 "role": role,
@@ -903,13 +904,16 @@ def test_metal_still_honours_an_explicitly_requested_extension(make_config):
 def test_metal_group_extensions_reach_the_metal_installer(make_config, monkeypatch):
     """A GPU group names its driver under `extensions` and the shared metal
     installer carries it -- without the driver landing on any VM pool's image."""
-    cfg = make_config({"metal": {"gpu": {
-        "role": "worker",
-        "disk": "/dev/sda",
-        "extensions": ["siderolabs/nvidia"],
-        "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
-        "servers": {"rp001": {}},
-    }}})
+    cfg = make_config({
+        "network": {"cluster": {"gateway": "192.168.0.1"}},
+        "metal": {"gpu": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "extensions": ["siderolabs/nvidia"],
+            "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
+            "servers": {"rp001": {}},
+        }},
+    })
     seen: list[tuple[str, ...]] = []
     monkeypatch.setattr(
         metal_talos.factory,

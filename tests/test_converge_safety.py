@@ -1378,9 +1378,10 @@ METAL_GROUP = {
 
 
 def _metal_cfg(make_config, servers: dict):
-    return make_config(
-        {"metal": {"site": {**METAL_GROUP, "servers": servers}}}
-    )
+    return make_config({
+        "network": {"cluster": {"gateway": "192.168.0.1"}},
+        "metal": {"site": {**METAL_GROUP, "servers": servers}},
+    })
 
 
 def test_apply_configs_reconfigures_a_joined_metal_node(monkeypatch, make_config):

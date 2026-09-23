@@ -337,6 +337,10 @@ def test_missing_metal_node_is_incomplete(cluster_dir, upstream, nodes, capsys):
                         },
                     },
                 },
+                "network": {
+                    **CLUSTER["network"],
+                    "cluster": {**CLUSTER["network"]["cluster"], "gateway": "192.168.0.1"},
+                },
             }
         )
     )

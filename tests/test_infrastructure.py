@@ -133,7 +133,7 @@ def _metal_cfg(make_config):
     return make_config(
         {
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
-            "network": {"cluster": {"kubeapi_vip": "192.168.0.10"}},
+            "network": {"cluster": {"kubeapi_vip": "192.168.0.10", "gateway": "192.168.0.1"}},
             "proxmox": {
                 "url": "https://pve.example:8006",
                 "storage": "vms",
