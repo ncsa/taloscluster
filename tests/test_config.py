@@ -864,6 +864,91 @@ def test_metal_server_address_collisions_are_refused(make_config, ips, message):
         }, remove=("openstack",))
 
 
+@pytest.mark.parametrize("ip", ["192.168.8.1/21", "192.168.8.1"])
+def test_metal_cluster_address_cannot_be_the_group_gateway(make_config, ip):
+    """The group L2's gateway is the address every host on it routes
+    through, so a machine answering on it is refused."""
+    with pytest.raises(ConfigError, match=r"is the L2's gateway"):
+        make_config({"talos": {"kubespan": True}, "metal": {"phoenix": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "network": {"cidr": "192.168.8.0/21", "gateway": "192.168.8.1"},
+            "interfaces": {"enp2s0f0": {"role": "cluster"}},
+            "servers": {"rp001": {
+                "interfaces": {"enp2s0f0": {"ip": ip}},
+            }},
+        }}})
+
+
+@pytest.mark.parametrize("ip", ["192.168.0.1/21", "192.168.0.1"])
+def test_metal_cluster_address_cannot_be_the_cluster_gateway(make_config, ip):
+    """A group riding network.cluster routes through network.cluster.gateway,
+    so a machine answering on that address is refused."""
+    with pytest.raises(ConfigError, match=r"is the L2's gateway"):
+        make_config({
+            "network": {"cluster": {"gateway": "192.168.0.1"}},
+            "metal": {"phoenix": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "interfaces": {"enp2s0f0": {"role": "cluster"}},
+                "servers": {"rp001": {
+                    "interfaces": {"enp2s0f0": {"ip": ip}},
+                }},
+            }},
+        })
+
+
+@pytest.mark.parametrize("ip", ["192.168.0.0/21", "192.168.7.255"])
+def test_metal_cluster_address_cannot_be_the_network_or_broadcast(make_config, ip):
+    """The L2's network and broadcast addresses are not host addresses, so
+    a machine's cluster link cannot carry one."""
+    with pytest.raises(
+        ConfigError, match=r"is the network or broadcast address"
+    ):
+        make_config({
+            "network": {"cluster": {"gateway": "192.168.0.1"}},
+            "metal": {"phoenix": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "network": {"cidr": "192.168.0.0/21", "gateway": "192.168.0.254"},
+                "interfaces": {"enp2s0f0": {"role": "cluster"}},
+                "servers": {"rp001": {
+                    "interfaces": {"enp2s0f0": {"ip": ip}},
+                }},
+            }},
+        })
+
+
+def test_metal_cluster_address_cannot_be_the_cluster_gateway_on_a_shared_l2(make_config):
+    """A group restating the cluster L2's cidr shares the wire with the VM
+    nodes, so network.cluster.gateway is out of bounds even though the group
+    names a gateway of its own."""
+    with pytest.raises(ConfigError, match=r"is the L2's gateway"):
+        make_config({
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {"cluster": {"bridge": "vmbr0"}},
+            },
+            "network": {"cluster": {
+                "cidr": "172.29.21.0/24",
+                "gateway": "172.29.21.1",
+                "kubeapi_vip": "172.29.21.200",
+            }},
+            "metal": {"phoenix": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.254"},
+                "interfaces": {"enp2s0f0": {"role": "cluster"}},
+                "servers": {"rp001": {
+                    "interfaces": {"enp2s0f0": {"ip": "172.29.21.1/24"}},
+                }},
+            }},
+        }, remove=("openstack",))
+
+
 @pytest.mark.parametrize(
     ("metal", "message"),
     [
@@ -2769,6 +2854,59 @@ def test_proxmox_sdn_vip_inside_a_worker_pool_block_is_rejected(make_config):
     overrides["network"]["cluster"]["kubeapi_vip"] = "192.168.0.65"
     with pytest.raises(ConfigError, match="sits inside the SDN static address layout"):
         make_config(overrides, remove=("openstack",))
+
+
+@pytest.mark.parametrize(
+    "ip",
+    [
+        # controlplane-01's static address in the managed-SDN layout
+        str(naming.node_address(
+            "192.168.0.0/21", "testc-controlplane-01", "controlplane",
+            "controlplane", (),
+        ).ip),
+        # .65 is worker-05's slot: the whole pool block is reserved, so a
+        # pool scaled to it would collide with the metal machine
+        "192.168.0.65",
+    ],
+)
+def test_proxmox_sdn_metal_address_inside_the_static_layout_is_rejected(
+    make_config, ip
+):
+    """A metal machine on the SDN's L2 cannot take an address the static
+    layout assigns -- a control plane's today, a scaled pool's tomorrow."""
+    overrides = _proxmox_sdn_overrides()
+    overrides["workers"] = {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}}
+    overrides["network"]["cluster"]["gateway"] = "192.168.0.1"
+    overrides["metal"] = {"phoenix": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "interfaces": {"enp2s0f0": {"role": "cluster"}},
+        "servers": {"rp001": {
+            "interfaces": {"enp2s0f0": {"ip": ip}},
+        }},
+    }}
+    with pytest.raises(
+        ConfigError, match="sits inside the SDN static address layout"
+    ):
+        make_config(overrides, remove=("openstack",))
+
+
+def test_proxmox_sdn_metal_address_outside_the_static_layout_loads(make_config):
+    """The SDN layout refusal is scoped to the addresses it assigns: a metal
+    machine parked in a free slot of the same L2 still loads."""
+    overrides = _proxmox_sdn_overrides()
+    overrides["network"]["cluster"]["gateway"] = "192.168.0.1"
+    overrides["metal"] = {"phoenix": {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "interfaces": {"enp2s0f0": {"role": "cluster"}},
+        "servers": {"rp001": {
+            "interfaces": {"enp2s0f0": {"ip": "192.168.0.5/21"}},
+        }},
+    }}
+    cfg = make_config(overrides, remove=("openstack",))
+    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    assert server.interfaces["enp2s0f0"].ip == "192.168.0.5/21"
 
 
 def test_proxmox_sdn_mtu_below_a_jumbo_cluster_mtu_is_refused(make_config):

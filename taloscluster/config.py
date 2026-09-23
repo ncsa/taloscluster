@@ -1751,8 +1751,10 @@ def _validate_metal(cfg: Config) -> None:
 
     Every group and merged server L2 is checked against `network.cluster`
     (:func:`_validate_metal_l2`), and each cluster link's static address must
-    sit inside the machine's own L2 with its prefix, never colliding with the
-    kubeapi VIP or another machine's address.
+    sit inside the machine's own L2 with its prefix, never being the L2's
+    network or broadcast address or one of its gateways, and never colliding
+    with the kubeapi VIP, the SDN static address layout, or another machine's
+    address.
     """
     cluster = cfg.network.cluster
     vip = cluster.kubeapi_vip or (
@@ -1762,6 +1764,20 @@ def _validate_metal(cfg: Config) -> None:
     claimed: dict[ipaddress.IPv4Address, str] = {}
     metal = cfg.metal
     assert metal is not None  # the caller checks
+    # on a managed SDN the VM nodes' static addresses are assigned from the
+    # layout derived from network.cluster.cidr (the anycast gateway, the
+    # controlplane range and one block per worker pool), so a metal machine
+    # on that same L2 must keep its cluster address out of it
+    cluster_network = (
+        cfg.provider.network.get("cluster")
+        if isinstance(cfg.provider, ProxmoxConfig)
+        else None
+    )
+    sdn_layout = (
+        naming.sdn_reserved(cluster.cidr, tuple(cfg.workers))
+        if isinstance(cluster_network, dict) and "sdn" in cluster_network
+        else None
+    )
     for group in metal.groups.values():
         gwhere = f"metal.{group.name}"
         _validate_metal_l2(group.network, cluster, gwhere)
@@ -1786,10 +1802,40 @@ def _validate_metal(cfg: Config) -> None:
                         f"cluster.yaml: {iwhere}.ip {iface.ip} must carry the "
                         f"L2's /{net.prefixlen} prefix"
                     )
+                if addr.ip in (net.network_address, net.broadcast_address):
+                    raise ConfigError(
+                        f"cluster.yaml: {iwhere}.ip {addr.ip} is the network "
+                        f"or broadcast address of the machine's L2 "
+                        f"{server.network.cidr}"
+                    )
+                # a group restating the cluster L2's cidr shares the wire with
+                # the VM nodes, whose gateway network.cluster names
+                gateways = {server.network.gateway}
+                if server.network.cidr == cluster.cidr:
+                    gateways.add(cluster.gateway)
+                if addr.ip in {
+                    ipaddress.ip_address(g) for g in gateways if g
+                }:
+                    raise ConfigError(
+                        f"cluster.yaml: {iwhere}.ip {addr.ip} is the L2's "
+                        "gateway: every host on the wire routes through it"
+                    )
                 if vip_addr is not None and addr.ip == vip_addr:
                     raise ConfigError(
                         f"cluster.yaml: {iwhere}.ip {addr.ip} collides with "
                         "the kubeapi_vip"
+                    )
+                if (
+                    sdn_layout is not None
+                    and server.network.cidr == cluster.cidr
+                    and addr.ip in sdn_layout
+                ):
+                    raise ConfigError(
+                        f"cluster.yaml: {iwhere}.ip {addr.ip} sits inside "
+                        "the SDN static address layout (the anycast "
+                        "gateway, the controlplane range, or a worker "
+                        "pool block); the VM nodes' static addresses are "
+                        "assigned from it"
                     )
                 other = claimed.get(addr.ip)
                 if other is not None:
