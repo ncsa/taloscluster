@@ -1102,6 +1102,26 @@ def test_boot_once_cd_refuses_when_the_controller_cannot(client):
         rf.boot_once_cd()
 
 
+def test_boot_once_cd_targets_usb_cd_when_cd_is_not_offered(client):
+    """Firmware that only exposes the virtual CD drive as a `UsbCd` boot
+    target still gets a one-time boot from the media."""
+    rf, seen, routes = client
+    routes[("GET", SYSTEM_PATH)] = StubResponse(
+        {
+            "Boot": {
+                "BootSourceOverrideTarget@Redfish.AllowableValues":
+                    ["None", "Pxe", "UsbCd", "Hdd"],
+            }
+        }
+    )
+    rf.boot_once_cd()
+    method, path, body = seen[-1]
+    assert (method, path) == ("PATCH", SYSTEM_PATH)
+    assert body == {
+        "Boot": {"BootSourceOverrideEnabled": "Once", "BootSourceOverrideTarget": "UsbCd"}
+    }
+
+
 def test_insert_media_uses_the_insert_action(client):
     rf, seen, _ = client
     rf.insert_media(ISO_URL)
@@ -1134,6 +1154,41 @@ def test_insert_media_prefers_the_cd_device(client):
     )
     rf.insert_media(ISO_URL)
     assert seen[-1][1] == f"{SYSTEM_PATH}/VirtualMedia/CD/Actions/VirtualMedia.InsertMedia"
+
+
+def test_insert_media_picks_the_cd_slot_by_media_types(client):
+    """iLO names every virtual-media slot "VirtualMedia", so the Id/Name
+    match finds nothing; MediaTypes tells the CD/DVD slot from the floppy
+    one and the ISO goes into the CD slot instead of devices[0]."""
+    rf, seen, routes = client
+    collection = routes[("GET", f"{SYSTEM_PATH}/VirtualMedia")].json()
+    collection["Members"] = [
+        {"@odata.id": f"{SYSTEM_PATH}/VirtualMedia/1"},
+        {"@odata.id": f"{SYSTEM_PATH}/VirtualMedia/2"},
+    ]
+    routes[("GET", f"{SYSTEM_PATH}/VirtualMedia")] = StubResponse(collection)
+    routes[("GET", f"{SYSTEM_PATH}/VirtualMedia/1")] = StubResponse(
+        {"Id": "1", "Name": "VirtualMedia", "MediaTypes": ["USBStick", "Floppy"]}
+    )
+    routes[("GET", f"{SYSTEM_PATH}/VirtualMedia/2")] = StubResponse(
+        {
+            "Id": "2",
+            "Name": "VirtualMedia",
+            "MediaTypes": ["CD", "DVD"],
+            "Inserted": False,
+            "Actions": {
+                "#VirtualMedia.InsertMedia": {
+                    "target":
+                        f"{SYSTEM_PATH}/VirtualMedia/2/Actions/VirtualMedia.InsertMedia",
+                },
+            },
+        }
+    )
+    routes[
+        ("POST", f"{SYSTEM_PATH}/VirtualMedia/2/Actions/VirtualMedia.InsertMedia")
+    ] = StubResponse()
+    rf.insert_media(ISO_URL)
+    assert seen[-1][1] == f"{SYSTEM_PATH}/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"
 
 
 def test_insert_media_refuses_when_nothing_is_mountable(client):

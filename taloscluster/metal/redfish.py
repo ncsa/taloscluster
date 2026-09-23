@@ -150,22 +150,30 @@ class Redfish:
 
     def boot_once_cd(self) -> None:
         """Set a one-time boot from the virtual media, leaving the persistent
-        boot order and any BIOS boot-mode setting alone."""
+        boot order and any BIOS boot-mode setting alone. Some firmware only
+        exposes the virtual CD drive as a `UsbCd` boot target; use that when
+        the controller does not allow a plain `Cd` boot."""
         path, doc = self.system()
         boot = doc.get("Boot") or {}
-        allowed = boot.get("BootSourceOverrideTarget@Redfish.AllowableValues") or []
-        if allowed and "Cd" not in [str(v) for v in allowed]:
-            raise RedfishError(
-                f"{self.bmc.ip} does not offer a one-time CD boot "
-                f"(allows: {', '.join(str(v) for v in allowed)})"
-            )
+        allowed = [
+            str(v)
+            for v in boot.get("BootSourceOverrideTarget@Redfish.AllowableValues") or []
+        ]
+        target = "Cd"
+        if allowed and "Cd" not in allowed:
+            if "UsbCd" not in allowed:
+                raise RedfishError(
+                    f"{self.bmc.ip} does not offer a one-time CD boot "
+                    f"(allows: {', '.join(allowed)})"
+                )
+            target = "UsbCd"
         self._checked(
             self._patch(
                 path,
                 {
                     "Boot": {
                         "BootSourceOverrideEnabled": "Once",
-                        "BootSourceOverrideTarget": "Cd",
+                        "BootSourceOverrideTarget": target,
                     }
                 },
             ),
@@ -205,17 +213,18 @@ class Redfish:
         action takes the image alone -- `Inserted` and `WriteProtected` are
         resource properties, so only the patch fallback sends them. The
         CD/DVD-shaped device is preferred when a controller exposes more
-        than one.
+        than one: `MediaTypes` naming CD or DVD, or the device's `Id` or
+        `Name` saying so, since iLO names every slot "VirtualMedia".
         """
         devices = self.virtual_media()
         if not devices:
             raise RedfishError(f"{self.bmc.ip} exposes no virtual media device")
-        cd = [
-            (path, doc)
-            for path, doc in devices
-            if "cd" in f"{doc.get('Id', '')} {doc.get('Name', '')}".lower()
-            or "dvd" in f"{doc.get('Id', '')} {doc.get('Name', '')}".lower()
-        ]
+        cd = []
+        for path, doc in devices:
+            types = {str(t).upper() for t in doc.get("MediaTypes") or []}
+            name = f"{doc.get('Id', '')} {doc.get('Name', '')}".lower()
+            if types & {"CD", "DVD"} or "cd" in name or "dvd" in name:
+                cd.append((path, doc))
         path, doc = (cd or devices)[0]
         target = ((doc.get("Actions") or {}).get("#VirtualMedia.InsertMedia") or {}).get("target")
         if target:
