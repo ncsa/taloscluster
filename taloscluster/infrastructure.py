@@ -20,13 +20,11 @@ class Endpoint:
 class NetworkAttachment:
     name: str
     address: str = ""
-    provider_id: str = ""
 
 
 @dataclass(frozen=True)
 class InfrastructureMachine:
     name: str
-    provider_id: str = ""
     attachments: tuple[NetworkAttachment, ...] = ()
 
     @property

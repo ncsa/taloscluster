@@ -165,32 +165,6 @@ def _external_child(server: MetalServer, cfg: Config, ifname: str,
     return vlan, iface.link_name or f"{ifname}.{vlan}"
 
 
-def network_docs(server: MetalServer, cfg: Config, vip: str = "") -> list[dict]:
-    """The new-style link documents for one machine's cabling plan.
-
-    The `cluster` link states its static address and the default route via the
-    group L2's gateway (MTU-clamped on a jumbo L2); an `external` link's VLAN
-    child carries the anchor address from `network.external.anchor_cidr`, a
-    static address of its own when the interface has no cluster role, and the
-    routes to the external network over the return-path routing table. A
-    control plane states the kubeapi VIP `vip` on the link that carries it.
-    """
-    docs, _ = _cabling(server, cfg, vip)
-    return docs
-
-
-def device_entries(server: MetalServer, cfg: Config) -> list[dict]:
-    """The classic `machine.network.interfaces` device entries for one machine.
-
-    Every link states `dhcp: false` -- static links and the boot link alike
-    must never pick up a lease. The `external` link's VLAN child is created
-    and configured by the link documents, so the entries carry nothing
-    VLAN-specific.
-    """
-    _, entries = _cabling(server, cfg, "")
-    return entries
-
-
 def _cabling(server: MetalServer, cfg: Config, vip: str = "") -> tuple[list[dict], list[dict]]:
     """(new-style link documents, classic device entries) for one machine.
 
@@ -451,7 +425,7 @@ def build_config(
     The shared patch stack (machine, hostname, cluster, firewall, kubespan,
     tailscale) is assembled exactly as `build_configs` does for the VM
     providers -- the firewall and the control plane's etcd advertisement keyed
-    on     the machine's own L2 -- then the cabling plan's network patches and the
+    on the machine's own L2 -- then the cabling plan's network patches and the
     cluster's freeform patches. `default_tags` are
     the provider's default node labels (`ncsa/project` on OpenStack), merged
     under the machine's `tags:` exactly as `build_configs` merges them for the

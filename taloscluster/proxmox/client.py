@@ -97,15 +97,6 @@ class ProxmoxClient:
     def get(self, path: str, **kw: Any) -> Any:
         return self.request("GET", path, **kw)
 
-    def post(self, path: str, **kw: Any) -> Any:
-        return self.request("POST", path, **kw)
-
-    def put(self, path: str, **kw: Any) -> Any:
-        return self.request("PUT", path, **kw)
-
-    def delete(self, path: str, **kw: Any) -> Any:
-        return self.request("DELETE", path, **kw)
-
     def mutate(self, method: str, path: str, **kw: Any) -> Any:
         result = self.request(method, path, **kw)
         if isinstance(result, str) and result.startswith("UPID:"):

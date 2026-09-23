@@ -24,10 +24,6 @@ from .. import naming
 from ..config import Config
 from ..errors import ReconcileError
 
-# Neutron resource kinds we cache (all support tags). Servers/volumes are Nova/
-# Cinder and cached separately because their proxies differ.
-_NETWORK_KINDS = ("networks", "subnets", "routers", "ports", "security_groups", "ips")
-
 
 def connect(cfg: Config) -> Connection:
     credential_id, credential_secret = cfg.openstack_credentials

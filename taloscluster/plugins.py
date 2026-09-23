@@ -9,6 +9,7 @@ The plugin protocol is duck-typed against the entry point's module. Only
 ``configured`` and ``converge`` are required; the rest are skipped when absent:
 
     AFTER: tuple[str, ...]                      # run after these, if installed
+    CONFIG_SECTIONS: tuple[str, ...]            # top-level config keys this plugin owns
     init(root: Path) -> None                    # add missing scaffold sections
     validate(root, ctx) -> None                 # reject bad config before mutations
     configured(ctx) -> bool
@@ -41,7 +42,6 @@ from .errors import ConfigError
 from .output import Die, warn
 
 ENTRY_POINT_GROUP = "taloscluster.plugins"
-HOOKS = ("init", "converge", "destroy", "status", "check")
 
 
 @dataclass(frozen=True)

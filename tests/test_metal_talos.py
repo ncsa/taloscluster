@@ -301,7 +301,7 @@ def test_metal_jumbo_external_l2_clamps_the_table_100_default_route(make_config)
     server = cfg.metal.groups["phoenix"].servers["rp001"]
 
     (child,) = [
-        d for d in metal_talos.network_docs(server, cfg) if d["kind"] == "VLANConfig"
+        d for d in metal_talos._cabling(server, cfg)[0] if d["kind"] == "VLANConfig"
     ]
 
     assert child["routes"] == [
@@ -705,7 +705,8 @@ def test_metal_cluster_link_only_carries_no_vlan(make_config):
     }, external=None)
 
     server = cfg.metal.groups["phoenix"].servers["rp001"]
-    assert metal_talos.network_docs(server, cfg) == [
+    docs, entries = metal_talos._cabling(server, cfg)
+    assert docs == [
         {
             "apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "enp1s0f0",
             "mtu": 9000,
@@ -717,7 +718,7 @@ def test_metal_cluster_link_only_carries_no_vlan(make_config):
             "nameservers": [{"address": "192.0.2.53"}],
         },
     ]
-    assert metal_talos.device_entries(server, cfg) == [
+    assert entries == [
         {"interface": "enp1s0f0", "dhcp": False}
     ]
 
@@ -732,7 +733,7 @@ def test_metal_bare_address_takes_the_l2_prefix(make_config):
     }, external=None)
 
     server = cfg.metal.groups["phoenix"].servers["rp001"]
-    assert metal_talos.network_docs(server, cfg)[0]["addresses"] == [
+    assert metal_talos._cabling(server, cfg)[0][0]["addresses"] == [
         {"address": "172.29.21.5/24"}
     ]
 
@@ -935,7 +936,7 @@ def test_metal_external_interface_needs_a_vlan(make_config):
     })
     server = cfg.metal.groups["phoenix"].servers["rp001"]
     with pytest.raises(Exception, match="needs a VLAN id"):
-        metal_talos.network_docs(server, cfg)
+        metal_talos._cabling(server, cfg)
 
 
 def test_metal_installer_drops_the_vm_only_extensions(make_config):

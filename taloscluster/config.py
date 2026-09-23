@@ -478,14 +478,6 @@ class Config:
     def openstack_credentials(self) -> tuple[str, str]:
         return self._openstack.credentials()
 
-    @property
-    def security_kubernetes(self) -> dict[str, str]:
-        return self.security_hosts("kubernetes")
-
-    @property
-    def security_talos(self) -> dict[str, str]:
-        return self.security_hosts("talos")
-
     def security_hosts(self, name: str) -> dict[str, str]:
         rule = self.security.get(name)
         return dict(rule.hosts) if rule else {}

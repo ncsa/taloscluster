@@ -80,7 +80,7 @@ def test_reads_retry_but_mutations_do_not(monkeypatch):
 
     assert client.get("nodes") == []
     with pytest.raises(ReconcileError, match="503"):
-        client.post("pools", data={"poolid": "test"})
+        client.request("POST", "pools", data={"poolid": "test"})
     assert len(session.calls) == 3
 
 

@@ -296,7 +296,6 @@ class ProxmoxBackend:
             )
             machines[name] = InfrastructureMachine(
                 name=name,
-                provider_id=str(vm.vmid),
                 attachments=attachments,
             )
         return InfrastructureInventory(

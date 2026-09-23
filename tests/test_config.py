@@ -2693,9 +2693,6 @@ def test_security_legacy_name_to_cidr_shape_still_loads(make_config):
     assert cfg.security["kubernetes"].port == 6443
     assert cfg.security["talos"].port == 50000
     assert cfg.security["kubernetes"].hosts == {"vpn": "172.16.0.0/16"}
-    # the pre-Stage-4 accessors keep working
-    assert cfg.security_kubernetes == {"vpn": "172.16.0.0/16"}
-    assert cfg.security_talos == {"vpn": "172.16.0.0/16"}
 
 
 def test_security_named_rule_requires_explicit_port(make_config):

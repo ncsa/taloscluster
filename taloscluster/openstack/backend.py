@@ -80,16 +80,14 @@ class OpenStackBackend:
     def load_inventory(self) -> InfrastructureInventory:
         raw = Inventory(self.conn, self.cfg.name).load()
         machines: dict[str, InfrastructureMachine] = {}
-        for name, server in raw.all("servers").items():
+        for name in raw.all("servers"):
             port = raw.get("ports", name)
             attachment = NetworkAttachment(
                 name=name,
                 address=_fixed_ip(port),
-                provider_id=str(getattr(port, "id", "") or ""),
             )
             machines[name] = InfrastructureMachine(
                 name=name,
-                provider_id=str(getattr(server, "id", "") or ""),
                 attachments=(attachment,),
             )
         resources = {kind: sorted(raw.all(kind)) for kind in _STATUS_KINDS}
