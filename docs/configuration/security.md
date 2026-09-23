@@ -51,6 +51,6 @@ Enable the datacenter firewall yourself. taloscluster configures per-VM firewall
 
 ## CIDR format
 
-Every source must be an IPv4 network written with its network address (`198.51.100.0/24`). A single host is `/32`.
+Every source must be an IPv4 network written with its network address (`198.51.100.0/24`). A single host is `/32`. A bare address is accepted and read as the `/32` network the firewalls store it as, so `198.51.100.7` and `198.51.100.7/32` name the same allowance.
 
 Writing a rule's `0.0.0.0/0` is equivalent to omitting it: on OpenStack the wildcard prefix is reconciled as the rule without a `remote_ip_prefix`, so a rule scoped to `0.0.0.0/0` and the open-by-default allowance for the same port are the same rule, not two competing ones.

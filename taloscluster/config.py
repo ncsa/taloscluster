@@ -891,6 +891,20 @@ def _string_list(value: Any, field: str) -> list[str]:
     return value
 
 
+def _canonical_cidr(host: Any) -> Any:
+    """A host CIDR spelled the way the firewalls' backends store it: a bare
+    address reads as the /32 it is (`198.51.100.7` -> `198.51.100.7/32`), so a
+    desired rule keyed on the bare form matches the stored one on the next
+    converge instead of flapping against Neutron's answer. Unparseable values
+    pass through untouched for _validate to report as written."""
+    if not isinstance(host, str):
+        return host
+    try:
+        return str(ipaddress.ip_network(host))
+    except ValueError:
+        return host
+
+
 def _security_rules(security: dict[str, Any], where: str) -> dict[str, SecurityRule]:
     """Parse `security:` into named rules, in file order.
 
@@ -937,7 +951,9 @@ def _security_rules(security: dict[str, Any], where: str) -> dict[str, SecurityR
         rules[name] = SecurityRule(
             name=name,
             port=port,
-            hosts={str(label): host for label, host in hosts.items()},
+            hosts={
+                str(label): _canonical_cidr(host) for label, host in hosts.items()
+            },
         )
     return rules
 

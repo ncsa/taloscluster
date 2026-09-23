@@ -454,6 +454,32 @@ def test_reconcile_zero_cidr_host_is_idempotent_across_runs(make_config):
     assert net2.deleted == []
 
 
+class _NeutronNetwork(_FakeNetwork):
+    """A fake that canonicalizes remote_ip_prefix on storage the way Neutron
+    does: a bare address is kept with the implicit /32 (or /128) prefix."""
+
+    def create_security_group_rule(self, **kwargs) -> None:
+        prefix = kwargs.get("remote_ip_prefix")
+        if prefix:
+            kwargs["remote_ip_prefix"] = str(ipaddress.ip_network(prefix))
+        super().create_security_group_rule(**kwargs)
+
+
+def test_reconcile_bare_ip_host_is_idempotent_across_runs(make_config):
+    """A host given as a bare IP is desired as the /32 Neutron stores it as, so
+    a second reconcile over the normalized rule set makes no changes (no 409
+    SecurityGroupRuleExists) instead of deleting and re-creating the rule."""
+    cfg = make_config({"security": {"talos": {"vpn": "198.51.100.7"}}})
+    net = _NeutronNetwork([])
+    _reconcile(net, cfg)
+    assert any(c.get("remote_ip_prefix") == "198.51.100.7/32" for c in net.created)
+    # run again against the Neutron-normalized rule set: nothing left to do
+    net2 = _NeutronNetwork(net._store)
+    _reconcile(net2, cfg)
+    assert net2.created == []
+    assert net2.deleted == []
+
+
 def test_reconcile_removes_the_default_egress_rules_and_installs_the_block(make_config):
     """Neutron seeds two allow-all egress rules; reconcile deletes both and
     creates the 42 CIDR rules around the metadata address instead."""

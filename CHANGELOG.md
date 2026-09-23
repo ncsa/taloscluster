@@ -104,6 +104,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Refuse to run while the Proxmox datacenter firewall is disabled.
 - Reclaim OpenStack ports left behind by machines that never got a server.
 - Fix OpenStack security-group normalization so allowlists are enforced and `0.0.0.0/0` is not recreated on every run.
+- Read a security host given as a bare address as the /32 network the firewalls store it as.
 - Fix the hostname-length check for pools with 100 or more nodes.
 - Contain a plugin's fatal error so one plugin cannot abort the whole run; warn on duplicate plugin entry-point names.
 - Fail Rancher member reconciliation when a configured user cannot be resolved instead of removing their binding.

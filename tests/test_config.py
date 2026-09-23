@@ -2666,6 +2666,13 @@ def test_security_rejects_invalid_cidr_on_a_named_rule(make_config):
         make_config({"security": {"metrics": {"port": 9100, "hosts": {"vpn": "nope"}}}})
 
 
+def test_security_bare_ip_host_is_stored_as_its_cidr(make_config):
+    """A bare address reads as the /32 network Neutron stores it as, so the
+    desired rule matches the converged one on the next run instead of flapping."""
+    cfg = make_config({"security": {"talos": {"vpn": "198.51.100.7"}}})
+    assert cfg.security["talos"].hosts == {"vpn": "198.51.100.7/32"}
+
+
 def test_http_and_https_cannot_change_their_port(make_config):
     """`http`/`https` name the port they govern; another port needs another name."""
     with pytest.raises(ConfigError, match="cannot change its port from 80 to 8080"):
