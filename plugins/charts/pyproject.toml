@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taloscluster-charts"
-version = "0.1.0"
+version = "0.8.0"
 description = "taloscluster plugin: install helm charts (and manifests) into the cluster on sync"
 requires-python = ">=3.10"
 # PyYAML comes in via taloscluster; helm/kubectl are external binaries
 dependencies = [
-    "taloscluster",
+    "taloscluster>=0.8.0",
 ]
 
 [project.optional-dependencies]

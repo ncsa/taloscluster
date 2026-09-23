@@ -2304,7 +2304,7 @@ provides-extras = ["openstack", "argocd", "charts", "rancher", "all", "dev"]
 
 [[package]]
 name = "taloscluster-argocd"
-version = "0.1.0"
+version = "0.8.0"
 source = { editable = "plugins/argocd" }
 dependencies = [
     { name = "taloscluster" },
@@ -2330,7 +2330,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "taloscluster-charts"
-version = "0.1.0"
+version = "0.8.0"
 source = { editable = "plugins/charts" }
 dependencies = [
     { name = "taloscluster" },
@@ -2356,7 +2356,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "taloscluster-rancher"
-version = "0.1.0"
+version = "0.8.0"
 source = { editable = "plugins/rancher" }
 dependencies = [
     { name = "requests" },

@@ -2,7 +2,7 @@
 
 The metallb ingress pool comes from the taloscluster Context
 (`ctx.ingress["metallb"]`) -- taloscluster computes it from cluster.yaml's
-`proxmox.network.external.ingress_pool` (or the provider's ingress vip), so it
+`network.external.ingress_pool` (or the provider's ingress vip), so it
 is never duplicated in the `charts:` config. The traefik service pins the
 first address of that pool.
 """

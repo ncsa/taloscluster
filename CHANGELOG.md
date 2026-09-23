@@ -83,6 +83,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Deliver the OpenStack Cinder cloud.conf as a Secret instead of embedding credentials in ArgoCD values.
 - Activate the ArgoCD plugin only with a `kubeconfig` or `context` apply target.
 - Reorganize the documentation around installation, quickstart, usage, commands, configuration, plugins and troubleshooting, and shorten the README.
+- Version the bundled plugins 0.8.0 and require `taloscluster>=0.8.0`, the earliest release whose APIs they import.
 
 ### Fixed
 
