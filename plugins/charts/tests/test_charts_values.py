@@ -31,7 +31,9 @@ def test_first_pool_address():
 
 
 def test_metallb_pool_manifest():
-    docs = yaml.safe_load_all(metallb_pool_manifest(("203.0.113.190-203.0.113.199",)))
+    docs = yaml.safe_load_all(
+        metallb_pool_manifest(("203.0.113.190-203.0.113.199",), "metallb-system")
+    )
     pool, l2 = list(docs)
     assert pool["kind"] == "IPAddressPool"
     assert pool["spec"]["addresses"] == ["203.0.113.190-203.0.113.199"]
@@ -39,6 +41,10 @@ def test_metallb_pool_manifest():
     assert pool["metadata"]["namespace"] == "metallb-system"
     assert l2["kind"] == "L2Advertisement"
     assert l2["spec"]["ipAddressPools"] == ["external"]
+    # the CRs follow the chart's namespace, the one its controller watches
+    custom, _ = list(yaml.safe_load_all(metallb_pool_manifest(("192.0.2.7",), "lb")))
+    assert custom["kind"] == "IPAddressPool"
+    assert custom["metadata"]["namespace"] == "lb"
 
 
 def test_namespace_manifest_labels():

@@ -58,23 +58,24 @@ def namespace_manifest(ns: Namespace, *, owned: bool = True) -> str:
     return yaml.safe_dump({"apiVersion": "v1", "kind": "Namespace", "metadata": metadata})
 
 
-def metallb_pool_manifest(pool: tuple[str, ...]) -> str:
+def metallb_pool_manifest(pool: tuple[str, ...], namespace: str) -> str:
     """IPAddressPool + L2Advertisement for the ingress pool.
 
     MetalLB accepts single IPs and start-end ranges alike, so the pool
-    addresses pass through as taloscluster reported them.
+    addresses pass through as taloscluster reported them. The CRs live in the
+    namespace the chart was installed into, the one its controller watches.
     """
     documents = [
         {
             "apiVersion": "metallb.io/v1beta1",
             "kind": "IPAddressPool",
-            "metadata": {"name": METALLB_POOL_NAME, "namespace": "metallb-system"},
+            "metadata": {"name": METALLB_POOL_NAME, "namespace": namespace},
             "spec": {"addresses": list(pool), "autoAssign": True},
         },
         {
             "apiVersion": "metallb.io/v1beta1",
             "kind": "L2Advertisement",
-            "metadata": {"name": METALLB_POOL_NAME, "namespace": "metallb-system"},
+            "metadata": {"name": METALLB_POOL_NAME, "namespace": namespace},
             "spec": {"ipAddressPools": [METALLB_POOL_NAME]},
         },
     ]

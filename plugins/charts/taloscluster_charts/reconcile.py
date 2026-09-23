@@ -25,7 +25,8 @@ from .config import CephSecrets, Config, Entry, Namespace, is_newer, merge_value
 
 # dependency order: gateway CRDs before traefik's gateway provider, the
 # metallb chart (and its pool) before traefik claims an address from it; the
-# rest have no dependencies among the known entries
+# rest have no dependencies among the known entries, and every entry outside
+# this list follows in cluster.yaml order
 ORDER = (
     "gateway",
     "metallb",
@@ -39,7 +40,7 @@ ORDER = (
 
 def _ordered(entries: dict[str, Entry]) -> list[Entry]:
     known = [entries[name] for name in ORDER if name in entries]
-    extra = sorted(name for name in entries if name not in ORDER)
+    extra = [name for name in entries if name not in ORDER]
     return known + [entries[name] for name in extra]
 
 
@@ -106,7 +107,9 @@ def _gateway_enabled(entries: dict[str, Entry]) -> bool:
 
 
 def _namespace_of(entry: Entry) -> str:
-    return entry.namespace.name if entry.namespace else "default"
+    """The namespace a chart release lives in: the configured one, else the
+    entry's own (the default `_entry` already sets for unknown chart entries)."""
+    return entry.namespace.name if entry.namespace else entry.name
 
 
 def _merged_values(
@@ -246,7 +249,7 @@ def _converge_chart(
         # derived resources go first: the CRs need the chart's CRDs, and the
         # deletes need the chart's webhook still serving
         if entry.name == "metallb" and pool:
-            _delete_pool(root, pool)
+            _delete_pool(root, pool, _namespace_of(entry))
         if entry.name == "cert-manager":
             _delete_issuers(root, entry)
         if record is not None:
@@ -493,14 +496,14 @@ def _converge_pool(root, pool: tuple[str, ...], namespace: str) -> None:
     if not pool:
         info("metallb: taloscluster exposes no ingress pool; skipping pool resources")
         return
-    manifest = charts.metallb_pool_manifest(pool)
+    manifest = charts.metallb_pool_manifest(pool, namespace)
     # exists-first: on a cluster without the chart (plan, fresh install) the
     # metallb CRDs are absent and even a diff cannot answer
     if kube.exists(root, "-", input=manifest) and kube.matches(root, "-", input=manifest):
         info("metallb: pool resources up to date")
         return
     if dry_run():
-        action("kubectl apply IPAddressPool/L2Advertisement (metallb-system)")
+        action(f"kubectl apply IPAddressPool/L2Advertisement ({namespace})")
         show_yaml(manifest)
         return
     log("apply metallb pool (IPAddressPool, L2Advertisement)")
@@ -647,7 +650,9 @@ def status(ctx: Context) -> dict:
     report: dict[str, Any] = {"entries": entries}
     if "metallb" in cfg.entries and pool:
         report["metallb_pool_present"] = kube.exists(
-            ctx.root, "-", input=charts.metallb_pool_manifest(pool)
+            ctx.root,
+            "-",
+            input=charts.metallb_pool_manifest(pool, _namespace_of(cfg.entries["metallb"])),
         )
     if "cert-manager" in cfg.entries and charts.cert_manager_issuers(cfg.entries["cert-manager"]):
         report["cert_manager_issuers_present"] = kube.exists(
@@ -767,7 +772,7 @@ def _check_entry(
     ):
         return False, "drifted"
     if entry.name == "metallb" and pool:
-        ok = kube.matches(root, "-", input=charts.metallb_pool_manifest(pool))
+        ok = kube.matches(root, "-", input=charts.metallb_pool_manifest(pool, namespace))
         return ok, "ok" if ok else "drifted"
     if entry.name == "cert-manager":
         manifest = charts.cert_manager_issuers(entry)
@@ -817,7 +822,7 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
         if entry.name == "metallb" and pool:
             # the CRs go first: helm uninstall removes the metallb.io CRDs,
             # and a delete of a kind the api no longer knows errors out
-            _delete_pool(root, pool)
+            _delete_pool(root, pool, namespace)
         if entry.name == "cert-manager":
             # the deletes go through the chart's validating webhook, which
             # must still be serving
@@ -829,9 +834,9 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
     info("done")
 
 
-def _delete_pool(root, pool: tuple[str, ...]) -> None:
+def _delete_pool(root, pool: tuple[str, ...], namespace: str) -> None:
     """Delete the pool CRs, skipping cleanly when they (or their CRDs) are gone."""
-    manifest = charts.metallb_pool_manifest(pool)
+    manifest = charts.metallb_pool_manifest(pool, namespace)
     if kube.exists(root, "-", input=manifest):
         kube.delete(root, "-", label="metallb pool resources", input=manifest)
 

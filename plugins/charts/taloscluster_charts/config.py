@@ -23,8 +23,10 @@ Entry keys:
     repo        str; helm chart repository, passed as `helm --repo`
     manifest    str | [str]; manifest url(s) applied with kubectl apply -f
     namespace   str | {name, enforce, audit, warn}; install namespace with the
-                Pod-Security-Admission labels to set on it
-    values      mapping; overrides deep-merged over the common values
+                Pod-Security-Admission labels to set on it; chart entries only
+                (an unknown entry defaults to one named after the entry)
+    values      mapping; overrides deep-merged over the common values; chart
+                entries only
     email       str; consumed by cert-manager (issuer account)
     staging     bool; cert-manager: adds a letsencrypt-staging ClusterIssuer
     prod        bool; cert-manager: adds a letsencrypt-prod ClusterIssuer
@@ -51,6 +53,9 @@ ENTRY_KEYS = {
     "enabled", "version", "repo", "manifest", "namespace", "values", "email", "staging", "prod",
     "storageClasses", "clusterID", "monitors", "rbd", "fs", "userID", "userKey",
 }
+
+# keys a `namespace:` mapping may carry
+NAMESPACE_KEYS = {"name", "enforce", "audit", "warn"}
 
 # keys each item of a `storageClasses:` list may carry
 STORAGE_CLASS_KEYS = {
@@ -327,8 +332,19 @@ def _entry(name: str, raw: Any) -> Entry:
         raise ConfigError(f"{where}: {name} is a chart entry; set repo, not manifest")
     if manifest and version:
         raise ConfigError(f"{where}: version is not used by manifest entries")
+    # manifests are applied as their documents stand: no helm values to merge
+    # and no namespace to create
+    manifest_entry = bool(manifest) or (known is not None and known.kind == "manifest")
+    if manifest_entry and "values" in raw:
+        raise ConfigError(f"{where}: values is not used by manifest entries")
+    if manifest_entry and "namespace" in raw:
+        raise ConfigError(f"{where}: namespace is not used by manifest entries")
 
     namespace = _namespace(name, raw.get("namespace"), known)
+    if namespace is None and known is None and repo is not None:
+        # an unknown chart entry installs into a namespace of its own, managed
+        # like a configured one (created with the marker, removed on disable)
+        namespace = Namespace(name=name)
 
     values = raw.get("values") or {}
     if not isinstance(values, dict):
@@ -349,6 +365,10 @@ def _entry(name: str, raw: Any) -> Entry:
     user_id = raw.get("userID")
     user_key = raw.get("userKey")
     if known is not None and known.ceph:
+        if "namespace" in raw:
+            raise ConfigError(
+                f"{where}: namespace is not used by ceph; each chart gets its own"
+            )
         rbd, rbd_class = _ceph_driver(name, "rbd", rbd)
         fs, fs_class = _ceph_driver(name, "fs", fs)
         if (rbd_class or fs_class) and "storageClass" in values:
@@ -503,6 +523,8 @@ def _namespace(name: str, raw: Any, known: Known | None) -> Namespace | None:
             raise ConfigError(f"{where}: namespace must not be empty")
         return Namespace(name=raw)
     if isinstance(raw, dict):
+        if unknown := sorted(set(raw) - NAMESPACE_KEYS):
+            raise ConfigError(f"{where}: namespace: unsupported key(s): {', '.join(unknown)}")
         ns_name = raw.get("name")
         if not isinstance(ns_name, str) or not ns_name.strip():
             raise ConfigError(f"{where}: namespace.name must be a non-empty string")

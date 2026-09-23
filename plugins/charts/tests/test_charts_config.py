@@ -297,6 +297,52 @@ def test_unsupported_key_rejected(tmp_path):
         validate_charts(tmp_path)
 
 
+def test_manifest_entry_refuses_values(tmp_path):
+    _write_cluster(tmp_path, {"gateway": {"values": {}}})
+    with pytest.raises(ConfigError, match="values is not used"):
+        validate_charts(tmp_path)
+    _write_cluster(tmp_path, {"crds": {"manifest": "https://example.com/x.yaml", "values": {}}})
+    with pytest.raises(ConfigError, match="values is not used"):
+        validate_charts(tmp_path)
+
+
+def test_manifest_entry_refuses_namespace(tmp_path):
+    _write_cluster(tmp_path, {"gateway": {"namespace": "gateway-system"}})
+    with pytest.raises(ConfigError, match="namespace is not used"):
+        validate_charts(tmp_path)
+    _write_cluster(tmp_path, {"crds": {"manifest": "https://example.com/x.yaml", "namespace": "x"}})
+    with pytest.raises(ConfigError, match="namespace is not used"):
+        validate_charts(tmp_path)
+
+
+def test_namespace_mapping_rejects_unknown_keys(tmp_path):
+    _write_cluster(tmp_path, {"foo": {
+        "repo": "https://example.com/charts",
+        "namespace": {"name": "tr", "enforse": "privileged"},
+    }})
+    with pytest.raises(ConfigError, match="namespace: unsupported key"):
+        validate_charts(tmp_path)
+
+
+def test_ceph_refuses_namespace(tmp_path):
+    _write_cluster(
+        tmp_path, {"ceph": {"clusterID": "x", "monitors": ["m:6789"], "namespace": "ceph"}}
+    )
+    with pytest.raises(ConfigError, match="namespace is not used by ceph"):
+        validate_charts(tmp_path)
+
+
+def test_unknown_chart_entry_defaults_namespace_to_entry_name(tmp_path):
+    _write_cluster(tmp_path, {"mystery": {"repo": "https://example.com/charts"}})
+    entry = Config.load(tmp_path).entries["mystery"]
+    assert entry.namespace.name == "mystery"
+    assert entry.namespace.enforce is None
+    # a configured namespace still wins
+    _write_cluster(tmp_path, {"mystery": {"repo": "https://example.com/charts",
+                                          "namespace": "other"}})
+    assert Config.load(tmp_path).entries["mystery"].namespace.name == "other"
+
+
 def test_email_rejected_outside_cert_manager(tmp_path):
     _write_cluster(tmp_path, {"metallb": {"email": "a@example.edu"}})
     with pytest.raises(ConfigError, match="only used by cert-manager"):

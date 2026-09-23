@@ -1034,14 +1034,39 @@ def test_ordered_puts_gateway_first(tmp_path):
         "cert-manager": {"email": "a@b"},
         "ceph": {"enabled": False},
         "nfs": {"enabled": False},
+        # zcustom precedes acustom in cluster.yaml and must converge in that
+        # order, not the alphabetical one
         "zcustom": {"repo": "https://x"},
+        "acustom": {"repo": "https://x"},
     }
-    cfg = Config.load(_root(tmp_path, charts))
+    # safe_dump alphabetizes keys by default, which would erase the order
+    # under test
+    (tmp_path / "cluster.yaml").write_text(
+        yaml.safe_dump({"name": "t", "charts": charts}, sort_keys=False)
+    )
+    cfg = Config.load(tmp_path)
     names = [entry.name for entry in reconcile._ordered(cfg.entries)]
     assert names == [
         "gateway", "metallb", "traefik", "sealed-secrets", "cert-manager",
-        "ceph", "nfs", "zcustom",
+        "ceph", "nfs", "zcustom", "acustom",
     ]
+
+
+def test_pool_lands_in_the_configured_namespace(tmp_path, fake_helm, no_kube, monkeypatch):
+    # a custom metallb namespace moves the pool CRs with it: the controller
+    # watches the namespace its chart was installed into
+    applied = []
+
+    def apply(root, target, **k):
+        if k.get("input"):
+            applied.extend(yaml.safe_load_all(k["input"]))
+
+    monkeypatch.setattr(reconcile.kube, "apply", apply)
+    reconcile.converge(_pool_ctx(tmp_path, {"metallb": {"namespace": "lb"}}))
+    pool = next(d for d in applied if d["kind"] == "IPAddressPool")
+    l2 = next(d for d in applied if d["kind"] == "L2Advertisement")
+    assert pool["metadata"]["namespace"] == "lb"
+    assert l2["metadata"]["namespace"] == "lb"
 
 
 def test_nfs_values_carry_storage_classes(tmp_path, fake_helm, no_kube):

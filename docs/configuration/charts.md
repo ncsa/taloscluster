@@ -6,7 +6,7 @@ The charts plugin installs Helm charts and plain manifests into the cluster itse
 
 Converge is drift-driven: a release is installed or upgraded only when it is missing, a pinned `version` differs from the installed chart (compared without the leading `v` some charts tag, so `1.21.2` and `v1.21.2` are the same version), a `latest` entry has a newer chart version upstream, the merged values differ from what the release was last installed with, or the release is not in helm's `deployed` state. A release left `failed` by an interrupted converge is upgraded again on the next run; one stuck in a `pending-*` or `uninstalling` state — which helm refuses to upgrade over with `another operation (install/upgrade/rollback) is in progress` — is uninstalled first and installed fresh. Releases are looked up across every helm state, since plain `helm list` hides the `pending-*` ones. Namespaces, the Gateway API manifests, the MetalLB pool and the cert-manager issuers are applied only when missing or drifted. `plan` prints a single `up to date` line for anything that would not change, and for a release that would install or upgrade it shows the helm command plus the merged values with secret-looking keys (`password`, `token`, `secret`, `key`, `credential`) redacted. `check` applies the same drift rules — a release that is missing, not `deployed`, pinned to a different version, or carrying different values fails the entry — and for `latest` entries reports whether an upgrade is available. `destroy` uninstalls the releases in reverse order and removes the resources the plugin applied, including the namespaces it created — those carry an `app.kubernetes.io/managed-by: taloscluster` label, which the plugin writes only when it creates the namespace, never on one that already existed (a pre-existing namespace still gets its Pod Security labels converged, just not the marker) — so a namespace without it (one that pre-existed or was created by something else), one that another entry still uses, and the cluster's own `default`, `kube-system` and `kube-public` are left in place. Entries converge one at a time, so a failing entry — a `version: latest` Gateway API manifest when the GitHub releases API is rate limited or unreachable, say — is warned about and fails the run only after the other entries have converged. The same lookup failure does not stop `check`, which reports an enabled manifest entry it cannot probe as `not_installed` and a disabled one as `absent`, nor `destroy`, which skips the manifests it cannot name with a warning and still removes everything else. Before the first bootstrap there is no kubeconfig, so `plan` reports the charts as deferred instead of failing on it, even when `helm` is not installed yet.
 
-During converge's validate phase, before any core change, the plugin refuses a malformed `charts:` section: a non-mapping section, an unknown entry without `repo` or `manifest`, an entry with both, a key an entry does not use (for example `email` on anything but `cert-manager`), a `version` on a manifest entry, an enabled `nfs` without `storageClasses`, an enabled `ceph` without `clusterID` and `monitors`, or a `cert-manager` with issuers on but no `email`. It also refuses cert-manager's letsencrypt issuers alongside a traefik `values` block that configures its own ACME resolver, since the two clients fight over the HTTP-01 challenge path.
+During converge's validate phase, before any core change, the plugin refuses a malformed `charts:` section: a non-mapping section, an unknown entry without `repo` or `manifest`, an entry with both, a key an entry does not use (for example `email` on anything but `cert-manager`, or `values` on a manifest entry), a `version` on a manifest entry, an enabled `nfs` without `storageClasses`, an enabled `ceph` without `clusterID` and `monitors`, or a `cert-manager` with issuers on but no `email`. It also refuses cert-manager's letsencrypt issuers alongside a traefik `values` block that configures its own ACME resolver, since the two clients fight over the HTTP-01 challenge path.
 
 Entries are converged in dependency order: `gateway` before `traefik` (whose Gateway provider needs the CRDs), and `metallb` and its pool before `traefik` claims an address from it. Other entries follow in `cluster.yaml` order.
 
@@ -59,7 +59,7 @@ Entries the plugin knows by name ship a chart repository, an install namespace w
 | Entry | Installs | Namespace | Notes |
 | --- | --- | --- | --- |
 | `gateway` | Gateway API `standard-install.yaml` from the kubernetes-sigs release | — | A manifest entry; `version` is a release tag (`v1.6.2`) or `latest` |
-| `metallb` | The MetalLB chart | `metallb-system` (privileged) | Renders an `IPAddressPool` and `L2Advertisement` from the provider's ingress pool; FRR is disabled |
+| `metallb` | The MetalLB chart | `metallb-system` (privileged) | Renders an `IPAddressPool` and `L2Advertisement` from the provider's ingress pool into the entry's namespace; FRR is disabled |
 | `traefik` | The Traefik chart | `traefik` (restricted) | One replica, `LoadBalancer` service pinned to the pool's first address, HTTP redirected to HTTPS; enables the Gateway provider when `gateway` is enabled |
 | `cert-manager` | The cert-manager chart with CRDs | `cert-manager` (restricted) | Consumes `email`, `staging` and `prod`; the ingress shim defaults to the `letsencrypt-prod` ClusterIssuer |
 | `sealed-secrets` | The Bitnami sealed-secrets controller | `sealed-secrets` (restricted) | Named `sealed-secrets-controller` so `kubeseal` finds it |
@@ -70,7 +70,7 @@ The MetalLB pool is never written in `charts`: it comes from the provider, the [
 
 ### Generic entry keys
 
-Every entry accepts these; a key an entry does not consume is refused.
+Each key below is accepted by the entries that consume it; a key an entry does not consume is refused.
 
 #### `charts.<entry>.enabled`
 
@@ -100,13 +100,13 @@ Manifests applied with `kubectl apply -f`. Mutually exclusive with `repo`. Manif
 
 Optional · name or mapping · default the entry's known namespace, else the entry name
 
-Either a namespace name or a mapping `{name, enforce, audit, warn}` whose three optional levels set the `pod-security.kubernetes.io/*` labels on the namespace the plugin creates. A namespace the plugin creates also carries `app.kubernetes.io/managed-by: taloscluster`, the marker disable and destroy look for before removing it; a namespace that pre-existed gets its Pod Security labels converged but never gains the marker, and is never removed. `default`, `kube-system` and `kube-public` are never removed.
+Either a namespace name or a mapping `{name, enforce, audit, warn}` whose three optional levels set the `pod-security.kubernetes.io/*` labels on the namespace the plugin creates. Manifest entries and `ceph` do not take a namespace: manifests apply wherever their documents say, and each ceph-csi chart runs in its own privileged namespace named after the chart. A namespace the plugin creates also carries `app.kubernetes.io/managed-by: taloscluster`, the marker disable and destroy look for before removing it; a namespace that pre-existed gets its Pod Security labels converged but never gains the marker, and is never removed. `default`, `kube-system` and `kube-public` are never removed.
 
 #### `charts.<entry>.values`
 
 Optional · mapping · default empty
 
-Overrides deep-merged over the plugin's common values and handed to `helm upgrade --install`.
+Overrides deep-merged over the plugin's common values and handed to `helm upgrade --install`; manifest entries do not take it.
 
 ### cert-manager keys
 
