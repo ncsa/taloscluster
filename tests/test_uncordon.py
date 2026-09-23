@@ -672,6 +672,50 @@ def test_wait_version_times_out_when_the_schematic_never_matches(monkeypatch):
                                want_schematic="sch-123", timeout_s=60)
 
 
+def test_wait_version_treats_a_timed_out_probe_as_still_down(monkeypatch):
+    """The version probe is bounded by a subprocess timeout, and a hung apid
+    (one that accepted TCP but never answers) expires like any other failed
+    read: the wait retries it instead of aborting or hanging past its own
+    deadline."""
+    polls = iter(["timeout", "v1.13.9"])
+
+    def fake_version(*_a):
+        result = next(polls)
+        if result == "timeout":
+            raise subprocess.TimeoutExpired("talosctl", 15)
+        return result
+
+    monkeypatch.setattr(converge.talosctl, "server_version", fake_version)
+    monkeypatch.setattr(converge.time, "sleep", lambda s: None)
+    clock = iter([0.0, 1.0, 2.0])
+    monkeypatch.setattr(converge.time, "monotonic", lambda: next(clock))
+
+    converge._wait_version(Path("talosconfig"), "ep", "cp-01", "v1.13.9", timeout_s=60)
+    # reached the target without error
+
+
+def test_wait_version_treats_a_timed_out_schematic_read_as_still_down(monkeypatch):
+    """Same for the schematic probe an extension-only upgrade polls: an expired
+    read is the node still rebooting, not a failed rollout."""
+    schematic_polls = iter(["timeout", "sch-123"])
+
+    def fake_schematic(*_args):
+        result = next(schematic_polls)
+        if result == "timeout":
+            raise subprocess.TimeoutExpired("talosctl", 15)
+        return result
+
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", fake_schematic)
+    monkeypatch.setattr(converge.time, "sleep", lambda s: None)
+    clock = iter([0.0, 1.0, 2.0])
+    monkeypatch.setattr(converge.time, "monotonic", lambda: next(clock))
+
+    converge._wait_version(Path("talosconfig"), "ep", "cp-01", "v1.13.9",
+                           want_schematic="sch-123", timeout_s=60)
+    # reached the target without error
+
+
 # ---------------------------------------------------------------------------
 # _upgrade: kube-api must come back before the k8s version steps
 # ---------------------------------------------------------------------------

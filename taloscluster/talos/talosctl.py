@@ -26,10 +26,11 @@ from ..output import action, dry_run, info, warn
 
 BIN = "talosctl"
 
-# A node that answers apid at all replies to a `version` probe in well under a
-# second; an unroutable address would otherwise hold the probe open for the OS
-# TCP connect timeout -- minutes, once per probed server. Anything slower than
-# this reads as unreachable, which the poll loops simply retry.
+# Wall-clock bound on a talosctl call against a node's apid (seconds). A node
+# that answers apid at all replies to a `version` probe in well under a second;
+# an unroutable address would otherwise hold the call open for the OS TCP
+# connect timeout -- minutes, once per probed server. Anything slower than this
+# reads as unreachable, which the poll loops simply retry.
 PROBE_TIMEOUT_S = 15
 
 # Tailscale CGNAT addresses are the full 100.64.0.0/10 (100.64.0.0-100.127.255.255),
@@ -45,11 +46,17 @@ def _is_tailscale(addr: str) -> bool:
         return False
 
 
-def _run(args: list[str], capture: bool = False, quiet_stderr: bool = False) -> str:
+def _run(
+    args: list[str],
+    capture: bool = False,
+    quiet_stderr: bool = False,
+    timeout: float | None = None,
+) -> str:
     proc = subprocess.run(
         [BIN, *args],
         check=True,
         text=True,
+        timeout=timeout,
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.DEVNULL if quiet_stderr else None,
     )
@@ -233,9 +240,13 @@ def members(
     Returns {} if discovery itself is unreachable (a cluster that has never
     bootstrapped), leaving the caller to fall back to OpenStack's private ips.
     """
-    rc, out, _ = _run_nocheck(
-        _talos(talosconfig, endpoint, endpoint, "get", "members", "-o", "json")
-    )
+    try:
+        rc, out, _ = _run_nocheck(
+            _talos(talosconfig, endpoint, endpoint, "get", "members", "-o", "json"),
+            timeout=PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return {}
     if rc != 0:
         return {}
     excluded = {exclude_vip} if isinstance(exclude_vip, str) else set(exclude_vip)
@@ -306,15 +317,24 @@ def etcd_members(talosconfig: Path, endpoint: str) -> dict[str, str]:
     therefore absent from discovery may still be an etcd member; callers that
     must prove a control plane left etcd query this list instead.
 
-    Fails closed: a failed query, an unparseable reply, an empty member list, or
-    a member that cannot be identified by hostname all raise ``ReconcileError``
+    Fails closed: a failed query (a timed-out one included), an unparseable
+    reply, an empty member list, or a member that cannot be identified by
+    hostname all raise ``ReconcileError``
     -- there is no authoritative evidence to trust, and a surviving control plane
     always lists itself, so an empty list is missing/ambiguous evidence, not
     proof a node left.
     """
-    rc, out, err = _run_nocheck(
-        _talos(talosconfig, endpoint, endpoint, "etcd", "members")
-    )
+    try:
+        rc, out, err = _run_nocheck(
+            _talos(talosconfig, endpoint, endpoint, "etcd", "members"),
+            timeout=PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ReconcileError(
+            f"could not read etcd membership from control plane {endpoint}: talosctl "
+            f"timed out after {PROBE_TIMEOUT_S}s; refusing to delete an addressless "
+            "control plane without authoritative proof it left etcd"
+        ) from e
     if rc != 0:
         raise ReconcileError(
             f"could not read etcd membership from control plane {endpoint} "
@@ -459,7 +479,10 @@ def apply_config_insecure(node: str, config: str) -> None:
     try:
         # --insecure rides the subcommand: the client refuses it as a global
         # flag, and a subcommand-first line is what every other call uses
-        _run(["apply-config", "--insecure", "-n", node, "--file", path])
+        _run(
+            ["apply-config", "--insecure", "-n", node, "--file", path],
+            timeout=PROBE_TIMEOUT_S,
+        )
     finally:
         os.unlink(path)
 
@@ -715,7 +738,20 @@ def bootstrap(talosconfig: Path, endpoint: str, node: str,
         return
     deadline = time.monotonic() + timeout_s
     while True:
-        rc, out, err = _run_nocheck(_talos(talosconfig, endpoint, node, "bootstrap"))
+        try:
+            rc, out, err = _run_nocheck(
+                _talos(talosconfig, endpoint, node, "bootstrap"), timeout=PROBE_TIMEOUT_S
+            )
+        except subprocess.TimeoutExpired as e:
+            # apid took the call but never answered: still down, retry like the
+            # not-ready case below until the deadline
+            if time.monotonic() >= deadline:
+                raise ReconcileError(
+                    f"bootstrap failed: talosctl timed out after {PROBE_TIMEOUT_S}s"
+                ) from e
+            info("bootstrap call timed out, retrying...")
+            time.sleep(interval_s)
+            continue
         if rc == 0:
             return
         # etcd already bootstrapped -> treat as success so re-runs are safe. Talos
@@ -772,8 +808,16 @@ def _server_tag(out: str) -> str:
 
 
 def server_version(talosconfig: Path, endpoint: str, node: str) -> str:
-    """Parse the Server Tag from `talosctl version` (structured, not awk)."""
-    return _server_tag(_run(_talos(talosconfig, endpoint, node, "version"), capture=True))
+    """Parse the Server Tag from `talosctl version` (structured, not awk).
+
+    Bounded by a subprocess timeout like `reachable`: an unroutable address
+    raises `subprocess.TimeoutExpired` instead of stalling the caller for the
+    OS TCP connect timeout, and a poll-loop caller reads that as still down.
+    """
+    return _server_tag(
+        _run(_talos(talosconfig, endpoint, node, "version"), capture=True,
+             timeout=PROBE_TIMEOUT_S)
+    )
 
 
 def running_schematic(talosconfig: Path, endpoint: str, node: str) -> str:
@@ -789,10 +833,15 @@ def running_schematic(talosconfig: Path, endpoint: str, node: str) -> str:
     config before the upgrade phase runs, so the config's install.image already
     points at the target schematic even while the node is still running the old
     extensions -- comparing it never triggers the reinstall.
+
+    Bounded by a subprocess timeout like `reachable`: an expired read raises
+    `subprocess.TimeoutExpired`, which the rollout's poll loop reads as the
+    node still being down mid-reboot.
     """
     out = _run(
         _talos(talosconfig, endpoint, node, "get", "extensions", "-o", "yaml"),
         capture=True,
+        timeout=PROBE_TIMEOUT_S,
     )
     for doc in _resource_docs(out):
         spec = doc.get("spec") or {}
@@ -848,11 +897,16 @@ def running_install_disk(talosconfig: Path, endpoint: str, node: str) -> str:
     Raises when the node does not answer, so a caller that must tell
     "unreachable" from "no disk recorded" can catch it; "" covers a reply the
     disk cannot be read from, which is compared as unknown, never as a match.
+
+    Bounded by a subprocess timeout like `reachable`: a machine that is
+    powered off or unroutable raises `subprocess.TimeoutExpired` after the
+    probe bound instead of stalling the caller for the OS TCP connect timeout.
     """
     out = _run(
         _talos(talosconfig, endpoint, node,
                "get", "machineconfig", "v1alpha1", "-o", "yaml"),
         capture=True,
+        timeout=PROBE_TIMEOUT_S,
     )
     for doc in _resource_docs(out):
         # a 1.14 UnattendedInstallConfig document arrives as its own resource

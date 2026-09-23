@@ -2475,6 +2475,22 @@ def test_the_downgrade_check_skips_an_unreachable_cluster(
     converge._validate_talos_downgrade(cfg, talosconfig)
 
 
+def test_the_downgrade_check_skips_a_timed_out_version_read(
+    monkeypatch, make_config, tmp_path
+):
+    """The version read is bounded by a subprocess timeout, and an expired read
+    is the node not answering: the check stays silent rather than abort the run
+    for a cluster that fails on its own later."""
+    cfg = make_config()
+    talosconfig = _recorded_talosconfig(tmp_path, "192.0.2.10")
+
+    def hung(*_a):
+        raise subprocess.TimeoutExpired("talosctl", 15)
+
+    monkeypatch.setattr(converge.talosctl, "server_version", hung)
+    converge._validate_talos_downgrade(cfg, talosconfig)
+
+
 def test_the_downgrade_check_skips_without_a_recorded_endpoint(
     monkeypatch, make_config, tmp_path
 ):
@@ -4235,6 +4251,31 @@ def test_validate_metal_machine_check_stays_silent_when_the_node_does_not_answer
         raise subprocess.CalledProcessError(1, "talosctl")
 
     monkeypatch.setattr(converge.talosctl, "running_install_disk", down)
+
+    converge._validate_metal_machines(
+        _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
+    )
+
+
+def test_validate_metal_machine_check_stays_silent_when_the_disk_probe_times_out(
+    monkeypatch, tmp_path
+):
+    """A powered-off machine's address accepts no connection, and the disk
+    probe is bounded by a subprocess timeout instead of the OS connect timeout:
+    an expired probe is the machine not answering, never a drifted disk, so the
+    run is not refused for a machine that is simply down."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+    monkeypatch.setattr(
+        converge.kubectl, "node_addresses", lambda _kc: {"rp001": "192.0.2.61"}
+    )
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+
+    def hung(*_a, **_k):
+        raise subprocess.TimeoutExpired("talosctl", 15)
+
+    monkeypatch.setattr(converge.talosctl, "running_install_disk", hung)
 
     converge._validate_metal_machines(
         _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig

@@ -128,6 +128,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Refuse a `talos.version` older than the running release and a `kubernetes.version` the pinned Talos does not support.
 - Wait out control-plane reboots through the control-plane endpoint so an unroutable node address no longer stalls the rollout.
 - Bound the cluster reachability probe with a timeout so an unroutable address no longer stalls validate.
+- Bound the talosctl calls against cluster nodes with a timeout so a hung node no longer stalls converge.
 - Create the `talosconfig` and scaffolded `secrets.yaml` with mode 0600 from the start.
 - Fix the development install command to use only flags `uv sync` supports.
 

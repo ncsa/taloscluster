@@ -748,7 +748,7 @@ def _validate_metal_machines(cfg: Config, talosconfig: Path, kubeconfig: Path) -
             have_disk = talosctl.running_install_disk(
                 talosconfig, endpoint or dial, dial
             )
-        except (OSError, subprocess.CalledProcessError):
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             continue  # the machine does not answer; it fails on its own later
         if have_disk and have_disk != server.disk:
             raise ReconcileError(
@@ -876,7 +876,7 @@ def _validate_talos_downgrade(cfg: Config, talosconfig: Path) -> None:
         return
     try:
         cur = talosctl.server_version(talosconfig, endpoint, endpoint)
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return
     if cur and versions.is_older(cfg.talos_version, cur):
         raise ReconcileError(
@@ -1505,6 +1505,9 @@ def _wait_version(
     ENHANCE_YOUR_CALM/too_many_pings whenever the client is newer than the
     server -- always true mid-upgrade (see talosctl.upgrade). Polling is
     immune to that, and to the node dropping off the network while it reboots.
+    Each probe is bounded by a subprocess timeout, so a node that accepts the
+    connection but never answers reads as still down and is retried, keeping
+    the whole wait inside the deadline below.
 
     The version alone cannot tell an extension-only reboot apart (it is already
     at `want` before the upgrade), so when `want_schematic` is supplied the
@@ -1526,7 +1529,7 @@ def _wait_version(
         time.sleep(interval_s)
         try:
             seen = talosctl.server_version(talosconfig, endpoint, node)
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             continue  # node is rebooting; apid not answering yet
         if seen != want:
             continue
@@ -1534,7 +1537,7 @@ def _wait_version(
             try:
                 if talosctl.running_schematic(talosconfig, endpoint, node) != want_schematic:
                     continue
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 continue  # node is still down mid-reboot
         info(f"{node} is on {marker}")
         return
