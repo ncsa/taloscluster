@@ -20,6 +20,7 @@ import yaml
 from . import naming, versions
 from .errors import ConfigError
 from .naming import BASE_EXTENSIONS, VM_ONLY_EXTENSIONS
+from .output import warn
 
 CLUSTER_FILE = "cluster.yaml"
 SECRETS_FILE = "secrets.yaml"
@@ -440,8 +441,12 @@ class Config:
         """True when nodes register with a pre-auth key, so their MagicDNS
         names resolve and management can use them. A section without a key
         leaves the extension idle, and management falls back to the nodes'
-        real addresses."""
-        return self.tailscale_auth_key is not None
+        real addresses. An empty or still-scaffolded key counts as idle too,
+        so a read-only command can ask this without tripping the credential
+        check :attr:`tailscale_auth_key` applies when a command needs the key.
+        """
+        key = self.auth_key
+        return bool(key) and key != SECRET_PLACEHOLDER
 
     @property
     def provider_name(self) -> str:
@@ -689,14 +694,15 @@ def _merge_yaml(
         _record_origins(value, path, origins, extra_name)
 
 
-def _include_paths(d: dict[str, Any], root: Path, where: str) -> list[Path]:
-    """The files `include:` names, resolved inside the cluster directory."""
+def _include_paths(d: dict[str, Any], root: Path, where: str) -> list[tuple[str, Path]]:
+    """The (entry, path) pairs `include:` names, resolved inside the cluster
+    directory; `entry` is the name as written, for error messages."""
     raw = d.get("include")
     if raw is None:
         return []
     if not isinstance(raw, list):
         raise ConfigError(f"{where}: include must be a list of file names")
-    paths: list[Path] = []
+    paths: list[tuple[str, Path]] = []
     seen: dict[Path, str] = {}
     for entry in raw:
         if not isinstance(entry, str) or not entry.strip():
@@ -720,12 +726,16 @@ def _include_paths(d: dict[str, Any], root: Path, where: str) -> list[Path]:
                 "which are the same file"
             )
         seen[path.resolve()] = entry
-        paths.append(path)
+        paths.append((entry, path))
     return paths
 
 
 def _apply_includes(
-    d: dict[str, Any], root: Path, known: set[str]
+    d: dict[str, Any],
+    root: Path,
+    known: set[str],
+    *,
+    missing_includes_ok: bool = False,
 ) -> tuple[dict[str, Any], set[str]]:
     """Merge every `include:` file into the `cluster.yaml` tree.
 
@@ -744,7 +754,11 @@ def _apply_includes(
     scaffold writes `include: [secrets.yaml]`), and a section it carries opts
     its feature in like any other included file's. A `secrets.yaml` no include
     names is refused rather than silently dropped, so an existing cluster
-    directory cannot lose its credentials when the contract changed.
+    directory cannot lose its credentials when the contract changed. A listed
+    file that is missing is refused too, naming the entry -- unless
+    `missing_includes_ok` is set, which reads it as empty with a warning for
+    the credential-free commands (check) that must run before the credentials
+    exist.
     """
     origins: dict[str, str] = {}
     # an explicit null opts nothing in, as in _merge_yaml: a comment-only
@@ -753,9 +767,16 @@ def _apply_includes(
     opted_in = {key for key, value in d.items() if value is not None}
     secrets = (root / SECRETS_FILE).resolve()
     sources = _include_paths(d, root, CLUSTER_FILE)
-    for path in sources:
+    for entry, path in sources:
         if path.exists() and not path.is_file():
-            raise ConfigError(f"{CLUSTER_FILE}: include {path.name} is not a file")
+            raise ConfigError(f"{CLUSTER_FILE}: include {entry} is not a file")
+        if not path.is_file():
+            if missing_includes_ok:
+                warn(f"{CLUSTER_FILE}: include {entry} is missing; loading without it")
+                continue
+            raise ConfigError(
+                f"{CLUSTER_FILE}: include {entry} is missing (expected {path})"
+            )
         extra = read_yaml(path)
         if "include" in extra:
             raise ConfigError(
@@ -767,7 +788,7 @@ def _apply_includes(
             key for key, value in extra.items() if value is not None
         )
         _merge_yaml(d, extra, path.name, origins, CLUSTER_FILE)
-    if secrets.is_file() and secrets not in {path.resolve() for path in sources}:
+    if secrets.is_file() and secrets not in {path.resolve() for _, path in sources}:
         raise ConfigError(
             f"{SECRETS_FILE} exists but {CLUSTER_FILE} does not include it; "
             f"add include: [{SECRETS_FILE}] to {CLUSTER_FILE} so its "
@@ -1465,12 +1486,14 @@ def _network_config(d: dict[str, Any], where: str) -> NetworkConfig:
     )
 
 
-def load_config(root: Path) -> Config:
+def load_config(root: Path, *, missing_includes_ok: bool = False) -> Config:
     d = read_yaml(root / CLUSTER_FILE)
     where = CLUSTER_FILE
     known = _CLUSTER_KEYS | _plugin_config_sections()
     _reject_unknown_keys(d, where, known)
-    d, opted_in = _apply_includes(d, root, known)
+    d, opted_in = _apply_includes(
+        d, root, known, missing_includes_ok=missing_includes_ok
+    )
     _reject_moved_keys(d, where)
 
     talos = _mapping(d.get("talos"), f"{where}: talos")

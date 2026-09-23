@@ -2566,11 +2566,13 @@ def check(root: Path, output: str = "text") -> int:
 
     Read-only and cloud-free: it asks factory.talos.dev / dl.k8s.io what exists,
     talos discovery + the local kubeconfig what is running, and changes nothing.
+    A listed include file that is missing loads as empty, with a warning, so a
+    directory whose credentials are absent or not written yet still checks.
     Returns 1 if an update, a drift, or an incomplete check (something could not
     be verified) was found, 0 only if everything is current and verified, so it
     can gate a CI job without passing an unverified cluster.
     """
-    cfg = load_config(root)
+    cfg = load_config(root, missing_includes_ok=True)
     for w in validate_warnings(cfg):
         warn(w)
     report: dict[str, Any] = {"cluster": cfg.name, "components": [], "nodes": []}

@@ -56,7 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Fail config applies, bootstraps, upgrades image removal and truncated image downloads with the same reconcile error type plugins already catch.
 - Restart OpenStack nodes through Nova when a restart is requested, and give plugins the cluster's provider name in their context on every provider.
 - **Breaking:** require Proxmox 9 or newer (refusing `destroy` as well as converge); pin 0.7.x to tear down a Proxmox 8 cluster.
-- **Breaking:** merge `secrets.yaml` into the cluster configuration through the `include` list (the scaffold lists it), so credentials — plugin ones included — can live in any included file; a `cluster.yaml` that does not include it no longer reads it.
+- **Breaking:** merge `secrets.yaml` into the cluster configuration through the `include` list (the scaffold lists it), so credentials — plugin ones included — can live in any included file; a `cluster.yaml` that does not include it no longer reads it, and a listed file that is missing refuses to load — `check` reads it as empty, with a warning, so it still gates CI.
 - **Breaking:** the network settings, including a new `mtu` applied to links and the default route, move into `network.cluster` and `network.external`; the old address keys are refused ([old-to-new key table](docs/configuration/network.md#moving-from-the-old-keys)).
 - Delete the legacy `talos-<version>-tailscale` image on `image remove`, refusing while a managed VM still boots it, and converge detaches the boot ISO cdrom once a node boots from disk.
 - Apply machine configs to control planes one at a time, waiting for each restart to finish.

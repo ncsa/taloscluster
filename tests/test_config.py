@@ -2451,6 +2451,17 @@ def test_tailscale_active_requires_a_configured_key(make_config, tmp_path):
     assert keyed.tailscale_active is True
 
 
+def test_tailscale_active_ignores_a_scaffolded_key(make_config):
+    """`CHANGE-ME` reads as an idle extension rather than a credential error:
+    `check` consults tailscale_active on an unedited scaffold, where raising
+    would kill the credential-free command."""
+    cfg = make_config({"tailscale": {"auth_key": "CHANGE-ME"}})
+
+    assert cfg.tailscale_active is False
+    with pytest.raises(ConfigError, match="CHANGE-ME"):
+        assert cfg.tailscale_auth_key
+
+
 def test_tailscale_auth_key_loads_and_rejects_placeholders(make_config, tmp_path):
     _write_secrets(
         tmp_path,
@@ -3354,8 +3365,38 @@ def test_include_rejects_an_unknown_key_naming_the_file(make_config, tmp_path):
 
 
 def test_include_rejects_a_missing_file(make_config):
-    with pytest.raises(ConfigError, match="missing .*gone.yaml"):
+    with pytest.raises(ConfigError, match="include gone.yaml is missing"):
         make_config({"include": ["gone.yaml"]})
+
+
+def test_a_missing_include_loads_as_empty_when_allowed(tmp_path, capsys):
+    """The credential-free commands (check) must run before the credentials
+    exist: a listed include file that is missing reads as empty, with a warning
+    naming it, instead of refusing to load."""
+    (tmp_path / "cluster.yaml").write_text(yaml.safe_dump({
+        "name": "testcluster",
+        "talos": {"version": "v1.13.9"},
+        "kubernetes": {"version": "v1.31.0"},
+        "controlplane": {"count": 3, "flavor": "gp.medium", "disk": 40},
+        "openstack": {
+            "url": "https://example.com:5000/v3/",
+            "availability_zone": "nova",
+            "external_net": "ext-net",
+        },
+        "network": {
+            "cluster": {"cidr": "192.168.0.0/21"},
+            "dns": ["1.1.1.1"],
+            "ntp": ["ntp.example.com"],
+        },
+        "include": ["secrets.yaml"],
+        "tailscale": {"auth_key": "tskey-x"},
+    }))
+
+    cfg = load_config(tmp_path, missing_includes_ok=True)
+
+    assert cfg.name == "testcluster"
+    assert cfg.tailscale_auth_key == "tskey-x"
+    assert "include secrets.yaml is missing" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

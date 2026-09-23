@@ -92,6 +92,48 @@ def test_up_to_date_exit_0(cluster_dir, upstream, nodes, capsys):
     assert rc == 0
 
 
+def test_check_runs_without_a_listed_include_file(cluster_dir, upstream, nodes, capsys):
+    """`check` is the credential-free command that gates CI: the scaffolded
+    cluster.yaml lists secrets.yaml under include, and that file being absent
+    must warn and load as empty instead of refusing to run."""
+    (cluster_dir / "cluster.yaml").write_text(
+        yaml.safe_dump({**CLUSTER, "include": ["secrets.yaml"]})
+    )
+    upstream["talos"] = ["v1.13.8"]
+    upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
+    rc = converge.check(cluster_dir, output="yaml")
+    captured = capsys.readouterr()
+    assert "include secrets.yaml is missing" in captured.err
+    report = yaml.safe_load(captured.out)
+    assert report["up_to_date"] is True
+    assert rc == 0
+
+
+def test_check_runs_on_an_unedited_scaffold(cluster_dir, upstream, capsys):
+    """A still-scaffolded tailscale key is an idle extension, not a credential
+    error: `_running_versions` asks whether tailscale is active to pick the
+    talosctl endpoint, and on the scaffolded `CHANGE-ME` key that used to
+    raise and kill the check."""
+    (cluster_dir / "cluster.yaml").write_text(
+        yaml.safe_dump(
+            {
+                **CLUSTER,
+                "tailscale": {
+                    "login_server": "https://headscale.example.edu",
+                    "auth_key": "CHANGE-ME",
+                },
+            }
+        )
+    )
+    upstream["talos"] = ["v1.13.8"]
+    upstream["k8s_latest"] = upstream["k8s_patch"] = "v1.35.2"
+    rc = converge.check(cluster_dir, output="yaml")
+    report = _report(capsys)
+    assert report["nodes"] == []
+    assert report["up_to_date"] is True
+    assert rc == 0
+
+
 def test_host_network_overlap_is_warned(cluster_dir, upstream, nodes, capsys):
     """The configuration warnings converge's preflight reports -- network.md
     promises the pod/service overlap one from `check` too -- are emitted here,
