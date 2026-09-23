@@ -96,15 +96,15 @@ def _cmd_metal(args, root):
     if args.action == "inspect":
         _metal.inspect(root, args.server)
     elif args.action == "boot":
-        _metal.boot(root, args.server, serve=args.serve)
+        _metal.boot(root, args.server, serve=args.serve, force=args.force)
     elif args.action == "wait":
         _metal.wait(root, args.server)
     elif args.action == "apply":
-        _metal.apply(root, args.server)
+        _metal.apply(root, args.server, force=args.force)
     elif args.action == "eject":
         _metal.eject(root, args.server)
     else:
-        _metal.join(root, args.server, serve=args.serve)
+        _metal.join(root, args.server, serve=args.serve, force=args.force)
 
 
 def _cmd_plugin(args, root):
@@ -413,6 +413,12 @@ def main(argv: list[str] | None = None) -> int:
         "--serve", action="store_true",
         help="boot/join: download the install ISO and serve it from this "
              "machine over the LAN, for a BMC with no internet egress",
+    )
+    p_metal.add_argument(
+        "--force", action="store_true",
+        help="boot/apply/join: proceed even when the machine answers neither "
+             "the maintenance apid nor the cluster's apid, so it cannot be "
+             "told from a joined machine",
     )
     p_metal.add_argument(
         "--dry-run", action="store_true",

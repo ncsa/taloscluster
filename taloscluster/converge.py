@@ -687,6 +687,10 @@ def _validate_metal_machines(cfg: Config, talosconfig: Path, kubeconfig: Path) -
     if not joined:
         return
     recorded = kubectl.node_addresses(kubeconfig)
+    # the disk probe dials through the control plane like every other talosctl
+    # call: this host may not route the machine's address directly, and a
+    # probe that cannot decide must not read as "no drift"
+    endpoint = _talos_endpoint(cfg, talosconfig=talosconfig, required=False)
     for server in joined:
         have = recorded.get(server.name, "")
         want = metal_talos.cluster_ip(server)
@@ -701,7 +705,9 @@ def _validate_metal_machines(cfg: Config, talosconfig: Path, kubeconfig: Path) -
             )
         dial = have or want
         try:
-            have_disk = talosctl.running_install_disk(talosconfig, dial, dial)
+            have_disk = talosctl.running_install_disk(
+                talosconfig, endpoint or dial, dial
+            )
         except (OSError, subprocess.CalledProcessError):
             continue  # the machine does not answer; it fails on its own later
         if have_disk and have_disk != server.disk:
@@ -876,6 +882,16 @@ def _join_metal(
     API -- so a machine mid-join is left alone for the next converge rather
     than reinstalled under itself.
 
+    The probe dials the machine's cluster address through the control plane
+    (`_talos_endpoint`), like every other talosctl call: this host may not
+    route the machine's address directly. A machine neither probe answers
+    cannot be told from a joined one -- an unroutable L2 or a slow apid look
+    exactly like a machine waiting for its first boot -- and a BMC boot would
+    force-restart whatever runs there, so one is only driven when the cluster
+    and the BMC prove it safe: a kube Node still listing the machine leaves it
+    alone, and otherwise only the BMC's own "Off" clears the boot. Anything
+    else is reported and left for an explicit `metal join --force`.
+
     Returns the names of the machines that did not join this run -- one that
     never answered the maintenance apid within its budget, and one left alone
     above -- so the caller can leave them out of the Ready wait and report an
@@ -888,6 +904,7 @@ def _join_metal(
     pending = _metal_unjoined(cfg, kubeconfig)
     if not pending:
         return unjoined, deferred
+    endpoint = _talos_endpoint(cfg, talosconfig=talosconfig, required=False)
     for server in sorted(pending, key=lambda s: 0 if s.role == "controlplane" else 1):
         ip = metal_talos.cluster_ip(server)
         if not server.auto_join:
@@ -909,7 +926,8 @@ def _join_metal(
             warn(f"metal {server.name}: no machine config this run; not joining")
             unjoined.add(server.name)
             continue
-        if talosconfig.is_file() and metal_talos.answers_as_cluster(talosconfig, server):
+        answers = metal_talos.answers_as_cluster(talosconfig, server, endpoint)
+        if answers is True:
             warn(
                 f"metal {server.name} ({ip}) already answers apid with this "
                 "cluster's identity but has no Kubernetes Node; not reinstalling "
@@ -917,14 +935,34 @@ def _join_metal(
             )
             unjoined.add(server.name)
             continue
-        if talosctl.maintenance_reachable(ip):
+        if answers is False:
             info(f"metal {server.name} ({ip}) is in maintenance mode; joining")
-        elif server.redfish:
+        elif (
+            kubeconfig.is_file()
+            and kubeconfig.stat().st_size > 0
+            and kubectl.node_exists(kubeconfig, server.name) is True
+        ):
+            warn(
+                f"metal {server.name} ({ip}) is a Kubernetes Node but answered "
+                "no join probe; not reinstalling it"
+            )
+            unjoined.add(server.name)
+            continue
+        elif server.redfish and (dry_run() or _bmc_reports_powered_off(server)):
             info(f"metal {server.name} ({ip}) is not in maintenance mode; booting its BMC")
             _boot_metal(server, iso_url)
             if not _wait_maintenance(server, ip):
                 unjoined.add(server.name)
                 continue
+        elif server.redfish:
+            warn(
+                f"metal {server.name} ({ip}) answers neither the maintenance apid "
+                "nor this cluster's apid and its BMC does not report it powered "
+                "off; not force-restarting it -- run `metal join --force` if the "
+                "machine cannot already be joined"
+            )
+            unjoined.add(server.name)
+            continue
         else:
             # validate refused this case before anything mutated; reaching it
             # means the machine dropped out since, so stop rather than skip
@@ -957,6 +995,21 @@ def _boot_metal(server: MetalServer, iso_url: str) -> None:
     rf.insert_media(iso_url)
     rf.boot_once_cd()
     rf.power_on()
+
+
+def _bmc_reports_powered_off(server: MetalServer) -> bool:
+    """True only when the machine's BMC itself reports the machine Off.
+
+    Neither apid having answered, a boot into the install media would
+    force-restart a joined machine the probes could not identify -- so only
+    the BMC's own power state may clear the boot: Off is the one state a
+    machine cannot run a configuration in. An On (or unreported) state, or a
+    BMC that cannot be reached, refuses.
+    """
+    try:
+        return metal_redfish.Redfish(server.bmc).power_state() == "Off"
+    except metal_redfish.RedfishError:
+        return False
 
 
 def _wait_maintenance(server: MetalServer, ip: str) -> bool:

@@ -12,6 +12,7 @@ import urllib.parse
 
 import pytest
 import requests
+import yaml
 
 from taloscluster import converge
 from taloscluster.config import ConfigError, MetalBmc
@@ -95,6 +96,19 @@ class FakeRedfish:
             "nics": [{"interface": "NIC1", "mac": "02:00:00:00:00:01", "link": "LinkUp"}],
             "disks": [{"drive": "Disk0", "model": "ST600MM0009", "capacity": "558.4 GiB"}],
         }
+
+
+@pytest.fixture(autouse=True)
+def stub_probes_and_client_generation(monkeypatch):
+    """The join guard probes the machine and, without a talosconfig, derives a
+    throwaway client from the machine secrets; both need talosctl. The default
+    stubs stand in for a machine waiting in maintenance mode -- the state every
+    non-guard test assumes -- and each guard test overrides what it probes."""
+    monkeypatch.setattr(
+        commands.talosctl, "gen_talosconfig",
+        lambda cluster, endpoint, secrets, client_endpoint=None: "dummy",
+    )
+    monkeypatch.setattr(commands.talosctl, "maintenance_reachable", lambda ip: True)
 
 
 @pytest.fixture
@@ -326,6 +340,116 @@ def test_boot_allows_a_machine_in_maintenance_mode(
     monkeypatch.setattr(commands.talosctl, "maintenance_reachable", lambda ip: True)
     monkeypatch.setattr(
         commands.talosctl, "reachable", lambda tc, endpoint, node: True
+    )
+    monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
+    commands.boot(tmp_path, "rp001")
+    assert fake_redfish[-1].calls == [
+        "eject", ("insert", ISO_URL), "boot-once", "power-on",
+    ]
+
+
+def test_boot_probes_the_cluster_apid_through_the_control_plane(
+    make_config, tmp_path, monkeypatch
+):
+    """The already-joined probe dials `-e <control plane> -n <machine ip>`, the
+    way every other talosctl call goes through cp-01: this host may not route
+    the machine's address directly."""
+    _cfg(make_config)
+    (tmp_path / "talosconfig").write_text(yaml.safe_dump({
+        "context": "testcluster",
+        "contexts": {"testcluster": {"endpoints": ["testcluster-controlplane-01"]}},
+    }))
+    seen: dict[str, str] = {}
+
+    def maintenance(ip):
+        seen["maintenance_node"] = ip
+        return False
+
+    def cluster(_tc, endpoint, node):
+        seen.update(endpoint=endpoint, node=node)
+        return False
+
+    monkeypatch.setattr(commands.talosctl, "maintenance_reachable", maintenance)
+    monkeypatch.setattr(commands.talosctl, "reachable", cluster)
+
+    with pytest.raises(ReconcileError, match="cannot be told from a joined"):
+        commands.boot(tmp_path, "rp001")
+
+    assert seen == {
+        "maintenance_node": "172.29.21.5",
+        "endpoint": "testcluster-controlplane-01",
+        "node": "172.29.21.5",
+    }
+
+
+def test_boot_refuses_a_machine_that_answers_no_probe(
+    make_config, tmp_path, fake_redfish, monkeypatch
+):
+    """A machine that answers neither the maintenance apid nor the cluster's
+    cannot be told from a joined one -- an unroutable L2 or a slow apid looks
+    exactly like a machine waiting for its first boot -- and boot would
+    force-restart it into the install media. Refused before the BMC is
+    touched, unless --force says the operator took the decision."""
+    _cfg(make_config)
+    (tmp_path / "talosconfig").write_text("dummy")
+    monkeypatch.setattr(commands.talosctl, "maintenance_reachable", lambda ip: False)
+    monkeypatch.setattr(commands.talosctl, "reachable", lambda *_a, **_k: False)
+
+    with pytest.raises(ReconcileError, match="cannot be told from a joined"):
+        commands.boot(tmp_path, "rp001")
+    # the client is constructed for the redfish-off check, but never driven
+    assert all(rf.calls == [] for rf in fake_redfish)
+
+
+def test_boot_force_reinstalls_a_machine_no_probe_could_decide(
+    make_config, tmp_path, fake_redfish, monkeypatch, stub_factory
+):
+    """`--force` is the operator's override for a machine the probes cannot
+    identify: the boot proceeds."""
+    _cfg(make_config)
+    (tmp_path / "talosconfig").write_text("dummy")
+    monkeypatch.setattr(commands.talosctl, "maintenance_reachable", lambda ip: False)
+    monkeypatch.setattr(commands.talosctl, "reachable", lambda *_a, **_k: False)
+    monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
+    commands.boot(tmp_path, "rp001", force=True)
+    assert fake_redfish[-1].calls == [
+        "eject", ("insert", ISO_URL), "boot-once", "power-on",
+    ]
+
+
+def test_boot_refusal_survives_a_missing_talosconfig(
+    make_config, tmp_path, monkeypatch
+):
+    """The talosconfig is derived state converge regenerates, so a deleted one
+    must not silence the guard: a throwaway client is built from the machine
+    secrets and the probe runs all the same."""
+    _cfg(make_config)
+    (tmp_path / "talossecrets.yaml").write_text("dummy")
+    monkeypatch.setattr(commands.talosctl, "maintenance_reachable", lambda ip: False)
+    monkeypatch.setattr(commands.talosctl, "reachable", lambda *_a, **_k: False)
+    generated = {}
+    monkeypatch.setattr(
+        commands.talosctl, "gen_talosconfig",
+        lambda cluster, endpoint, secrets, client_endpoint=None:
+            generated.update(cluster=cluster, endpoint=endpoint) or "dummy",
+    )
+
+    with pytest.raises(ReconcileError, match="cannot be told from a joined"):
+        commands.boot(tmp_path, "rp001")
+
+    assert generated == {"cluster": "testcluster", "endpoint": "172.29.21.5"}
+
+
+def test_boot_without_talosconfig_or_secrets_has_nothing_to_refuse(
+    make_config, tmp_path, fake_redfish, monkeypatch, stub_factory
+):
+    """No talossecrets.yaml means no cluster identity has ever existed, so no
+    machine can be joined to this cluster and the guard has nothing to
+    refuse: a first machine still boots."""
+    _cfg(make_config)
+    monkeypatch.setattr(
+        commands.talosctl, "maintenance_reachable",
+        lambda ip: pytest.fail("a machine of a cluster with no identity must not be probed"),
     )
     monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
     commands.boot(tmp_path, "rp001")
@@ -681,11 +805,13 @@ def test_join_runs_the_flow_in_order(make_config, tmp_path, monkeypatch):
     order = []
     monkeypatch.setattr(
         commands, "boot",
-        lambda root, name, *, serve=False, foreground=True: order.append(("boot", serve)),
+        lambda root, name, *, serve=False, foreground=True, force=False:
+            order.append(("boot", serve)),
     )
     for step in ("wait", "apply", "eject", "verify"):
         monkeypatch.setattr(
-            commands, step, lambda root, name, step=step: order.append((step, None)),
+            commands, step,
+            lambda root, name, step=step, **kw: order.append((step, None)),
         )
     commands.join(tmp_path, "rp001", serve=True)
     assert order == [("boot", True), ("wait", None), ("apply", None),
@@ -701,7 +827,7 @@ def test_join_without_redfish_is_wait_apply_verify(
     order = []
     for step in ("wait", "apply", "verify"):
         monkeypatch.setattr(
-            commands, step, lambda root, name, step=step: order.append(step)
+            commands, step, lambda root, name, step=step, **kw: order.append(step)
         )
     commands.join(tmp_path, "rp001")
     assert order == ["wait", "apply", "verify"]
@@ -729,7 +855,7 @@ def test_join_without_a_talosconfig_has_nothing_to_refuse(
     joined = []
     monkeypatch.setattr(commands, "boot", lambda root, name, **kw: joined.append(name))
     for step in ("wait", "apply", "eject", "verify"):
-        monkeypatch.setattr(commands, step, lambda root, name: None)
+        monkeypatch.setattr(commands, step, lambda root, name, **kw: None)
     commands.join(tmp_path, "rp001")
     assert joined == ["rp001"]
 

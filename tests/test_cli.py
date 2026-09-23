@@ -357,11 +357,11 @@ def test_plugin_status_exits_zero(make_config, monkeypatch, tmp_path):
     ("action", "expected_kwargs"),
     [
         ("inspect", {}),
-        ("boot", {"serve": False}),
+        ("boot", {"serve": False, "force": False}),
         ("wait", {}),
-        ("apply", {}),
+        ("apply", {"force": False}),
         ("eject", {}),
-        ("join", {"serve": False}),
+        ("join", {"serve": False, "force": False}),
     ],
 )
 def test_metal_dispatches(monkeypatch, tmp_path, action, expected_kwargs):
@@ -381,7 +381,19 @@ def test_metal_boot_forwards_serve(monkeypatch, tmp_path):
         lambda root, name, **kw: seen.update(root=root, name=name, **kw),
     )
     assert cli.main(["metal", "boot", "rp001", "--serve", "-C", str(tmp_path)]) == 0
-    assert seen == {"root": tmp_path, "name": "rp001", "serve": True}
+    assert seen == {"root": tmp_path, "name": "rp001", "serve": True, "force": False}
+
+
+def test_metal_join_forwards_force(monkeypatch, tmp_path):
+    """`--force` reaches the guard: a machine no probe could identify is only
+    reinstalled on the operator's explicit say-so."""
+    seen = {}
+    monkeypatch.setattr(
+        cli._metal, "join",
+        lambda root, name, **kw: seen.update(root=root, name=name, **kw),
+    )
+    assert cli.main(["metal", "join", "rp001", "--force", "-C", str(tmp_path)]) == 0
+    assert seen == {"root": tmp_path, "name": "rp001", "serve": False, "force": True}
 
 
 def test_metal_serve_is_rejected_for_the_bmc_free_actions(tmp_path, capsys):

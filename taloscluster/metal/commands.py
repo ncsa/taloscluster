@@ -33,7 +33,7 @@ from pathlib import Path
 import requests
 
 from ..config import Config, ConfigError, MetalServer, load_config
-from ..converge import _config_kubernetes_version
+from ..converge import _config_kubernetes_version, _talos_endpoint
 from ..errors import ReconcileError
 from ..infrastructure import Endpoint, backend_for
 from ..output import action, dry_run, info, report, warn
@@ -138,7 +138,8 @@ def inspect(root: Path, name: str) -> None:
     report({name: rf.summary()})
 
 
-def boot(root: Path, name: str, *, serve: bool = False, foreground: bool = True) -> None:
+def boot(root: Path, name: str, *, serve: bool = False, foreground: bool = True,
+         force: bool = False) -> None:
     """Mount the install ISO as virtual media, one-time boot it, power on.
 
     With `serve` the ISO is downloaded and handed out from this machine over
@@ -152,7 +153,7 @@ def boot(root: Path, name: str, *, serve: bool = False, foreground: bool = True)
     rf = _bmc(server)
     if rf is None:
         return
-    _refuse_joined(root, server)
+    _refuse_joined(cfg, root, server, force=force)
     iso_url = _iso_url(cfg)
     if dry_run():
         # no ISO download and no BMC call: the factory url is shown as the
@@ -229,7 +230,7 @@ def _warn_unignored(root: Path) -> None:
         )
 
 
-def apply(root: Path, name: str) -> None:
+def apply(root: Path, name: str, *, force: bool = False) -> None:
     """Generate the machine config and push it to the maintenance-mode node.
 
     The generated config is kept at `.metal/<name>-<role>.yaml` in the cluster
@@ -251,7 +252,7 @@ def apply(root: Path, name: str) -> None:
     """
     cfg = load_config(root)
     server = _find_server(cfg, name)
-    _refuse_joined(root, server)
+    _refuse_joined(cfg, root, server, force=force)
     secrets = State(root).require_secrets()
     kubeconfig = root / "kubeconfig"
     # a non-empty kubeconfig is the bootstrap signal converge itself uses
@@ -344,7 +345,7 @@ def _wait_configured(server: MetalServer, ip: str, talosconfig: Path,
         time.sleep(interval_s)
 
 
-def join(root: Path, name: str, *, serve: bool = False) -> None:
+def join(root: Path, name: str, *, serve: bool = False, force: bool = False) -> None:
     """The whole flow: boot, wait, apply, eject, verify.
 
     A machine whose redfish is off is never touched through its BMC: the
@@ -353,9 +354,9 @@ def join(root: Path, name: str, *, serve: bool = False) -> None:
     """
     cfg = load_config(root)
     server = _find_server(cfg, name)
-    _refuse_joined(root, server)
+    _refuse_joined(cfg, root, server, force=force)
     if server.redfish:
-        boot(root, name, serve=serve, foreground=False)
+        boot(root, name, serve=serve, foreground=False, force=force)
     else:
         _no_bmc(server)
     ip = _cluster_ip(server)
@@ -369,27 +370,63 @@ def join(root: Path, name: str, *, serve: bool = False) -> None:
         action(f"wait for {server.name} to come back with its configuration")
         return
     wait(root, name)
-    apply(root, name)
+    apply(root, name, force=force)
     if server.redfish:
         eject(root, name)
     verify(root, name)
 
 
-def _refuse_joined(root: Path, server: MetalServer) -> None:
+def _refuse_joined(cfg: Config, root: Path, server: MetalServer,
+                   *, force: bool = False) -> None:
     """Refuse a machine that already runs this cluster's configuration.
 
     boot, apply and join would drive it back through the install media,
-    which wipes an installed node -- a control plane's etcd with it.
+    which wipes an installed node -- a control plane's etcd with it. The
+    cluster probe dials through the control plane (`_talos_endpoint`), since
+    this host may not route the machine's address. A machine that answers
+    neither the maintenance apid nor the cluster's cannot be told from a
+    joined one, so it is refused too unless `force` says the operator took
+    the decision.
     """
     talosconfig = root / "talosconfig"
-    if not talosconfig.is_file():
-        return
-    if metal_talos.answers_as_cluster(talosconfig, server):
+    derived: tempfile.TemporaryDirectory | None = None
+    try:
+        if not talosconfig.is_file():
+            if not State(root).secrets_exist():
+                # no cluster identity on disk yet: no machine can be joined to
+                # this cluster, so there is nothing the guard could refuse
+                return
+            # the talosconfig is derived state converge regenerates; build a
+            # throwaway client from the machine secrets so the guard still runs
+            derived = tempfile.TemporaryDirectory(prefix="taloscluster-metal-guard-")
+            talosconfig = Path(derived.name) / "talosconfig"
+            talosconfig.write_text(
+                talosctl.gen_talosconfig(cfg.name, _cluster_ip(server),
+                                         State(root).secrets_path)
+            )
+        answers = metal_talos.answers_as_cluster(
+            talosconfig, server,
+            # without a control plane address known here the only decidable
+            # probe is the machine itself; an unanswered one still refuses
+            _talos_endpoint(cfg, talosconfig=talosconfig, required=False)
+            or _cluster_ip(server),
+        )
+    finally:
+        if derived is not None:
+            derived.cleanup()
+    if answers is True:
         raise ReconcileError(
             f"metal server {server.name} already answers apid with this cluster's "
             f"identity on {_cluster_ip(server)}; reinstalling it from the install "
             "media would wipe the machine -- run `taloscluster converge` for a config "
             "change, or reset the machine first if a re-join is really intended"
+        )
+    if answers is None and not force:
+        raise ReconcileError(
+            f"metal server {server.name} ({_cluster_ip(server)}) answers neither "
+            "the maintenance apid nor this cluster's apid, so it cannot be told "
+            "from a joined machine and reinstalling it could wipe one -- pass "
+            "--force if the machine is really not joined"
         )
 
 

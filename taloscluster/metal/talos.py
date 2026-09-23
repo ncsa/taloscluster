@@ -63,19 +63,32 @@ def cluster_ip(server: MetalServer) -> str:
     return server.interfaces[ifname].ip.split("/", 1)[0]
 
 
-def answers_as_cluster(talosconfig: Path, server: MetalServer) -> bool:
-    """True if the machine already answers apid with this cluster's identity.
+def answers_as_cluster(talosconfig: Path, server: MetalServer,
+                       endpoint: str) -> bool | None:
+    """Whether the machine already answers apid with this cluster's identity.
 
     A machine running a configuration refuses the insecure maintenance API but
     answers the cluster's apid -- it is joined, and driving it through the
     install media again would wipe it. `metal join` refuses such a machine and
     converge's compute phase skips it; both probe here so the two flows can
     never drift apart.
+
+    The cluster probe dials through `endpoint`, the control plane every other
+    converge call goes through, because this host may not route the machine's
+    address directly; the maintenance probe must dial the machine itself, the
+    insecure API having no cluster credentials to proxy with. None when neither
+    apid answers: the machine may be down, mid-boot, or unreachable even from
+    the control plane, and an undecided probe must never read as "not joined"
+    to a caller that would force-restart it into the install media.
     """
     ip = cluster_ip(server)
-    return not talosctl.maintenance_reachable(ip) and talosctl.reachable(
-        talosconfig, endpoint=ip, node=ip
-    )
+    if talosctl.maintenance_reachable(ip):
+        return False
+    if not endpoint:
+        return None
+    if not talosctl.reachable(talosconfig, endpoint=endpoint, node=ip):
+        return None
+    return True
 
 
 def installer(cfg: Config) -> tuple[str, str]:

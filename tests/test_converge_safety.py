@@ -21,6 +21,7 @@ from taloscluster.infrastructure import (
     NetworkAttachment,
     NetworkResult,
 )
+from taloscluster.metal import redfish as metal_redfish
 from taloscluster.talos import machineconfig
 
 # A guaranteed-absent talosconfig path. The repository root is itself a cluster
@@ -3695,12 +3696,14 @@ def test_converge_reports_a_failed_metal_join_as_incomplete(monkeypatch, tmp_pat
         converge, "_reconcile_joined", lambda *a, **k: inventory
     )
     monkeypatch.setattr(converge, "_run_plugins", lambda *a, **kw: 0)
-    # rp001 never comes up: booted through its BMC, waited out, never answers
+    # rp001 never comes up: booted through its BMC (the BMC reports it powered
+    # off, so the gate clears the boot), waited out, never answers
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
     monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
     monkeypatch.setattr(converge, "_boot_metal", lambda *_a: None)
     monkeypatch.setattr(converge, "_wait_maintenance", lambda *_a: False)
+    monkeypatch.setattr(converge, "_bmc_reports_powered_off", lambda _s: True)
     monkeypatch.setattr(
         converge.talosctl,
         "apply_config_insecure",
@@ -4105,16 +4108,19 @@ def test_join_metal_applies_the_config_to_a_machine_in_maintenance(monkeypatch):
 
 
 def test_join_metal_boots_a_redfish_machine_then_applies(monkeypatch):
-    """Not in maintenance but drivable: mount the ISO the image phase resolved,
-    one-time boot, power on, wait for the maintenance apid, then apply --
-    `metal join`'s order. The join itself never asks the factory for anything:
-    the ISO's schematic id is resolved in the image phase."""
+    """Not in maintenance but drivable: the BMC reports the machine powered
+    off -- the one state it cannot be running this cluster's configuration
+    in -- so the ISO the image phase resolved is mounted, one-time booted,
+    powered on, the maintenance apid waited out, then applied -- `metal join`'s
+    order. The join itself never asks the factory for anything: the ISO's
+    schematic id is resolved in the image phase."""
     calls: list[str] = []
     reachable = iter([False, False, True])
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(
         converge.talosctl, "maintenance_reachable", lambda _ip: next(reachable, True)
     )
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
     monkeypatch.setattr(
         converge.factory,
         "schematic_id",
@@ -4126,6 +4132,9 @@ def test_join_metal_boots_a_redfish_machine_then_applies(monkeypatch):
     class FakeRedfish:
         def __init__(self, _bmc):
             pass
+
+        def power_state(self):
+            return "Off"
 
         def eject_media(self):
             calls.append("eject")
@@ -4177,9 +4186,11 @@ def test_join_metal_skips_a_machine_that_never_reaches_maintenance(monkeypatch):
     clean exit and leaves it out of the Ready wait."""
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
     monkeypatch.setattr(converge, "dry_run", lambda: False)
     monkeypatch.setattr(converge, "_wait_maintenance", lambda *_a: False)
     monkeypatch.setattr(converge, "_boot_metal", lambda *_a: None)
+    monkeypatch.setattr(converge, "_bmc_reports_powered_off", lambda _s: True)
     monkeypatch.setattr(
         converge.talosctl,
         "apply_config_insecure",
@@ -4280,6 +4291,191 @@ def test_join_metal_skips_a_joined_machine_whose_kube_node_is_missing(
     # the machine is named back so it stays out of the Ready wait and the run
     # reports incomplete instead of a clean exit
     assert unjoined == {"rp001"}
+
+
+def test_join_metal_probes_the_cluster_apid_through_the_control_plane(monkeypatch):
+    """The already-joined probe dials `-e <control plane> -n <machine ip>`, the
+    way every other talosctl call goes through cp-01: this host may not route
+    the machine's address directly, and a probe that dials the machine itself
+    reads an unroutable -- or merely slow -- joined machine as unjoined."""
+    seen: dict[str, str] = {}
+    talosconfig = Path("talosconfig")
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+
+    def maintenance(ip):
+        seen["maintenance_node"] = ip
+        return False
+
+    def cluster(_tc, endpoint, node):
+        seen.update(endpoint=endpoint, node=node)
+        return False
+
+    monkeypatch.setattr(converge.talosctl, "maintenance_reachable", maintenance)
+    monkeypatch.setattr(converge.talosctl, "reachable", cluster)
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config_insecure",
+        lambda *_a: pytest.fail("an undecided machine must not be applied to"),
+    )
+    monkeypatch.setattr(converge, "_boot_metal", lambda *_a: None)
+    monkeypatch.setattr(converge, "_bmc_reports_powered_off", lambda _s: True)
+    monkeypatch.setattr(converge, "_wait_maintenance", lambda *_a: False)
+
+    converge._join_metal(
+        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        talosconfig, Path("/nonexistent/kubeconfig"), "http://iso",
+    )
+
+    assert seen == {
+        "maintenance_node": "192.0.2.61",
+        "endpoint": "testcluster-controlplane-01",
+        "node": "192.0.2.61",
+    }
+
+
+def test_join_metal_refuses_to_boot_a_machine_no_probe_could_decide(
+    monkeypatch, tmp_path, capsys
+):
+    """A machine that answers neither apid cannot be told from a joined one an
+    unroutable L2 or a slow apid hides, and its BMC reporting On proves only
+    that something is running. Booting would force-restart it into the install
+    media, so the machine is left alone and the run reports incomplete; the
+    explicit `metal join --force` is the operator's override."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("context: testcluster\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    # the BMC reports the machine running: nothing proves a boot safe
+    monkeypatch.setattr(converge, "_bmc_reports_powered_off", lambda _s: False)
+    monkeypatch.setattr(
+        converge, "_boot_metal",
+        lambda *_a: pytest.fail("an undecided machine must not be booted"),
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config_insecure",
+        lambda *_a: pytest.fail("an undecided machine must not be applied to"),
+    )
+
+    unjoined, _deferred = converge._join_metal(
+        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        talosconfig, kubeconfig, "http://iso",
+    )
+
+    err = capsys.readouterr().err
+    assert "not force-restarting" in err
+    assert "`metal join --force`" in err
+    assert unjoined == {"rp001"}
+
+
+def test_join_metal_boots_a_machine_the_bmc_reports_off_without_a_kubeconfig(
+    monkeypatch,
+):
+    """A first run has no kubeconfig to consult, so the BMC's own power state
+    is the remaining decider: Off is the one state a machine cannot be running
+    this cluster's configuration in, and the boot a fresh machine waits for
+    proceeds."""
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(converge, "_boot_metal", lambda *_a: None)
+    monkeypatch.setattr(converge, "_wait_maintenance", lambda *_a: True)
+    monkeypatch.setattr(converge, "_bmc_reports_powered_off", lambda _s: True)
+    applied: list[str] = []
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config_insecure",
+        lambda ip, _c: applied.append(ip),
+    )
+
+    unjoined, _deferred = converge._join_metal(
+        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
+    )
+
+    assert applied == ["192.0.2.61"]
+    assert unjoined == set()
+
+
+def test_join_metal_leaves_a_machine_the_kube_api_still_lists(
+    monkeypatch, tmp_path, capsys
+):
+    """Neither apid answering proves nothing while the kube-api still lists the
+    machine as a Node: the probes may simply not reach it, and a Node is a live
+    machine the install media would wipe. The api read the kube phase ran to
+    pick the pending machines answered absent, the re-read at the boot gate
+    answers present -- a flaky api between the two reads must never be settled
+    by a force-restart."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text("context: testcluster\n")
+    answers = iter([False, True])
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: next(answers))
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(
+        converge, "_boot_metal",
+        lambda *_a: pytest.fail("a Kubernetes Node must not be driven through its BMC"),
+    )
+    monkeypatch.setattr(
+        converge.talosctl,
+        "apply_config_insecure",
+        lambda *_a: pytest.fail("a Kubernetes Node must not be applied to"),
+    )
+
+    unjoined, _deferred = converge._join_metal(
+        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        talosconfig, kubeconfig, "http://iso",
+    )
+
+    assert "answered no join probe" in capsys.readouterr().err
+    assert unjoined == {"rp001"}
+
+
+def test_bmc_reports_powered_off_only_on_an_off_answer(monkeypatch):
+    """Only the BMC's own "Off" clears a boot: an unreachable or silent
+    controller must never read as a machine safe to force-restart."""
+    server = _pending_metal_cfg(redfish=True).metal.groups["phoenix"].servers["rp001"]
+
+    class Unreachable:
+        def __init__(self, _bmc):
+            pass
+
+        def power_state(self):
+            raise metal_redfish.RedfishError("could not reach the Redfish controller")
+
+    monkeypatch.setattr(converge.metal_redfish, "Redfish", Unreachable)
+    assert converge._bmc_reports_powered_off(server) is False
+
+    class Silent:
+        def __init__(self, _bmc):
+            pass
+
+        def power_state(self):
+            return ""
+
+    monkeypatch.setattr(converge.metal_redfish, "Redfish", Silent)
+    assert converge._bmc_reports_powered_off(server) is False
+
+    class Off:
+        def __init__(self, _bmc):
+            pass
+
+        def power_state(self):
+            return "Off"
+
+    monkeypatch.setattr(converge.metal_redfish, "Redfish", Off)
+    assert converge._bmc_reports_powered_off(server) is True
 
 
 def test_join_metal_leaves_a_machine_without_auto_join_alone(monkeypatch):
