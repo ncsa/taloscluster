@@ -9,7 +9,7 @@ Describe the cluster you want in `cluster.yaml` and keep provider credentials an
 - Provider boot images, networks, firewall rules, and machines for control plane and worker pools.
 - Talos machine configuration, cluster bootstrap, and generated `talosconfig` and `kubeconfig` files.
 - Scaling and rolling version upgrades, with existing nodes upgraded before new nodes are added.
-- Talos bootstrap manifests for metrics-server and the kubelet serving certificate approver, plus optional [plugins](concepts/plugins.md) for Rancher registration and ArgoCD integration.
+- Talos bootstrap manifests for metrics-server and the kubelet serving certificate approver, plus optional [plugins](concepts/plugins.md) for Rancher registration, ArgoCD integration, and installing Helm charts.
 
 Resources have deterministic names and ownership tags, so taloscluster discovers existing infrastructure without a separate infrastructure state file. The cluster directory still holds configuration, credentials, and the generated Talos cryptographic identity; see [Configuration](configuration.md#other-files-in-the-directory) for the files to retain and back up.
 

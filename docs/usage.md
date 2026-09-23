@@ -43,7 +43,7 @@ Change a pool's `count` and converge. Raising it adds nodes with the next free n
 
 On Proxmox, `cores`, `memory` and a larger `disk` are applied in place; pending CPU and memory changes are listed on every run until `converge --reboot` restarts them one at a time. A grown disk is likewise remembered until it is restarted, so a run without `--reboot` that grows a disk and a later run with `--reboot` both list the node; the pending grow is cleared once Proxmox reboots it. Editing [`security`](configuration/security.md) reconciles the security group, the per-VM firewall and the Talos ingress firewall on the next converge. Moving `kubeapi_vip` re-homes the API endpoint through a machine-config apply on every node, which is not guaranteed to avoid a restart. Renumbering changes, such as another bridge or a different `network.cluster.cidr` on a managed SDN, are refused; recreate the cluster instead.
 
-On OpenStack, `flavor`, `disk`, and `availability_zone` affect new servers only; converge does not resize or move existing servers. See [Network](configuration/network.md) for provider-specific DNS behavior.
+On OpenStack, a `flavor`, `disk`, or `availability_zone` change on an existing server is refused — servers are create-only there, so converge stops before it touches anything instead of resizing or silently ignoring the edit; replace a node by scaling its pool down past it and back up (see [Node pools](configuration/pools.md#flavor)). See [Network](configuration/network.md) for provider-specific DNS behavior.
 
 ## Look inside
 

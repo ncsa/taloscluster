@@ -87,6 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Fix stale docs: the OpenStack server refusal, the NIC MTU restart deferral, charts plugin coverage and the live workflow test's VM-only scope.
 - Stop `init` re-runs from appending a commented plugin secrets example again.
 - Prefix `security:` rules in the Talos host firewall and refuse two rules whose names differ only by case or punctuation.
 - Make ArgoCD converge apply only missing or drifted manifests, refuse a component enabled under both argocd and charts, and report a failed Rancher agent removal or identity read.

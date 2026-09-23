@@ -239,3 +239,16 @@ def test_harness_teardown_line_does_not_overclaim_provider_deletion():
     # The teardown info line must match what is actually asserted (the three local
     # client files); provider-resource deletion is trusted to destroy's exit code.
     assert "managed resources" not in HARNESS.read_text()
+
+
+def test_guide_documents_the_vm_only_scope():
+    # Regression: the harness counts only the controlplane and worker pools,
+    # reads and edits cluster.yaml alone, rewrites the file without its
+    # comments, and destroy keeps talosconfig for a metal cluster -- so the
+    # guide must scope the procedure to a plain VM cluster instead of implying
+    # any quickstart-shaped cluster works.
+    text = GUIDE.read_text()
+    assert "VM-only" in text
+    assert "configuration/metal.md" in text
+    assert "included file" in text
+    assert "comments" in text

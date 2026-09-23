@@ -2,7 +2,7 @@
 
 `taloscluster` provisions and manages [Talos Linux](https://www.talos.dev/) Kubernetes clusters on OpenStack or Proxmox, optionally alongside bare metal. Describe the cluster in `cluster.yaml`, keep credentials in `secrets.yaml`, and run `taloscluster converge` to create, scale, or upgrade it.
 
-Resources are discovered by name and ownership tags, without a separate infrastructure state file. Optional plugins register the cluster with Rancher or ArgoCD.
+Resources are discovered by name and ownership tags, without a separate infrastructure state file. Optional plugins register the cluster with Rancher or ArgoCD, and the charts plugin installs Helm charts into the cluster.
 
 **[Documentation](https://ncsa.github.io/taloscluster/)** · [Quickstart](https://ncsa.github.io/taloscluster/quickstart/) · [Command reference](https://ncsa.github.io/taloscluster/commands/)
 
@@ -14,7 +14,7 @@ Install [uv](https://docs.astral.sh/uv/) and make `talosctl` and `kubectl` avail
 uv tool install git+https://github.com/ncsa/taloscluster
 ```
 
-For optional Rancher and ArgoCD plugins, install the `all` extra:
+For the optional Rancher, ArgoCD, and charts plugins, install the `all` extra:
 
 ```bash
 uv tool install "taloscluster[all] @ git+https://github.com/ncsa/taloscluster"
@@ -44,7 +44,7 @@ Edit the generated templates for your environment before converging. Back up `ta
 - [Configuration](https://ncsa.github.io/taloscluster/configuration/): every cluster and secrets setting.
 - [Proxmox setup](https://ncsa.github.io/taloscluster/providers/proxmox/): permissions, networking, and managed SDN.
 - [OpenStack setup](https://ncsa.github.io/taloscluster/providers/openstack/): application credentials, services and quotas, networking, and access.
-- [Plugins](https://ncsa.github.io/taloscluster/concepts/plugins/): Rancher, ArgoCD, and writing a plugin.
+- [Plugins](https://ncsa.github.io/taloscluster/concepts/plugins/): Rancher, ArgoCD, charts, and writing a plugin.
 - [Troubleshooting](https://ncsa.github.io/taloscluster/troubleshooting/): common problems and diagnostic steps.
 
 ## Development

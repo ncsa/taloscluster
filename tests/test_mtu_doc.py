@@ -18,6 +18,7 @@ from taloscluster.config import DEFAULT_MTU
 ROOT = Path(__file__).resolve().parent.parent
 NETWORK = ROOT / "docs" / "configuration" / "network.md"
 MACHINES = ROOT / "docs" / "concepts" / "machines.md"
+PROVIDER = ROOT / "docs" / "providers" / "proxmox.md"
 
 JUMBO = 9000  # the jumbo MTU example the network page documents
 PING_PAYLOAD = 8972  # JUMBO minus the 28 bytes of IP and ICMP headers
@@ -54,3 +55,16 @@ def test_machines_page_carries_the_link_mtu_summary():
     text = MACHINES.read_text()
     assert f"clamped to {DEFAULT_MTU}" in text
     assert "../configuration/network.md#mtu" in text
+
+
+def test_network_page_defers_the_nic_mtu_strip_to_a_restart():
+    # Regression: the network page used to say converge strips a VM NIC's
+    # explicit MTU "live"; Proxmox re-plugs a running VM's NIC, which cuts the
+    # node off the pod network until flannel restarts, so the code defers the
+    # rewrite to the VM's next restart and the provider page documents that.
+    # Neither page may claim live application again.
+    network = NETWORK.read_text()
+    for page in (network, PROVIDER.read_text()):
+        assert "applies live" not in page
+    mtu = network.split("### `network.cluster.mtu`", 1)[1].split("\n### ", 1)[0]
+    assert "restart" in mtu
