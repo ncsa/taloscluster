@@ -852,7 +852,7 @@ def _converge_issuers(entry: Entry, root, namespace: str) -> None:
     log("apply cert-manager ClusterIssuers")
     # the ClusterIssuers are validated by the chart's webhook, which is still
     # coming up seconds after a fresh install
-    if not kube.wait_deployment_available(root, "cert-manager", namespace):
+    if not kube.wait_deployment_available(root, f"{entry.name}-webhook", namespace):
         info("cert-manager: webhook not reported ready; applying anyway")
     kube.apply(root, "-", label="cert-manager ClusterIssuers", input=manifest)
 

@@ -1065,6 +1065,22 @@ def test_cert_manager_issuers_applied_after_chart(tmp_path, fake_helm, no_kube):
     assert "-" in no_kube["apply"]  # ClusterIssuers via stdin after the chart
 
 
+def test_cert_manager_issuers_wait_for_the_webhook(tmp_path, fake_helm, no_kube, monkeypatch):
+    # the ClusterIssuers are validated by the chart's webhook deployment,
+    # which is still coming up seconds after a fresh install; the controller
+    # reporting available says nothing about the webhook
+    waited = []
+
+    def wait(root, name, namespace, **k):
+        waited.append(name)
+        return True
+
+    monkeypatch.setattr(reconcile.kube, "wait_deployment_available", wait)
+    charts = {"cert-manager": {"email": "a@b", "prod": True}}
+    reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert waited == ["cert-manager-webhook"]
+
+
 def test_cert_manager_issuers_deleted_before_uninstall(tmp_path, monkeypatch):
     log = []
     _stub(monkeypatch, log, releases=("cert-manager",), exists=True)

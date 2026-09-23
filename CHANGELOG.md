@@ -92,6 +92,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Continue charts converge, check and destroy when a `latest` manifest version cannot be resolved, failing only that entry.
 - Remove only namespaces the charts plugin created on disable and destroy, never a pre-existing, shared or cluster-owned namespace.
 - Uninstall a ceph-csi chart whose `rbd` or `fs` flag was turned off, together with its namespace and Secret.
+- Wait for the cert-manager webhook before applying letsencrypt ClusterIssuers on a fresh install.
 - Keep credentials out of YAML parse errors, which now name the file and the problem's line and column.
 - Push machine configs in the Talos document layout each node's running version accepts.
 - Exit cleanly when a confirmation prompt runs without a terminal, as in CI without `--yes`, instead of tracebacking.
