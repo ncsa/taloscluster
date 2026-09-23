@@ -2112,9 +2112,15 @@ def test_talosconfig_endpoint_treats_a_non_mapping_file_as_unknown(tmp_path):
 def test_talos_endpoint_without_any_address_is_an_error(tmp_path):
     with pytest.raises(ReconcileError, match="no address known for phoenix-controlplane-01"):
         converge._talos_endpoint(_no_tailscale_cfg(), NetworkResult(), InfrastructureInventory())
+
+
+def test_talos_endpoint_optional_without_any_address_is_empty(tmp_path):
+    """`required=False` never falls back to the bare hostname on a cluster
+    without tailscale: the name does not resolve there, so writing it into the
+    talosconfig would make the next run's toggle check refuse the cluster."""
     assert (
         converge._talos_endpoint(_no_tailscale_cfg(), talosconfig=tmp_path / "none", required=False)
-        == "phoenix-controlplane-01"
+        == ""
     )
 
 
@@ -2143,7 +2149,7 @@ def test_talos_endpoint_with_a_keyless_tailscale_section_uses_the_real_address(
     )
     assert converge._talos_endpoint(cfg, refs) == "192.168.100.11"
     assert (
-        converge._talos_endpoint(cfg, talosconfig=tmp_path / "none", required=False) == host
+        converge._talos_endpoint(cfg, talosconfig=tmp_path / "none", required=False) == ""
     )
     with pytest.raises(ReconcileError, match=f"no address known for {host}"):
         converge._talos_endpoint(cfg, NetworkResult(), InfrastructureInventory())

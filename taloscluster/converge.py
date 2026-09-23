@@ -191,14 +191,13 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # write the client talosconfig now that the endpoint (fip) is known. cp-01's
     # tailscale name goes in as the context endpoint so a hand-typed `talosctl`
     # needs no -e; -n stays mandatory. taloscluster itself still passes both.
+    # Without tailscale and with no real address known yet nothing is written:
+    # the bare hostname would never resolve there and the next run's toggle
+    # check would read it as a live tailscale switch.
     if state.secrets_exist() and refs.kubernetes.advertised_address and not dry_run():
-        _write_talosconfig(
-            talosconfig_path,
-            cfg,
-            refs,
-            secrets_path,
-            _talos_endpoint(cfg, refs, inv, talosconfig_path, required=False),
-        )
+        endpoint = _talos_endpoint(cfg, refs, inv, talosconfig_path, required=False)
+        if endpoint:
+            _write_talosconfig(talosconfig_path, cfg, refs, secrets_path, endpoint)
 
     # ---- 4. DISCOVER: is the cluster reachable? --------------------------
     # The only robust "needs bootstrap" signal is that the kube-api does not
@@ -422,7 +421,13 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # to it).
     cp1 = f"{cfg.name}-controlplane-01"
     if not _tailscale_active(cfg) and not dry_run():
-        cp1 = _resolve_cp1_address(backend, cfg, refs) or cp1
+        # no MagicDNS name resolves here, so the poll's failure falls back to
+        # what the network result, the inventory or the talosconfig record --
+        # never the bare hostname, which would not resolve and would be
+        # recorded by the write below
+        cp1 = _resolve_cp1_address(backend, cfg, refs) or _talos_endpoint(
+            cfg, refs, inv, talosconfig_path
+        )
         # the talosconfig written above may predate cp-01's address (first
         # run) or carry a stale DHCP lease; keep it pointing at the real node
         if state.secrets_exist() and refs.kubernetes.advertised_address:
@@ -1271,6 +1276,11 @@ def _talos_endpoint(
     endpoint converge recorded in the talosconfig on its last run. Never the
     kube-api VIP -- it belongs to whichever node currently owns it, and a
     cluster.yaml edit could point it at an address no node owns yet.
+
+    With ``required=False`` and no address known on a cluster without
+    tailscale, "" is returned instead of the bare hostname: the name does not
+    resolve there, so recording it in the talosconfig would break every later
+    run (the toggle check reads it as a live tailscale switch).
     """
     host = f"{cfg.name}-controlplane-01"
     if _tailscale_active(cfg):
@@ -1288,7 +1298,7 @@ def _talos_endpoint(
             "address without tailscale (the provider has not reported one and no "
             "talosconfig from an earlier converge records it)"
         )
-    return host
+    return ""
 
 
 def _talosconfig_endpoint(talosconfig: Path, cluster: str) -> str:

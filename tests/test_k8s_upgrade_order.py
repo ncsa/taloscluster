@@ -884,7 +884,10 @@ def test_converge_recovers_a_missing_kubeconfig_and_keeps_upgrade_before_scale_u
         InfrastructureInventory(
             machines={
                 "testcluster-controlplane-01": InfrastructureMachine(
-                    "testcluster-controlplane-01"
+                    "testcluster-controlplane-01",
+                    # recovery dials cp-01's real address: without tailscale
+                    # the provider inventory is what reports it
+                    attachments=(NetworkAttachment("cluster", "192.168.100.11"),),
                 )
             }
         )
@@ -1091,6 +1094,141 @@ def test_converge_plan_recovers_without_stubbing_phase_functions(
 
     assert not kubeconfig.exists()  # dry-run wrote no client file
     assert not backend.applied  # nothing reached reconcile_machines (no configs)
+
+
+class _BridgeDhcpNoAddressBackend(_ScaleUpAfterUpgradeBackend):
+    """A cluster without tailscale on a DHCP bridge: neither the network plan
+    nor the provider inventory reports cp-01's address (no attachments to read,
+    a silent guest agent), so no real address is known anywhere."""
+
+    def reconcile_network(self, _machines, _inventory):
+        return NetworkResult(
+            kubernetes=Endpoint(vip="", advertised_address="203.0.113.10")
+        )
+
+
+def test_converge_refuses_instead_of_recording_the_hostname_without_tailscale(
+    make_config, monkeypatch, tmp_path
+):
+    """First run without tailscale on a DHCP bridge: no cp-01 address is known
+    (the network plan reports no attachments and the guest agent has not
+    answered the inventory poll). Converge must refuse with the no-address
+    error instead of writing the bare hostname into the talosconfig -- the
+    name does not resolve there, and the next run's toggle check would read it
+    as a live tailscale switch, blocking every later converge."""
+    cfg = make_config({
+        "controlplane": {"count": 1, "flavor": "f", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
+    })
+    assert not cfg.tailscale_enabled
+    backend = _BridgeDhcpNoAddressBackend(InfrastructureInventory())
+    state = _ExistingSecretsState(tmp_path)
+
+    def fake_build_configs(
+        _cfg, _machines, _endpoint, _secrets_path, _images,
+        _contributions, default_tags=None, kubernetes_version=None,
+        talos_versions=None,
+    ):
+        return {}
+
+    monkeypatch.setattr(machineconfig, "build_configs", fake_build_configs)
+    # the inventory poll gave up without an address (a silent guest agent)
+    monkeypatch.setattr(converge, "_resolve_cp1_address", lambda *_a, **_k: "")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    with pytest.raises(ReconcileError, match="no address known for testcluster-controlplane-01"):
+        converge.converge(tmp_path)
+
+    # neither talosconfig write landed: the network-phase write records
+    # nothing while no real address is known, and the run refused before the
+    # post-compute one
+    assert not (tmp_path / "talosconfig").exists()
+
+
+def test_converge_keeps_the_recorded_address_when_the_inventory_poll_fails(
+    make_config, monkeypatch, tmp_path
+):
+    """A healthy cluster without tailscale whose guest agent goes briefly
+    silent: the talosconfig must keep recording cp-01's real address -- the one
+    the last converge recorded -- not the bare hostname, which does not
+    resolve and would make the next run's toggle check refuse the cluster
+    until the operator deletes the talosconfig."""
+    cfg = make_config({
+        "controlplane": {"count": 1, "flavor": "f", "disk": 40},
+        "workers": {"worker": {"count": 1, "flavor": "f", "disk": 40}},
+        "kubernetes": {"version": "v1.36.4"},
+    })
+    assert not cfg.tailscale_enabled
+    # the machine exists, but the silent guest agent leaves it addressless
+    backend = _BridgeDhcpNoAddressBackend(
+        InfrastructureInventory(
+            machines={
+                "testcluster-controlplane-01": InfrastructureMachine(
+                    "testcluster-controlplane-01"
+                ),
+            }
+        )
+    )
+    state = _ExistingSecretsState(tmp_path)
+    talosconfig = tmp_path / "talosconfig"
+    talosconfig.write_text(
+        "context: testcluster\ncontexts:\n  testcluster:\n"
+        "    endpoints:\n    - 192.168.100.11\n"
+    )
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+    writes: list[str] = []
+
+    def record_write(path, _cfg, _refs, _secrets, endpoint):
+        writes.append(endpoint)
+        path.write_text(
+            "context: testcluster\ncontexts:\n  testcluster:\n"
+            f"    endpoints:\n    - {endpoint}\n"
+        )
+
+    def fake_build_configs(
+        _cfg, _machines, _endpoint, _secrets_path, _images,
+        _contributions, default_tags=None, kubernetes_version=None,
+        talos_versions=None,
+    ):
+        return {}
+
+    monkeypatch.setattr(machineconfig, "build_configs", fake_build_configs)
+    monkeypatch.setattr(converge, "_write_talosconfig", record_write)
+    # the guest agent went briefly silent: the inventory poll gives up
+    monkeypatch.setattr(converge, "_resolve_cp1_address", lambda *_a, **_k: "")
+    monkeypatch.setattr(converge.talosctl, "running_extensions", lambda *_a: ["schematic"])
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.36.4")
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
+    monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    converge.converge(tmp_path)
+
+    # both writes carried cp-01's real address; the bare hostname never
+    # replaced it as the recorded endpoint
+    assert writes == ["192.168.100.11", "192.168.100.11"]
+    assert "192.168.100.11" in talosconfig.read_text()
+    assert "testcluster-controlplane-01" not in talosconfig.read_text()
 
 
 # ---------------------------------------------------------------------------
