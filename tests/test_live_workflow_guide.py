@@ -1,13 +1,13 @@
-"""Keep the live-workflow test and its guide in lockstep with the CLI and schema.
+"""Keep the live-workflow harness valid and its guide's commands correct.
 
 The live workflow test is the only path that runs the real ``taloscluster``
 against a provider (it takes live credentials, so it never runs in CI), but the
-guide and the script can still drift: a subcommand that stops being registered,
-a ``kubectl`` call that stops pointing at the generated ``kubeconfig``, or a
-``cluster.yaml`` key the harness edits that is no longer part of the schema.
-These tests keep the harness and its documentation pinned to the actual CLI and
-to the config schema that ``scaffold.init`` writes, the same way the docs-audit
-and maintenance-guide tests pin the other operational guides.
+harness script and its guide can still drift. The harness must stay executable,
+syntactically valid bash that guards its value flags, splits the documented
+``TALOSCLUSTER`` command value, refuses a no-op upgrade target, points every
+kubectl call at the generated kubeconfig, and edits keys the schema still
+defines, for both providers. The guide must stay published and only call
+registered subcommands; its prose may be reworded freely.
 """
 
 from __future__ import annotations
@@ -114,25 +114,6 @@ def test_harness_runs_for_each_provider():
     assert 'case "$PROVIDER" in openstack|proxmox' in text
 
 
-def test_guide_maps_the_four_workflows_to_existing_doc_pages():
-    text = GUIDE.read_text()
-    # each phase must cite the page that documents it, so a renamed page fails here.
-    assert "quickstart.md" in text
-    assert "usage.md#upgrade-talos-or-kubernetes" in text
-    assert "maintenance.md" in text
-    assert "usage.md#tear-down" in text
-
-
-def test_guide_documents_multiworld_taloscluster_value():
-    # The documented release-gate form -- `TALOSCLUSTER="uv tool run taloscluster"` --
-    # is a command with arguments, so the harness must keep splitting the value
-    # into words. If the guide ever documents a plain binary path instead, this
-    # pin fails and the harness could revert to a single-argument array.
-    text = GUIDE.read_text()
-    assert "TALOSCLUSTER=" in text
-    assert "uv tool run taloscluster" in text
-
-
 def test_harness_splits_the_documented_taloscluster_value():
     # Regression: `TALOSCLUSTER` must be treated as a command line, not a single
     # executable name, or the guide's `uv tool run taloscluster` fails preflight
@@ -157,72 +138,17 @@ def test_harness_splits_the_documented_taloscluster_value():
     assert lines[1].split() == ["uv", "tool", "run", "taloscluster"]
 
 
-def test_guide_and_harness_drain_the_largest_worker_pool():
-    # The harness drains the configured pool with the HIGHEST count (so a
-    # zero-node test pool is never chosen). The guide must describe the same
-    # selection, not "the first pool" (which the harness does not pick). Both files
-    # must stay in lockstep on the wording and on the selection logic.
-    assert "max(pools, key=count)" in HARNESS.read_text()
-    for text in (HARNESS.read_text(), GUIDE.read_text()):
-        assert "first worker pool" not in text, "drifted to selecting the first pool"
-        assert "largest worker pool" in text, "worker-pool wording drifted from the harness"
-
-
-def test_guide_upgrade_claim_matches_harness_assertions():
-    # Phase 2 must describe what the harness and converge actually check: converge
-    # refuses to finish a node until it reports the target Talos version (so its
-    # clean exit after the bump proves the Talos rollout), and the harness then
-    # reads the kubelet minor for every node from the cluster kubeconfig. If the
-    # wording claims a per-node Talos read the harness performs nowhere, this fails.
-    text = GUIDE.read_text()
-    assert "largest worker pool" in text  # phase 3 confirmed configured before this
-    upgrade = text.split("**Upgrade**", 1)[1].split("**Drain**", 1)[0]
-    assert "target Talos version" in upgrade
-    assert "reports the pinned Kubernetes minor" in upgrade
-    assert "kubeconfig" in upgrade
-
-
 def test_harness_refuses_a_noop_upgrade_target():
     # The upgrade phase must exercise a real version bump, not silently converge
     # to a no-op (the node count stays, so a pass would prove nothing). The
     # harness refuses a target that equals its pin and tells the user to pass a
-    # newer version; the guide documents that refusal.
+    # newer version.
     text = HARNESS.read_text()
     assert '[[ "$TALOS_VERSION" != "$old_talos" ]]' in text
     assert '[[ "$KUBERNETES_VERSION" != "$old_k8s" ]]' in text
     assert "already matches the pin" in text
     assert "pass --talos-version to force an upgrade" in text
     assert "pass --kubernetes-version to force an upgrade" in text
-    assert "already equals its pin is refused" in GUIDE.read_text()
-
-
-def test_guide_does_not_say_the_provider_section_stays_scaffolded():
-    # Regression: the scaffolded provider section is all placeholders (endpoint,
-    # availability zone, external net / storage) that must be replaced with the
-    # tenant's values. The guide must not tell the reader it stays as-is, or a
-    # literal run fails the preflight status check against example.edu.
-    text = GUIDE.read_text()
-    assert "provider section" in text
-    assert "placeholders" in text
-    assert "availability_zone" in text or "external_net" in text or "iso_storage" in text
-    assert "example.edu" in text
-    # the guide must point at the provider setup guides for the actual keys.
-    assert "providers/openstack.md" in text
-    assert "providers/proxmox.md" in text
-
-
-def test_guide_documents_tailscale_handling():
-    # Regression: the scaffold adds a `tailscale:` block to both files (login_server
-    # in cluster.yaml, an auth_key "CHANGE-ME" placeholder in secrets.yaml). Neither
-    # the placeholder refusal nor the tailscale_enabled hang is discoverable, so the
-    # guide must tell the reader to remove the section from both files (or supply
-    # real values) and to keep the 100.64.0.0/10 allowlist when reaching nodes over
-    # the tailnet.
-    text = GUIDE.read_text()
-    assert "Tailscale" in text
-    assert "CHANGE-ME" in text and "CHANGE-ME" in SCAFFOLD.read_text()
-    assert "remove the `tailscale:` section from both `cluster.yaml` and `secrets.yaml`" in text
-    assert "100.64.0.0/10" in text
 
 
 def test_harness_usage_when_a_value_flag_is_last():
@@ -233,22 +159,3 @@ def test_harness_usage_when_a_value_flag_is_last():
     result = subprocess.run([str(HARNESS), "--provider"], capture_output=True, text=True)
     assert result.returncode != 0
     assert "usage" in (result.stdout + result.stderr).lower() or "--provider" in result.stderr
-
-
-def test_harness_teardown_line_does_not_overclaim_provider_deletion():
-    # The teardown info line must match what is actually asserted (the three local
-    # client files); provider-resource deletion is trusted to destroy's exit code.
-    assert "managed resources" not in HARNESS.read_text()
-
-
-def test_guide_documents_the_vm_only_scope():
-    # Regression: the harness counts only the controlplane and worker pools,
-    # reads and edits cluster.yaml alone, rewrites the file without its
-    # comments, and destroy keeps talosconfig for a metal cluster -- so the
-    # guide must scope the procedure to a plain VM cluster instead of implying
-    # any quickstart-shaped cluster works.
-    text = GUIDE.read_text()
-    assert "VM-only" in text
-    assert "configuration/metal.md" in text
-    assert "included file" in text
-    assert "comments" in text

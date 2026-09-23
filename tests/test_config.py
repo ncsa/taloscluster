@@ -11,6 +11,7 @@ import yaml
 
 from taloscluster import naming
 from taloscluster.config import (
+    DEFAULT_MTU,
     SECRETS_FILE,
     ConfigError,
     L2Network,
@@ -299,6 +300,13 @@ def test_kubespan_can_be_enabled(make_config):
 def test_non_bool_kubespan_raises_config_error(make_config):
     with pytest.raises(ConfigError, match="talos.kubespan must be true or false"):
         make_config({"talos": {"kubespan": "off"}})
+
+
+def test_default_mtu_is_1500():
+    # The route clamp every provider's machine config restates: a jumbo L2's
+    # default route is rewritten with this value, so the emitted `mtu` the
+    # provider tests assert below is only correct while the constant is 1500.
+    assert DEFAULT_MTU == 1500
 
 
 # ---------------------------------------------------------------------------

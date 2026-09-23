@@ -967,7 +967,7 @@ def test_destroy_refuses_proxmox_8_before_any_teardown(proxmox_cfg, monkeypatch,
         converge, "backend_for", lambda _cfg: ProxmoxBackend(proxmox_cfg, client=client)
     )
 
-    with pytest.raises(ReconcileError, match="pin taloscluster to 0.7"):
+    with pytest.raises(ReconcileError, match=r"pin taloscluster to 0\.7\.x"):
         converge.destroy(tmp_path, assume_yes=True)
 
     assert client.mutations == []

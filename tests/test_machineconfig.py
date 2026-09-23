@@ -311,6 +311,12 @@ def test_tailscale_patch_no_login_server(make_config):
 # _kubespan_patch
 # ---------------------------------------------------------------------------
 
+def test_kubespan_mtu_overhead_is_the_wireguard_overhead():
+    # the emitted kubespan MTU is the L2 (or routed) MTU minus this constant;
+    # the 1420/8920 assertions below only hold while it is the WireGuard 80
+    assert machineconfig.KUBESPAN_MTU_OVERHEAD == 80
+
+
 def test_kubespan_patch_defaults_to_the_l2_mtu_minus_overhead(make_config):
     patch = machineconfig._kubespan_patch(make_config())
     assert patch == {

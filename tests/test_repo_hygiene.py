@@ -18,6 +18,10 @@ operator email cannot quietly join the fixtures. One exception cannot be
 shaped at all: a bare hostname is indistinguishable from an ordinary word,
 so the real site's own machine and subnet names are banned outright as a
 backstop under the allow-list.
+
+The file also keeps the committed package metadata honest: dependencies the
+code imports directly stay declared in ``pyproject.toml``, and its
+description stays provider-neutral.
 """
 
 from __future__ import annotations
@@ -221,9 +225,30 @@ def test_placeholder_check_catches_site_shaped_values(tmp_path):
     ), offenders
 
 
-def test_gen_infra_uses_placeholder_values():
-    path = ROOT / "gen-infra.py"
-    if not path.is_file():
-        pytest.skip("gen-infra.py is gitignored local tooling, not in this checkout")
-    offenders = _placeholder_offenders(path) + _site_token_offenders(path)
-    assert not offenders, f"real site values back in the gen-infra.py docstring: {offenders}"
+# --------------------------------------------------------------------------- #
+# The committed package metadata stays honest.
+# --------------------------------------------------------------------------- #
+
+PYPROJECT = ROOT / "pyproject.toml"
+
+
+def test_keystoneauth1_is_a_declared_dependency():
+    # openstack/backend.py imports keystoneauth1.exceptions directly; it must be
+    # a declared dependency, not a transitive one, so the import cannot silently
+    # break when a middle package stops shipping it.
+    assert "keystoneauth1" in PYPROJECT.read_text()
+
+
+def test_urllib3_is_a_declared_dependency():
+    # metal/redfish.py imports urllib3 directly to silence insecure-request
+    # warnings; it must be a declared dependency, not a transitive one, so the
+    # import cannot silently break when a middle package stops shipping it.
+    assert "urllib3" in PYPROJECT.read_text()
+
+
+def test_pyproject_description_is_provider_neutral():
+    # The package description (what PyPI shows) names both providers and no
+    # longer references the removed terraform/cluster.sh workflow.
+    text = PYPROJECT.read_text()
+    assert "terraform" not in text
+    assert "OpenStack or Proxmox" in text

@@ -25,6 +25,10 @@ tests so the drift they caught cannot come back silently:
   current ``mkdocs.yml`` nav publishes (and a fragment to that page's heading),
   and the established ``concepts/`` URLs must survive the documentation
   reorganization rather than silently moving and breaking old links.
+- Every markdown page under ``docs/`` must itself appear in the ``mkdocs.yml``
+  nav: a page dropped from the nav stops being built and deployed while the
+  file and every link to it still exist, so the published site silently loses
+  it.
 - Every relative ``.md`` link in ``README.md`` and ``CHANGELOG.md`` must point
   at a file that exists in the repo (for the CHANGELOG, with a fragment, at a
   real heading too) -- ``todo.md`` is gitignored, so a link to it 404s on a
@@ -37,6 +41,9 @@ tests so the drift they caught cannot come back silently:
   sits under the Unreleased ``### Changed`` heading, no Unreleased bullet runs
   past a sentence or two, and documentation work collapses into one bullet
   instead of one per page.
+- The newest dated ``CHANGELOG.md`` release heading names the released
+  ``pyproject.toml`` version, so a version bump and its dated release section
+  land together and a Breaking entry cannot hide behind an old version number.
 """
 
 from __future__ import annotations
@@ -343,6 +350,16 @@ def test_reorganized_docs_preserve_concepts_urls():
     )
 
 
+def test_every_docs_page_is_published_in_the_nav():
+    # A page that drops out of the mkdocs nav stops being built and deployed
+    # while the file (and any internal links to it) still exist, so the
+    # published site silently loses it; every docs page must stay in the nav.
+    nav_sources = set(_nav_pages().values())
+    pages = {str(p.relative_to(DOCS)) for p in DOCS.rglob("*.md")}
+    missing = sorted(pages - nav_sources)
+    assert not missing, "docs page(s) missing from the mkdocs.yml nav: " + ", ".join(missing)
+
+
 def test_readme_relative_links_point_at_existing_files():
     # The README also links repo files by relative path (`CHANGELOG.md`); a
     # link to a gitignored file such as todo.md does not exist on a fresh
@@ -453,3 +470,18 @@ def test_changelog_docs_work_is_one_bullet():
     assert len(docs_bullets) <= 1, "docs-only bullets should collapse into one: " + "; ".join(
         docs_bullets
     )
+
+
+def test_changelog_latest_release_matches_pyproject_version():
+    # The newest dated CHANGELOG heading must name the released pyproject
+    # version: a version bump landing without its dated release section (or the
+    # reverse) means the release steps drifted apart, hiding what the release
+    # contains behind an old version number.
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    match = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE)
+    assert match, "pyproject.toml has no version"
+    headings = re.findall(
+        r"^## \[(\d+\.\d+\.\d+)\]", (ROOT / "CHANGELOG.md").read_text(), re.MULTILINE
+    )
+    assert headings, "CHANGELOG.md has no dated release headings"
+    assert headings[0] == match.group(1)
