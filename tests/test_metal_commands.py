@@ -8,6 +8,8 @@ the inspect summary) are pinned against a route table instead of a BMC.
 
 from __future__ import annotations
 
+import os
+import stat
 import urllib.parse
 
 import pytest
@@ -510,6 +512,30 @@ def test_apply_generates_and_pushes_the_config(
     assert seen["default_tags"] == {}
     # no kubeconfig yet: the never-bootstrapped cluster gets the target
     assert seen["kubernetes_version"] == "v1.31.0"
+
+
+def test_apply_tightens_a_pre_existing_broader_config_file(
+    make_config, tmp_path, monkeypatch, stub_factory, cluster_endpoint
+):
+    """O_TRUNC keeps an existing file's mode, so a `.metal/` config left
+    broader by an earlier run must still end up 0600 on rewrite."""
+    _cfg(make_config)
+    (tmp_path / "talossecrets.yaml").write_text("dummy")
+    monkeypatch.setattr(
+        commands.metal_talos, "build_config", lambda *_a, **_k: "# config\n"
+    )
+    monkeypatch.setattr(
+        commands.talosctl, "apply_config_insecure", lambda node, config: None
+    )
+    path = tmp_path / ".metal" / "rp001-worker.yaml"
+    path.parent.mkdir()
+    path.write_text("old")            # born 0644 under a default umask
+    os.chmod(path, 0o644)
+
+    commands.apply(tmp_path, "rp001")
+
+    assert path.read_text() == "# config\n"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
 
 def test_apply_warns_when_gitignore_does_not_cover_metal(

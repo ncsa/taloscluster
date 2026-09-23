@@ -20,7 +20,6 @@ is its disk.
 from __future__ import annotations
 
 import atexit
-import os
 import re
 import shutil
 import socket
@@ -37,7 +36,7 @@ from ..converge import _config_kubernetes_version, _talos_endpoint
 from ..errors import ReconcileError
 from ..infrastructure import Endpoint, backend_for
 from ..output import action, dry_run, info, report, warn
-from ..state import State
+from ..state import State, write_private
 from ..talos import talosctl
 from . import redfish
 from . import talos as metal_talos
@@ -277,9 +276,7 @@ def apply(root: Path, name: str, *, force: bool = False) -> None:
         return
     _warn_unignored(root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(config_yaml)
+    write_private(path, config_yaml)
     info(f"machine config: {path}")
     talosctl.apply_config_insecure(_cluster_ip(server), config_yaml)
 
