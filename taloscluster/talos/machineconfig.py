@@ -5,6 +5,9 @@ stacked as `--config-patch` on `talosctl gen config`, in this order:
   machine -> hostname -> (disk encryption) -> (cluster, controlplane only) ->
   firewall -> (kubespan) -> tailscale -> freeform.
 
+`node_patches` writes the shared part of that stack for one node; `build_configs`
+(the VM providers) and the metal provider's `build_config` both ride it.
+
 The patches follow the document layout the `--talos-version` given to gen
 config emits: the v1alpha1 fields up to 1.13, and from 1.14 on the typed
 documents (KubeNodeConfig, KubeletConfig, UnattendedInstallConfig) that own
@@ -798,7 +801,7 @@ def _retag_kube_proxy(doc, tag: str):
                     container["image"] = f"registry.k8s.io/kube-proxy:{tag}"
 
 
-def _write(workdir: Path, stem: str, doc) -> Path:
+def write_patch(workdir: Path, stem: str, doc) -> Path:
     """Dump a patch dict, a list of Talos documents, or raw YAML to its own file."""
     path = workdir / f"{stem}.yaml"
     if isinstance(doc, str):
@@ -808,6 +811,66 @@ def _write(workdir: Path, stem: str, doc) -> Path:
     else:
         path.write_text(yaml.safe_dump(doc, sort_keys=False, default_flow_style=False))
     return path
+
+
+def node_patches(
+    workdir: Path,
+    host: str,
+    m: Machine,
+    cfg: Config,
+    install_disk: str,
+    *,
+    passphrase: str | None = None,
+    default_tags: dict[str, str] | None = None,
+    talos_version: str | None = None,
+    node_cidr: str | None = None,
+    kubespan_mtu: int | None = None,
+) -> list[Path]:
+    """Write one node's shared patch stack into `workdir` and return the paths.
+
+    The patches every node's configuration carries, in the order gen config
+    takes them: machine, hostname, (disk encryption), (cluster, controlplane
+    only), firewall, (kubespan), (tailscale). Both generators stack it -- the
+    VM providers through `build_configs`, the metal machines through metal's
+    `build_config` -- so the two stacks cannot drift. `node_cidr` keys the pod
+    node IP, the etcd advertisement and the firewall on a node sitting off the
+    cluster network -- a metal server's own L2 -- and `kubespan_mtu` sizes
+    WireGuard to that L2. `talos_version` picks the document layout (the
+    cluster's target when None). The tailscale patch rides the same predicate
+    as always: the key is set and `m.extensions` carries tailscale -- the
+    machine's resolved set, for metal the one its installer bakes.
+    """
+    patches = [
+        write_patch(workdir, f"{host}-machine",
+                    _machine_patch(m, cfg, install_disk, default_tags,
+                                   node_cidr=node_cidr,
+                                   talos_version=talos_version)),
+        write_patch(workdir, f"{host}-hostname", _hostname_patch(m)),
+    ]
+    if passphrase:
+        patches.append(
+            write_patch(workdir, f"{host}-encryption",
+                        _disk_encryption_patch(passphrase))
+        )
+    if m.role == "controlplane":
+        patches.append(
+            write_patch(workdir, f"{host}-cluster",
+                        _cluster_patch(cfg, node_cidr=node_cidr,
+                                       talos_version=talos_version))
+        )
+    patches.append(
+        write_patch(workdir, f"{host}-firewall", _firewall_docs(cfg, node_cidr=node_cidr))
+    )
+    if cfg.kubespan:
+        patches.append(
+            write_patch(workdir, f"{host}-kubespan", _kubespan_patch(cfg, mtu=kubespan_mtu))
+        )
+    auth_key = cfg.tailscale_auth_key
+    if auth_key and "siderolabs/tailscale" in m.extensions:
+        patches.append(
+            write_patch(workdir, f"{host}-tailscale", _tailscale_patch(m, cfg, auth_key))
+        )
+    return patches
 
 
 def build_configs(
@@ -855,33 +918,11 @@ def build_configs(
             installer_image = installer_images[m.extensions]
             contribution = contributions[host]
             talos_version = (talos_versions or {}).get(host) or cfg.talos_version
-            patches: list[Path] = [
-                _write(workdir, f"{host}-machine",
-                       _machine_patch(m, cfg, contribution.install_disk,
-                                      default_tags, talos_version=talos_version)),
-                _write(workdir, f"{host}-hostname", _hostname_patch(m)),
-            ]
-            if passphrase:
-                patches.append(
-                    _write(workdir, f"{host}-encryption",
-                           _disk_encryption_patch(passphrase))
-                )
-            if m.role == "controlplane":
-                patches.append(
-                    _write(workdir, f"{host}-cluster",
-                           _cluster_patch(cfg, talos_version=talos_version))
-                )
-            patches.append(_write(workdir, f"{host}-firewall", _firewall_docs(cfg)))
-            if cfg.kubespan:
-                patches.append(
-                    _write(workdir, f"{host}-kubespan", _kubespan_patch(cfg))
-                )
-            auth_key = cfg.tailscale_auth_key
-            if auth_key and "siderolabs/tailscale" in m.extensions:
-                patches.append(
-                    _write(workdir, f"{host}-tailscale",
-                           _tailscale_patch(m, cfg, auth_key))
-                )
+            patches = node_patches(
+                workdir, host, m, cfg, contribution.install_disk,
+                passphrase=passphrase, default_tags=default_tags,
+                talos_version=talos_version,
+            )
             # provider contributions before the user's, so an explicit user
             # patch still has the last word
             for patch in contribution.patches:
@@ -890,11 +931,11 @@ def build_configs(
                     document = copy.deepcopy(document)
                     _retag_kube_proxy(document, kubernetes_version)
                 patches.append(
-                    _write(workdir, _patch_stem(host, patch.name), document)
+                    write_patch(workdir, _patch_stem(host, patch.name), document)
                 )
             # freeform user patches last so they can override
             for i, raw in enumerate(m.config_patches):
-                patches.append(_write(workdir, f"{host}-extra-{i}", raw))
+                patches.append(write_patch(workdir, f"{host}-extra-{i}", raw))
 
             configs[host] = talosctl.gen_config(
                 cluster=cfg.name,

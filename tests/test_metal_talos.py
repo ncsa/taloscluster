@@ -1012,3 +1012,12 @@ def test_metal_iso_url_boots_the_shared_nocloud_asset(make_config, monkeypatch):
     assert metal_talos.iso_url(cfg) == (
         "https://factory.talos.dev/image/abc123/v1.13.9/nocloud-amd64.iso"
     )
+
+
+def test_metal_assembles_the_shared_stack_through_the_public_api():
+    """The shared patch stack comes from the same public `node_patches` the VM
+    generator rides, so the two stacks cannot drift; only the public
+    `write_patch` is reached for the metal-specific patches."""
+    source = Path(metal_talos.__file__).read_text()
+    assert "machineconfig.node_patches(" in source
+    assert "machineconfig._" not in source

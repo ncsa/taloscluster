@@ -121,26 +121,21 @@ def iso_url(cfg: Config) -> str:
 
 
 def _machine(server: MetalServer, cfg: Config) -> Machine:
-    """The server as the shared patch builders see it: pool is the group."""
+    """The server as the shared patch builders see it.
+
+    Pool is the group; extensions are the set the machine's shared installer
+    bakes -- the resolved metal extensions, which honour an explicit
+    `talos.extensions` or group `extensions` entry even without a `tailscale:`
+    section -- the set the tailscale patch predicate checks.
+    """
     return Machine(
         name=server.name,
         role=server.role,
         pool=server.group,
         disk=0,
-        extensions=(),
+        extensions=cfg.metal_extensions(),
         config_patches=tuple(cfg.talos_config_patches),
         tags=dict(cfg.tags),
-    )
-
-
-def _machine_patch(server: MetalServer, cfg: Config,
-                   default_tags: dict[str, str] | None = None,
-                   talos_version: str | None = None) -> dict | list[dict]:
-    m = _machine(server, cfg)
-    # a group on its own L2 pins the pod node IP to that L2, not the cluster's
-    return machineconfig._machine_patch(
-        m, cfg, server.disk, default_tags,
-        node_cidr=server.network.cidr, talos_version=talos_version,
     )
 
 
@@ -422,10 +417,9 @@ def build_config(
 ) -> str:
     """Return one metal machine's machine-config YAML string.
 
-    The shared patch stack (machine, hostname, cluster, firewall, kubespan,
-    tailscale) is assembled exactly as `build_configs` does for the VM
-    providers -- the firewall and the control plane's etcd advertisement keyed
-    on the machine's own L2 -- then the cabling plan's network patches and the
+    The shared patch stack is the one `node_patches` writes for every node --
+    the firewall and the control plane's etcd advertisement keyed on the
+    machine's own L2 -- then the cabling plan's network patches and the
     cluster's freeform patches. `default_tags` are
     the provider's default node labels (`ncsa/project` on OpenStack), merged
     under the machine's `tags:` exactly as `build_configs` merges them for the
@@ -453,67 +447,16 @@ def build_config(
     passphrase = machineconfig.disk_passphrase(secrets_path)
     with tempfile.TemporaryDirectory(prefix="taloscluster-metal-mc-") as tmp:
         workdir = Path(tmp)
-        patches = [
-            machineconfig._write(
-                workdir, f"{host}-machine",
-                _machine_patch(server, cfg, default_tags, talos_version=talos),
-            ),
-            machineconfig._write(
-                workdir, f"{host}-hostname", machineconfig._hostname_patch(m)
-            ),
-        ]
-        if passphrase:
-            patches.append(
-                machineconfig._write(
-                    workdir, f"{host}-encryption",
-                    machineconfig._disk_encryption_patch(passphrase),
-                )
-            )
-        if server.role == "controlplane":
-            patches.append(
-                machineconfig._write(
-                    workdir, f"{host}-cluster",
-                    machineconfig._cluster_patch(
-                        cfg, node_cidr=server.network.cidr, talos_version=talos,
-                    ),
-                )
-            )
-        patches.append(
-            machineconfig._write(
-                workdir, f"{host}-firewall",
-                machineconfig._firewall_docs(cfg, node_cidr=server.network.cidr),
-            )
+        patches = machineconfig.node_patches(
+            workdir, host, m, cfg, server.disk,
+            passphrase=passphrase, default_tags=default_tags, talos_version=talos,
+            node_cidr=server.network.cidr, kubespan_mtu=server.network.mtu,
         )
-        if cfg.kubespan:
-            patches.append(
-                machineconfig._write(
-                    workdir, f"{host}-kubespan",
-                    # the WireGuard MTU follows the machine's own L2 -- which
-                    # a group on another network carries with its own mtu, but
-                    # the routed path wins once the peers span more than one
-                    machineconfig._kubespan_patch(cfg, mtu=server.network.mtu),
-                )
-            )
-        # the patch rides the same predicate `build_configs` applies to the VM
-        # machines: the key is set and the resolved extensions carry tailscale
-        # (on metal, the set the installer bakes, which honours an explicit
-        # `talos.extensions` or group `extensions` entry even without a
-        # `tailscale:` section; the section may live in any merged file,
-        # secrets.yaml included)
-        extensions = cfg.metal_extensions()
-        auth_key = cfg.tailscale_auth_key
-        if auth_key and "siderolabs/tailscale" in extensions:
-            patches.append(
-                machineconfig._write(
-                    workdir, f"{host}-tailscale",
-                    machineconfig._tailscale_patch(m, cfg, auth_key),
-                )
-            )
         docs, entries = _cabling(server, cfg, vip=endpoint.vip)
-        patches.append(machineconfig._write(workdir, f"{host}-network", docs))
+        patches.append(machineconfig.write_patch(workdir, f"{host}-network", docs))
         if entries:
             patches.append(
-                machineconfig._write(
+                machineconfig.write_patch(
                     workdir, f"{host}-interfaces",
                     {"machine": {"network": {"interfaces": entries}}},
                 )
@@ -521,7 +464,7 @@ def build_config(
         child = _external_child_link(server, cfg)
         if child:
             patches.append(
-                machineconfig._write(
+                machineconfig.write_patch(
                     workdir, f"{host}-return-path",
                     {"machine": {"pods": [
                         return_path_pod(server, cfg, child, kubernetes)
@@ -529,7 +472,7 @@ def build_config(
                 )
             )
         for i, raw in enumerate(m.config_patches):
-            patches.append(machineconfig._write(workdir, f"{host}-extra-{i}", raw))
+            patches.append(machineconfig.write_patch(workdir, f"{host}-extra-{i}", raw))
 
         raw = talosctl.gen_config(
             cluster=cfg.name,

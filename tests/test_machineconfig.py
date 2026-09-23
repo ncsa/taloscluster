@@ -446,6 +446,64 @@ def test_kubespan_patch_external_without_anchor_omits_the_anchor_filter(make_con
 
 
 # ---------------------------------------------------------------------------
+# node_patches: the shared stack both generators ride
+# ---------------------------------------------------------------------------
+
+def test_node_patches_stacks_the_shared_patches_in_order(cfg_with_key, tmp_path):
+    """machine, hostname, encryption, cluster, firewall, kubespan, tailscale --
+    one file per patch, in the order gen config takes them, for a control
+    plane whose extensions carry tailscale."""
+    cfg = replace(cfg_with_key, kubespan=True)
+    m = cfg.machines["testcluster-controlplane-01"]
+    paths = machineconfig.node_patches(
+        tmp_path, "node-01", m, cfg, DISK, passphrase="luks-passphrase",
+    )
+
+    assert [p.name for p in paths] == [
+        "node-01-machine.yaml", "node-01-hostname.yaml", "node-01-encryption.yaml",
+        "node-01-cluster.yaml", "node-01-firewall.yaml", "node-01-kubespan.yaml",
+        "node-01-tailscale.yaml",
+    ]
+    assert all(p.exists() for p in paths)
+
+
+def test_node_patches_omits_the_conditional_patches(cfg, tmp_path):
+    """No passphrase, worker role, no kubespan opt-in, no auth key: only the
+    machine, hostname and firewall patches are written."""
+    m = cfg.machines["testcluster-worker-01"]
+    paths = machineconfig.node_patches(tmp_path, "worker-01", m, cfg, DISK)
+
+    assert [p.name for p in paths] == [
+        "worker-01-machine.yaml", "worker-01-hostname.yaml", "worker-01-firewall.yaml",
+    ]
+
+
+def test_node_patches_keys_the_stack_on_an_off_cluster_l2(cfg, tmp_path):
+    """`node_cidr` and `kubespan_mtu` steer the machine, cluster, firewall and
+    kubespan patches at a node sitting off the cluster network -- a metal
+    server's own L2."""
+    cfg = replace(cfg, kubespan=True)
+    m = cfg.machines["testcluster-controlplane-01"]
+    paths = machineconfig.node_patches(
+        tmp_path, "node-01", m, cfg, DISK,
+        node_cidr="203.0.113.0/24", kubespan_mtu=9000,
+    )
+    by_name = {p.name: list(_yaml.safe_load_all(p.read_text())) for p in paths}
+
+    (machine,) = by_name["node-01-machine.yaml"]
+    assert machine["machine"]["kubelet"]["nodeIP"]["validSubnets"] == ["203.0.113.0/24"]
+    (cluster,) = by_name["node-01-cluster.yaml"]
+    assert cluster["cluster"]["etcd"]["advertisedSubnets"] == ["203.0.113.0/24"]
+    (kubespan,) = by_name["node-01-kubespan.yaml"]
+    assert kubespan["machine"]["network"]["kubespan"]["mtu"] == 8920
+    cluster_tcp = next(
+        doc for doc in by_name["node-01-firewall.yaml"]
+        if doc.get("name") == "cluster-tcp"
+    )
+    assert {"subnet": "203.0.113.0/24"} in cluster_tcp["ingress"]
+
+
+# ---------------------------------------------------------------------------
 # build_configs
 # ---------------------------------------------------------------------------
 
