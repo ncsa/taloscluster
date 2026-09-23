@@ -229,6 +229,107 @@ def test_reconcile_talos_is_a_noop_for_a_node_on_the_target_schematic(monkeypatc
     assert upgrade_calls == []
 
 
+# ---------------------------------------------------------------------------
+# _reconcile_talos: SecureBoot installer guard
+# ---------------------------------------------------------------------------
+
+SB_IMAGE = "factory.talos.dev/nocloud-installer-secureboot/sch-123:v1.13.9"
+PLAIN_IMAGE = "factory.talos.dev/nocloud-installer/sch-123:v1.13.9"
+
+
+def _upgrade_image_guard_setup(monkeypatch, enforced):
+    """Common wiring: one node an upgrade behind the target, the security state
+    it reports captured by the guard probe."""
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9")
+    machines = {"w-01": SimpleNamespace(role="worker", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"w-01": InfrastructureMachine("w-01")})
+    upgrades: list[str] = []
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses", lambda *_a, **_kw: {"w-01": "192.0.2.1"}
+    )
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.12.0")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "sch-123")
+    monkeypatch.setattr(
+        converge.talosctl, "secureboot_enforced", lambda *_a, **_kw: enforced
+    )
+    monkeypatch.setattr(
+        converge.talosctl, "upgrade",
+        lambda *_a, **_kw: upgrades.append(_kw.get("image") or _a[3]),
+    )
+    monkeypatch.setattr(converge, "_wait_version", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_kw: True)
+    return cfg, machines, inventory, upgrades
+
+
+def test_reconcile_talos_keeps_the_plain_installer_where_secure_boot_is_off(monkeypatch):
+    """A node created before Secure Boot support booted the plain ISO and never
+    enrolled the factory keys: it must not be pushed onto the UKI installer
+    whether that boots there is still unverified. Its reported security state
+    decides -- Secure Boot unenforced keeps the plain installer."""
+    cfg, machines, inventory, upgrades = _upgrade_image_guard_setup(monkeypatch, False)
+
+    converge._reconcile_talos(
+        cfg, machines, inventory, NetworkResult(),
+        {("base",): SB_IMAGE}, {("base",): "sch-123"},
+        Path("talosconfig"), Path("kubeconfig"),
+        plain_installer_images={("base",): PLAIN_IMAGE},
+    )
+
+    assert upgrades == [PLAIN_IMAGE]
+
+
+def test_reconcile_talos_keeps_the_secureboot_installer_where_it_is_enforced(monkeypatch):
+    """A node whose firmware enrolled the keys (every VM created since the
+    SecureBoot switch) gets the SecureBoot installer, like before the guard."""
+    cfg, machines, inventory, upgrades = _upgrade_image_guard_setup(monkeypatch, True)
+
+    converge._reconcile_talos(
+        cfg, machines, inventory, NetworkResult(),
+        {("base",): SB_IMAGE}, {("base",): "sch-123"},
+        Path("talosconfig"), Path("kubeconfig"),
+        plain_installer_images={("base",): PLAIN_IMAGE},
+    )
+
+    assert upgrades == [SB_IMAGE]
+
+
+def test_reconcile_talos_keeps_the_secureboot_installer_on_an_unreadable_state(monkeypatch):
+    """A probe that cannot decide is not a verdict: the target installer is used
+    rather than the probe aborting or silently downgrading the node."""
+    cfg, machines, inventory, upgrades = _upgrade_image_guard_setup(monkeypatch, None)
+
+    converge._reconcile_talos(
+        cfg, machines, inventory, NetworkResult(),
+        {("base",): SB_IMAGE}, {("base",): "sch-123"},
+        Path("talosconfig"), Path("kubeconfig"),
+        plain_installer_images={("base",): PLAIN_IMAGE},
+    )
+
+    assert upgrades == [SB_IMAGE]
+
+
+def test_reconcile_talos_probes_secure_boot_only_with_a_fallback_available(monkeypatch):
+    """A backend that never boots a SecureBoot ISO (OpenStack) gets no probe:
+    every extra talosctl call on the rollout path is one that can fail."""
+    cfg, machines, inventory, upgrades = _upgrade_image_guard_setup(monkeypatch, True)
+    probed: list[str] = []
+    monkeypatch.setattr(
+        converge.talosctl, "secureboot_enforced",
+        lambda *_a, **_kw: probed.append("probe") or True,
+    )
+
+    converge._reconcile_talos(
+        cfg, machines, inventory, NetworkResult(),
+        {("base",): "installer:v1.13.9"}, {("base",): "sch-123"},
+        Path("talosconfig"), Path("kubeconfig"),
+    )
+
+    assert probed == []
+    assert upgrades == ["installer:v1.13.9"]
+
+
 def test_reconcile_talos_health_checks_a_resumed_control_plane_at_target(monkeypatch):
     """A node already on the target may be the leftover of an interrupted run: its
     apid answers while etcd never recovered. Resuming must re-establish the health

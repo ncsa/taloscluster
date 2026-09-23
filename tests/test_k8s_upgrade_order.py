@@ -522,6 +522,63 @@ def test_converge_fresh_bootstrap_regenerates_configs_once(make_config, monkeypa
     assert calls["n"] == expected_nodes  # once per node for the bootstrap, never a second time
 
 
+class _SecureBootBackend(_FreshBootstrapBackend):
+    """A Proxmox-like backend: its VMs boot the SecureBoot ISO, so converge
+    resolves the SecureBoot installer beside its plain twin."""
+
+    installer_platform = "nocloud"
+    installer_secureboot = True
+
+
+def test_converge_hands_the_upgrade_phase_a_plain_installer_fallback(
+    make_config, monkeypatch, tmp_path
+):
+    """A backend whose VMs boot the SecureBoot ISO installs the SecureBoot (UKI)
+    installer, but a node created before that switch booted the plain ISO and
+    never enrolled keys. The upgrade phase must therefore also receive the plain
+    installer per extension set, resolved beside the SecureBoot one so a factory
+    outage stops the run before any phase mutates."""
+    cfg = make_config({"controlplane": {"count": 1, "flavor": "f", "disk": 40}})
+    backend = _SecureBootBackend(InfrastructureInventory(machines={
+        "testcluster-controlplane-01": InfrastructureMachine(
+            "testcluster-controlplane-01"
+        ),
+    }))
+    state = _ExistingSecretsState(tmp_path)
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+
+    seen: list[dict] = []
+    monkeypatch.setattr(converge, "_upgrade", lambda *a, **k: seen.append({"a": a, "k": k}))
+    monkeypatch.setattr(machineconfig.talosctl, "gen_config", lambda **k: "machine: {}")
+    monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.31.0")
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
+    monkeypatch.setattr(converge, "_scale_down", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "_apply_configs", lambda *a, **k: None)
+    monkeypatch.setattr(converge, "dry_run", lambda: True)
+    monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(converge, "preflight_tools", lambda: None)
+    monkeypatch.setattr(converge, "validate_warnings", lambda _cfg: [])
+    monkeypatch.setattr(converge, "backend_for", lambda _cfg: backend)
+    monkeypatch.setattr(converge, "State", lambda _root: state)
+    monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_k: 0)
+    # pure unit test: don't POST to the talos image factory for a schematic id
+    monkeypatch.setattr(converge.factory, "schematic_id", lambda _s: "scheme-a-01")
+
+    converge.converge(tmp_path)
+
+    (call,) = seen
+    installer_images = call["a"][4]
+    plain_installer_images = call["k"]["plain_installer_images"]
+    (extensions,) = installer_images
+    assert installer_images[extensions] == (
+        "factory.talos.dev/nocloud-installer-secureboot/scheme-a-01:v1.13.9"
+    )
+    assert plain_installer_images[extensions] == (
+        "factory.talos.dev/nocloud-installer/scheme-a-01:v1.13.9"
+    )
+
+
 class _ScaleUpAfterUpgradeBackend:
     """An up cluster scaled up in the same run as a kubernetes upgrade: one
     control plane already exists, the other control plane and the worker are new

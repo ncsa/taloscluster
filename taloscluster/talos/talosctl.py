@@ -879,6 +879,32 @@ def running_install_disk(talosconfig: Path, endpoint: str, node: str) -> str:
     return ""
 
 
+def secureboot_enforced(talosconfig: Path, endpoint: str, node: str) -> bool | None:
+    """Whether the node's running system booted with Secure Boot enforced.
+
+    `talosctl get securitystate` reports the firmware state the RUNNING system
+    booted under, so it is the thing to read before handing a node a SecureBoot
+    (UKI) installer: a node created before Secure Boot support booted the plain
+    ISO and never enrolled keys, and such a node must keep the plain installer.
+    An unreadable read or a reply without the state returns None rather than
+    raising: the caller decides what an unknown means, and the probe must never
+    abort an upgrade rollout the surrounding reads already validated.
+    """
+    try:
+        out = _run(
+            _talos(talosconfig, endpoint, node, "get", "securitystate", "-o", "yaml"),
+            capture=True,
+            quiet_stderr=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+    for doc in _resource_docs(out):
+        value = (doc.get("spec") or {}).get("secureBoot")
+        if isinstance(value, bool):
+            return value
+    return None
+
+
 def _resource_docs(out: str) -> list[dict]:
     """The resource documents in `talosctl get ... -o yaml` output.
 

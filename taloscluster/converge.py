@@ -104,6 +104,19 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         )
         for s, sid in installer_schematics.items()
     }
+    # A node that booted the plain ISO (every VM the releases before SecureBoot
+    # support created) never enrolled the factory keys, so handing it the UKI
+    # installer would move it to a boot path nothing verified. The upgrade phase
+    # probes each node's reported security state and keeps the plain variant for
+    # one that says Secure Boot is not enforced (see _reconcile_talos); a backend
+    # that never boots a SecureBoot ISO needs no fallback.
+    plain_installer_images = (
+        {
+            s: factory.installer_image(sid, cfg.talos_version, platform=installer_platform)
+            for s, sid in installer_schematics.items()
+        }
+        if backend.installer_secureboot else {}
+    )
     # metal machines share one installer ref of their own -- no VM pool's
     # extension set -- resolved beside the pools' so a factory outage stops the
     # run before any phase mutates
@@ -349,6 +362,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             kubeconfig_path,
             metal_installer=metal_installer,
             metal_schematic=metal_schematic,
+            plain_installer_images=plain_installer_images,
         )
 
     # ---- 7. COMPUTE (create / scale up) ----------------------------------
@@ -496,6 +510,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             kubeconfig_path,
             metal_installer=metal_installer,
             metal_schematic=metal_schematic,
+            plain_installer_images=plain_installer_images,
         )
         log("status")
         print(kubectl.get_nodes_wide(kubeconfig_path))
@@ -2261,6 +2276,7 @@ def _reconcile_talos(
     kubeconfig: Path,
     metal_installer: str = "",
     metal_schematic: str = "",
+    plain_installer_images: dict[tuple[str, ...], str] | None = None,
 ) -> None:
     """Bring every existing, talos-reachable node to the target talos version
     and schematic (extension set), control planes first, health-checked between.
@@ -2274,16 +2290,24 @@ def _reconcile_talos(
     metal schematic resolved from the cluster-wide extensions, and it is reached
     at the static address of its cluster link. One with no kube Node has never
     joined, so there is nothing on it to upgrade yet.
+
+    `plain_installer_images` carries the non-SecureBoot installer ref per
+    extension set for a backend whose VMs boot the SecureBoot ISO: a node whose
+    reported security state says Secure Boot is not enforced (every node the
+    releases before SecureBoot support created) keeps the plain installer, since
+    whether the UKI path boots on its never-enrolled firmware is unverified.
     """
     log(f"talos version (want {cfg.talos_version})")
     endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)
     discovered = talosctl.member_addresses(
         talosconfig, endpoint, exclude_vip=_cluster_vips(cfg, refs, kubeconfig)
     )
-    # (host, role, address, want image, want schematic) per node, control
-    # planes first: the VM pools resolved through discovery and the provider,
-    # every joined metal machine at the static address of its cluster link
-    targets: list[tuple[str, str, str, str, str]] = []
+    plain = plain_installer_images or {}
+    # (host, role, address, want image, want schematic, plain image) per node,
+    # control planes first: the VM pools resolved through discovery and the
+    # provider, every joined metal machine at the static address of its cluster
+    # link. Metal's installer is never a SecureBoot one, so its plain ref is "".
+    targets: list[tuple[str, str, str, str, str, str]] = []
     ordered = sorted(machines.items(), key=lambda kv: 0 if kv[1].role == "controlplane" else 1)
     for host, m in ordered:
         if host not in inv.machines or not _node_present(kubeconfig, host):
@@ -2297,6 +2321,7 @@ def _reconcile_talos(
                     address,
                     installer_images[m.extensions],
                     installer_schematics[m.extensions],
+                    plain.get(m.extensions, ""),
                 )
             )
     for server in _metal_servers(cfg):
@@ -2304,10 +2329,10 @@ def _reconcile_talos(
             continue
         targets.append(
             (server.name, server.role, metal_talos.cluster_ip(server),
-             metal_installer, metal_schematic)
+             metal_installer, metal_schematic, "")
         )
     targets.sort(key=lambda t: 0 if t[1] == "controlplane" else 1)
-    for host, role, address, want_image, want_schematic in targets:
+    for host, role, address, want_image, want_schematic, plain_image in targets:
         cur_ver = talosctl.server_version(talosconfig, endpoint, address)
         # the RUNNING schematic, not the installer reference in the machine
         # config (the apply phase has already rewritten the config to the target
@@ -2334,9 +2359,19 @@ def _reconcile_talos(
                 raise ReconcileError(f"cluster unhealthy before touching {host}; aborting rollout")
             info(f"{host}: {cur_ver or '?'}, ok")
             continue
+        # a SecureBoot (UKI) installer is only for a node whose firmware reports
+        # Secure Boot enforced: one that booted the plain ISO never enrolled the
+        # factory keys, and the UKI boot path there is unverified. An unreadable
+        # state leaves the target image, like the other unreadable reads.
+        image = want_image
+        if plain_image and plain_image != want_image and (
+            talosctl.secureboot_enforced(talosconfig, endpoint, address) is False
+        ):
+            info(f"{host}: Secure Boot not enforced; keeping the plain installer image")
+            image = plain_image
         reason = "extensions changed" if cur_ver == cfg.talos_version else str(cur_ver or "?")
-        info(f"{host}: {reason} -> {cfg.talos_version} ({want_image})")
-        talosctl.upgrade(talosconfig, endpoint, address, want_image)
+        info(f"{host}: {reason} -> {cfg.talos_version} ({image})")
+        talosctl.upgrade(talosconfig, endpoint, address, image)
         _wait_version(talosconfig, endpoint, address, cfg.talos_version, want_schematic)
         _uncordon_stale(kubeconfig, host)
         if not _health_or_kube_fallback(
@@ -2361,6 +2396,7 @@ def _reconcile_joined(
     kubeconfig: Path,
     metal_installer: str = "",
     metal_schematic: str = "",
+    plain_installer_images: dict[tuple[str, ...], str] | None = None,
 ) -> InfrastructureInventory:
     """Refresh the inventory and reconcile every node's running schematic, then
     return the refreshed inventory.
@@ -2376,6 +2412,7 @@ def _reconcile_joined(
     _reconcile_talos(
         cfg, machines, inv, refs, installer_images, installer_schematics, talosconfig,
         kubeconfig, metal_installer=metal_installer, metal_schematic=metal_schematic,
+        plain_installer_images=plain_installer_images,
     )
     return inv
 
@@ -2391,6 +2428,7 @@ def _upgrade(
     kubeconfig: Path,
     metal_installer: str = "",
     metal_schematic: str = "",
+    plain_installer_images: dict[tuple[str, ...], str] | None = None,
 ) -> None:
     """Roll existing nodes to the target talos and kubernetes versions before new
     nodes are created, so a new node never joins newer than the rest (see the
@@ -2400,6 +2438,7 @@ def _upgrade(
     _reconcile_talos(
         cfg, machines, inv, refs, installer_images, installer_schematics, talosconfig,
         kubeconfig, metal_installer=metal_installer, metal_schematic=metal_schematic,
+        plain_installer_images=plain_installer_images,
     )
     log(f"kubernetes version (want {cfg.kubernetes_version})")
     endpoint = _talos_endpoint(cfg, refs, inv, talosconfig)

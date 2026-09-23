@@ -312,6 +312,75 @@ def test_running_install_disk_empty_when_the_selector_does_not_name_a_disk(monke
     ) == ""
 
 
+# ---------------------------------------------------------------------------
+# secureboot_enforced
+# ---------------------------------------------------------------------------
+
+# A realistic `get securitystate -o yaml` stream: one SecurityState document
+# whose spec reports the firmware state the running system booted under.
+SECURITYSTATE_OUTPUT = """\
+node: 192.0.2.10
+metadata:
+    namespace: runtime
+    type: SecurityStates.talos.dev
+    id: securitystate
+    version: 2
+    owner: runtime.SecurityStateController
+    phase: running
+spec:
+    secureBoot: true
+    ukiSigningKeyFingerprint: ""
+    bootedWithUKI: true
+"""
+
+
+def test_secureboot_enforced_reads_the_security_state_resource(monkeypatch):
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, quiet_stderr=False:
+                        SECURITYSTATE_OUTPUT)
+    assert talosctl.secureboot_enforced(
+        Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+    ) is True
+
+
+def test_secureboot_enforced_reports_an_unenforced_node(monkeypatch):
+    """A node created before Secure Boot support booted the plain ISO, so its
+    spec says secureBoot: false -- the caller must keep the plain installer."""
+    out = SECURITYSTATE_OUTPUT.replace("secureBoot: true", "secureBoot: false")
+    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, quiet_stderr=False: out)
+    assert talosctl.secureboot_enforced(
+        Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+    ) is False
+
+
+def test_secureboot_enforced_none_on_a_failed_read(monkeypatch):
+    """A node that does not answer the read is an unknown, not a verdict."""
+    def fail(args, capture=False, quiet_stderr=False):
+        raise subprocess.CalledProcessError(1, "talosctl")
+
+    monkeypatch.setattr(talosctl, "_run", fail)
+    assert talosctl.secureboot_enforced(
+        Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+    ) is None
+
+
+def test_secureboot_enforced_none_on_garbage_output(monkeypatch):
+    monkeypatch.setattr(
+        talosctl, "_run", lambda args, capture=False, quiet_stderr=False: "nonsense"
+    )
+    assert talosctl.secureboot_enforced(
+        Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+    ) is None
+
+
+def test_secureboot_enforced_targets_the_securitystate_resource(monkeypatch):
+    args_seen: list[list[str]] = []
+    monkeypatch.setattr(talosctl, "_run",
+                        lambda args, capture=False, quiet_stderr=False:
+                        args_seen.append(args) or "")
+    talosctl.secureboot_enforced(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    assert args_seen and args_seen[0][-4:] == ["get", "securitystate", "-o", "yaml"]
+
+
 # A realistic `get members -o json` stream: separate JSON objects, NOT an array.
 # controlplane-01 carries the shared kube-api VIP among its private ips, and the
 # members differ in talos version (a rollout in flight).
