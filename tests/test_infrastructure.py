@@ -124,7 +124,7 @@ METAL_GROUP = {
     "role": "worker",
     "disk": "/dev/sda",
     "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
-    "servers": {"rp001": {}},
+    "servers": {"srv01": {}},
 }
 
 
@@ -157,7 +157,7 @@ def test_backend_selection_ignores_a_metal_section(make_config):
     infrastructure, while the metal machines ride the same phases."""
     cfg = _metal_cfg(make_config)
 
-    assert cfg.metal_servers == {"rp001": "worker"}
+    assert cfg.metal_servers == {"srv01": "worker"}
     assert backend_for(cfg).name == "proxmox"
 
 

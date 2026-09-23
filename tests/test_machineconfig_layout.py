@@ -47,7 +47,7 @@ METAL = {
         "enp2s0f0": {"role": "external", "vlan": 100, "link_name": "ext0"},
     },
     "servers": {
-        "rp001": {
+        "srv01": {
             "interfaces": {
                 "enp1s0f0": {"ip": "192.168.0.5/21"},
                 "enp2s0f0": {"ip": "203.0.113.5/24"},
@@ -140,7 +140,7 @@ def test_metal_config_validates_on_every_supported_minor(
     }, remove=("openstack",))
     endpoint = Endpoint(vip="", advertised_address=FIP)
     config_yaml = metal_talos.build_config(
-        cfg.metal.groups["site"].servers["rp001"],
+        cfg.metal.groups["site"].servers["srv01"],
         cfg,
         _secrets(talos_version, tmp_path),
         INSTALLER.format(version=talos_version),

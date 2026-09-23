@@ -463,7 +463,7 @@ def test_contribution_sdn_without_external_uses_static_documents(make_config):
         {
             "apiVersion": "v1alpha1",
             "kind": "ResolverConfig",
-            "nameservers": [{"address": "1.1.1.1"}],
+            "nameservers": [{"address": "192.0.2.53"}],
         }
     ]
 

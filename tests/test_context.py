@@ -25,9 +25,9 @@ def spy(monkeypatch):
         return {
             "infrastructure": {"provider": "openstack", "url": "https://cloud"},
             "openstack": {"url": "https://cloud", "region": "RegionOne", "project": "proj"},
-            "kubernetes": {"floating_ip": "1.2.3.4", "vip": "10.0.0.1",
-                           "endpoint": "https://1.2.3.4:6443"},
-            "ingress": {"floating_ip": "1.2.3.5", "vip": "10.0.0.2"},
+            "kubernetes": {"floating_ip": "192.0.2.1", "vip": "10.0.0.1",
+                           "endpoint": "https://192.0.2.1:6443"},
+            "ingress": {"floating_ip": "192.0.2.2", "vip": "10.0.0.2"},
         }
 
     monkeypatch.setattr(_converge, "status_report", fake)
@@ -39,15 +39,15 @@ def test_from_converge_never_calls_status_report(spy, tmp_path, make_config):
     cfg = make_config()
     ctx = Context.from_converge(
         tmp_path, cfg,
-        kubeapi={"floating_ip": "1.2.3.4", "vip": "10.0.0.1", "endpoint": "https://1.2.3.4:6443"},
-        ingress={"floating_ip": "1.2.3.5", "vip": "10.0.0.2"},
+        kubeapi={"floating_ip": "192.0.2.1", "vip": "10.0.0.1", "endpoint": "https://192.0.2.1:6443"},
+        ingress={"floating_ip": "192.0.2.2", "vip": "10.0.0.2"},
         infrastructure={"provider": "openstack", "url": "https://cloud"},
         openstack={"url": "https://cloud", "region": "RegionOne", "project": "proj"},
     )
     assert ctx.ingress["vip"] == "10.0.0.2"
     assert ctx.infrastructure["provider"] == "openstack"
     assert ctx.openstack["project"] == "proj"
-    assert ctx.kubernetes["endpoint"] == "https://1.2.3.4:6443"
+    assert ctx.kubernetes["endpoint"] == "https://192.0.2.1:6443"
     assert spy == []
 
 

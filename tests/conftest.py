@@ -32,7 +32,7 @@ MINIMAL: dict[str, Any] = {
     },
     "network": {
         "cluster": {"cidr": "192.168.0.0/21"},
-        "dns": ["1.1.1.1"],
+        "dns": ["192.0.2.53"],
         "ntp": ["ntp.example.com"],
     },
 }

@@ -1351,9 +1351,9 @@ METAL_GROUP = {
     "rack": {
         "role": "worker",
         "disk": "/dev/sda",
-        "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
+        "network": {"cidr": "192.168.16.0/24", "gateway": "192.168.16.1"},
         "servers": {
-            "rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.22.5/24"}}},
+            "srv01": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.16.5/24"}}},
         },
     },
 }
@@ -3256,9 +3256,9 @@ def test_firewall_rules_admit_a_metal_group_on_another_l2(make_config):
 
     desired = _backend(cfg, FakeClient(_data()))._desired_firewall_rules()
 
-    assert ("tcp", None, "172.29.22.0/24") in desired
-    assert ("udp", None, "172.29.22.0/24") in desired
-    assert ("udp", 51820, "172.29.22.0/24") in desired
+    assert ("tcp", None, "192.168.16.0/24") in desired
+    assert ("udp", None, "192.168.16.0/24") in desired
+    assert ("udp", 51820, "192.168.16.0/24") in desired
     assert ("tcp", None, cfg.network.cluster.cidr) in desired
     assert ("udp", None, cfg.network.cluster.cidr) in desired
 
@@ -3271,9 +3271,9 @@ def test_firewall_rules_admit_a_server_that_replaces_its_groups_l2(make_config):
             **METAL_GROUP["rack"],
             "servers": {
                 **METAL_GROUP["rack"]["servers"],
-                "rp002": {
-                    "network": {"cidr": "172.29.23.0/24", "gateway": "172.29.23.1"},
-                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.23.5/24"}},
+                "srv02": {
+                    "network": {"cidr": "192.168.17.0/24", "gateway": "192.168.17.1"},
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.17.5/24"}},
                 },
             },
         },
@@ -3282,9 +3282,9 @@ def test_firewall_rules_admit_a_server_that_replaces_its_groups_l2(make_config):
 
     desired = _backend(cfg, FakeClient(_data()))._desired_firewall_rules()
 
-    assert ("tcp", None, "172.29.23.0/24") in desired
-    assert ("udp", None, "172.29.23.0/24") in desired
-    assert ("udp", 51820, "172.29.23.0/24") in desired
+    assert ("tcp", None, "192.168.17.0/24") in desired
+    assert ("udp", None, "192.168.17.0/24") in desired
+    assert ("udp", 51820, "192.168.17.0/24") in desired
 
 
 def test_firewall_reconcile_with_a_metal_group_is_idempotent(make_config):
@@ -3311,12 +3311,12 @@ def test_firewall_reconcile_claims_an_unmarked_kubespan_rule(make_config):
     cfg = _firewall_cfg(make_config, {}, metal=METAL_GROUP)
     existing = [
         {"type": "in", "action": "ACCEPT", "enable": 1,
-         "proto": "udp", "dport": 51820, "source": "172.29.22.0/24"},
+         "proto": "udp", "dport": 51820, "source": "192.168.16.0/24"},
     ]
 
     created, deleted = _reconcile_existing(cfg, existing)
 
-    assert ("udp", 51820, "172.29.22.0/24") not in {
+    assert ("udp", 51820, "192.168.16.0/24") not in {
         (r["proto"], r.get("dport"), r.get("source")) for r in created
     }
     assert deleted == []

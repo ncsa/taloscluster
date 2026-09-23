@@ -231,7 +231,7 @@ def test_non_integer_count_in_worker_pool_raises_config_error(make_config):
         ({"workers": []}, "workers"),
         ({"tags": []}, "tags"),
         ({"talos": {"extensions": {}}}, "talos.extensions"),
-        ({"network": {"dns": "1.1.1.1"}}, "network.dns"),
+        ({"network": {"dns": "192.0.2.53"}}, "network.dns"),
     ],
 )
 def test_invalid_configuration_fails_during_load(make_config, overrides, message):
@@ -539,7 +539,7 @@ def test_metal_without_a_vm_provider_is_refused(make_config):
                         "interfaces": {
                             "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
                         },
-                        "servers": {"rp001-worker": {}},
+                        "servers": {"srv01-worker": {}},
                     }
                 },
             },
@@ -557,24 +557,24 @@ def test_metal_servers_flat_map_carries_every_server_role(make_config):
                 "role": "controlplane",
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
-                "servers": {"rp001-cp": {}},
+                "servers": {"srv01-cp": {}},
             },
             "worker": {
                 "role": "worker",
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": "cluster"}},
                 "servers": {
-                    "rp001-worker": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}}},
-                    "rp002-worker": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.7/21"}}},
+                    "srv01-worker": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}}},
+                    "srv02-worker": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.7/21"}}},
                 },
             },
         },
     })
 
     assert cfg.metal_servers == {
-        "rp001-cp": "controlplane",
-        "rp001-worker": "worker",
-        "rp002-worker": "worker",
+        "srv01-cp": "controlplane",
+        "srv01-worker": "worker",
+        "srv02-worker": "worker",
     }
 
 
@@ -588,7 +588,7 @@ def test_metal_servers_empty_without_a_metal_section(make_config):
     ("metal", "message"),
     [
         ([], "metal must be a YAML mapping"),
-        ({"cp": "rp001"}, "metal.cp must be a YAML mapping"),
+        ({"cp": "srv01"}, "metal.cp must be a YAML mapping"),
         ({1: {}}, "metal group names must be non-empty strings"),
     ],
 )
@@ -621,10 +621,10 @@ def test_metal_group_on_another_l2_requires_kubespan(make_config):
     with pytest.raises(ConfigError, match="talos.kubespan must be true"):
         make_config({
             "talos": {"kubespan": False},
-            "metal": {"phoenix": {
+            "metal": {"rack1": {
                 "role": "worker",
                 "disk": "/dev/sda",
-                "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+                "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1"},
             }},
         })
 
@@ -634,10 +634,10 @@ def test_metal_group_on_another_l2_requires_explicit_kubespan(make_config):
     without naming the key: the unset default is refused like `false`."""
     with pytest.raises(ConfigError, match="talos.kubespan must be true"):
         make_config({
-            "metal": {"phoenix": {
+            "metal": {"rack1": {
                 "role": "worker",
                 "disk": "/dev/sda",
-                "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+                "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1"},
             }},
         })
 
@@ -645,17 +645,17 @@ def test_metal_group_on_another_l2_requires_explicit_kubespan(make_config):
 def test_metal_server_on_another_l2_requires_kubespan(make_config):
     """A server may replace the group's network wholesale; KubeSpan is still
     the only path between its L2 and the cluster network."""
-    with pytest.raises(ConfigError, match="talos.kubespan must be true.*phoenix/rp001"):
+    with pytest.raises(ConfigError, match="talos.kubespan must be true.*rack1/srv01"):
         make_config({
             "talos": {"kubespan": False},
-            "metal": {"phoenix": {
+            "metal": {"rack1": {
                 "role": "worker",
                 "disk": "/dev/sda",
                 "servers": {
-                    "rp001": {
-                        "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+                    "srv01": {
+                        "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1"},
                         "interfaces": {
-                            "enp1s0f0": {"role": "cluster", "ip": "172.29.21.5/24"}
+                            "enp1s0f0": {"role": "cluster", "ip": "198.51.100.5/24"}
                         },
                     },
                 },
@@ -668,21 +668,21 @@ def test_metal_server_on_another_l2_loads_with_kubespan(make_config):
     cfg = make_config({
         "talos": {"kubespan": True},
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "servers": {
-                "rp001": {
-                    "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+                "srv01": {
+                    "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1"},
                     "interfaces": {
-                        "enp1s0f0": {"role": "cluster", "ip": "172.29.21.5/24"}
+                        "enp1s0f0": {"role": "cluster", "ip": "198.51.100.5/24"}
                     },
                 },
             },
         }},
     })
 
-    assert cfg.metal.groups["phoenix"].servers["rp001"].network.cidr == "172.29.21.0/24"
+    assert cfg.metal.groups["rack1"].servers["srv01"].network.cidr == "198.51.100.0/24"
 
 
 def test_metal_group_on_the_cluster_l2_allows_kubespan_off(make_config):
@@ -716,14 +716,14 @@ def test_metal_group_on_the_cluster_subnet_needs_no_kubespan_despite_the_vip(mak
             "network": {"cluster": {"bridge": "vmbr0"}},
         },
         "network": {"cluster": {
-            "cidr": "172.29.21.0/24",
-            "gateway": "172.29.21.1",
-            "kubeapi_vip": "172.29.21.200",
+            "cidr": "198.51.100.0/24",
+            "gateway": "198.51.100.1",
+            "kubeapi_vip": "198.51.100.200",
         }},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
-            "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+            "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1"},
         }},
     }, remove=("openstack",))
 
@@ -734,29 +734,29 @@ def test_metal_group_on_another_l2_requires_a_gateway(make_config):
     """(a) An L2 of its own needs a gateway: without one the machine config
     has no default route, so the node could never reach the API VIP."""
     metal = {"role": "worker", "disk": "/dev/sda",
-             "network": {"cidr": "172.29.21.0/24"}}
+             "network": {"cidr": "198.51.100.0/24"}}
     with pytest.raises(
-        ConfigError, match=r"metal\.phoenix\.network\.gateway is required"
+        ConfigError, match=r"metal\.rack1\.network\.gateway is required"
     ):
-        make_config({"talos": {"kubespan": True}, "metal": {"phoenix": metal}})
+        make_config({"talos": {"kubespan": True}, "metal": {"rack1": metal}})
 
 
 def test_metal_server_on_another_l2_requires_a_gateway(make_config):
     """(a) A server overriding its L2 wholesale needs its own gateway too."""
     with pytest.raises(
-        ConfigError, match=r"metal\.phoenix\.servers\.rp001\.network\.gateway"
+        ConfigError, match=r"metal\.rack1\.servers\.srv01\.network\.gateway"
     ):
         make_config({
             "talos": {"kubespan": True},
-            "metal": {"phoenix": {
+            "metal": {"rack1": {
                 "role": "worker",
                 "disk": "/dev/sda",
-                "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+                "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1"},
                 "servers": {
-                    "rp001": {
-                        "network": {"cidr": "172.29.31.0/24"},
+                    "srv01": {
+                        "network": {"cidr": "192.168.19.0/24"},
                         "interfaces": {
-                            "enp1s0f0": {"role": "cluster", "ip": "172.29.31.5/24"}
+                            "enp1s0f0": {"role": "cluster", "ip": "192.168.19.5/24"}
                         },
                     },
                 },
@@ -768,10 +768,10 @@ def test_metal_group_on_the_cluster_l2_requires_a_cluster_gateway(make_config):
     """(a) A group riding network.cluster inherits its unset gateway: every
     metal link is static, so the loader refuses and names the key to set."""
     with pytest.raises(
-        ConfigError, match=r"metal\.phoenix rides network\.cluster, whose "
+        ConfigError, match=r"metal\.rack1 rides network\.cluster, whose "
         r"gateway is unset.*set network\.cluster\.gateway"
     ):
-        make_config({"talos": {"kubespan": True}, "metal": {"phoenix": {
+        make_config({"talos": {"kubespan": True}, "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
         }}})
@@ -781,12 +781,12 @@ def test_metal_group_on_the_cluster_subnet_requires_a_gateway_of_its_own(make_co
     """(a) A group restating the cluster L2's cidr without a gateway is
     refused like one on a different L2: the links are static either way."""
     with pytest.raises(
-        ConfigError, match=r"metal\.phoenix\.network\.gateway is required"
+        ConfigError, match=r"metal\.rack1\.network\.gateway is required"
     ):
         make_config({
             "talos": {"kubespan": True},
             "network": {"cluster": {"gateway": "192.168.0.1"}},
-            "metal": {"phoenix": {
+            "metal": {"rack1": {
                 "role": "worker",
                 "disk": "/dev/sda",
                 "network": {"cidr": "192.168.0.0/21"},
@@ -801,11 +801,11 @@ def test_metal_cluster_address_must_sit_on_the_server_l2(make_config, ip):
     with pytest.raises(ConfigError, match=r"interfaces\.enp2s0f0\.ip"):
         make_config({
             "network": {"cluster": {"gateway": "192.168.0.1"}},
-            "metal": {"phoenix": {
+            "metal": {"rack1": {
                 "role": "worker",
                 "disk": "/dev/sda",
                 "interfaces": {"enp2s0f0": {"role": "cluster"}},
-                "servers": {"rp001": {
+                "servers": {"srv01": {
                     "interfaces": {"enp2s0f0": {"ip": ip}},
                 }},
             }},
@@ -816,26 +816,26 @@ def test_metal_address_strips_surrounding_whitespace(make_config):
     """A quoted address with surrounding whitespace loads as its stripped value."""
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "interfaces": {"enp2s0f0": {"role": "cluster"}},
-            "servers": {"rp001": {
-                "bmc": {"ip": " 172.28.50.5"},
+            "servers": {"srv01": {
+                "bmc": {"ip": " 203.0.113.5"},
                 "interfaces": {"enp2s0f0": {"ip": " 192.168.0.5 "}},
             }},
         }},
     })
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     assert server.interfaces["enp2s0f0"].ip == "192.168.0.5"
-    assert server.bmc.ip == "172.28.50.5"
+    assert server.bmc.ip == "203.0.113.5"
 
 
 @pytest.mark.parametrize(
     ("ips", "message"),
     [
-        (["172.29.21.5/24", "172.29.21.200/24"], "collides with the kubeapi_vip"),
-        (["172.29.21.5/24", "172.29.21.5"], "also the cluster address of rp001"),
+        (["198.51.100.5/24", "198.51.100.200/24"], "collides with the kubeapi_vip"),
+        (["198.51.100.5/24", "198.51.100.5"], "also the cluster address of srv01"),
     ],
 )
 def test_metal_server_address_collisions_are_refused(make_config, ips, message):
@@ -851,18 +851,18 @@ def test_metal_server_address_collisions_are_refused(make_config, ips, message):
                 "network": {"cluster": {"bridge": "vmbr0"}},
             },
             "network": {"cluster": {
-                "cidr": "172.29.21.0/24",
-                "gateway": "172.29.21.1",
-                "kubeapi_vip": "172.29.21.200",
+                "cidr": "198.51.100.0/24",
+                "gateway": "198.51.100.1",
+                "kubeapi_vip": "198.51.100.200",
             }},
-            "metal": {"phoenix": {
+            "metal": {"rack1": {
                 "role": "worker",
                 "disk": "/dev/sda",
-                "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+                "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1"},
                 "interfaces": {"enp2s0f0": {"role": "cluster"}},
                 "servers": {
                     name: {"interfaces": {"enp2s0f0": {"ip": ip}}}
-                    for name, ip in zip(("rp001", "rp002"), ips, strict=True)
+                    for name, ip in zip(("srv01", "srv02"), ips, strict=True)
                 },
             }},
         }, remove=("openstack",))
@@ -873,12 +873,12 @@ def test_metal_cluster_address_cannot_be_the_group_gateway(make_config, ip):
     """The group L2's gateway is the address every host on it routes
     through, so a machine answering on it is refused."""
     with pytest.raises(ConfigError, match=r"is the L2's gateway"):
-        make_config({"talos": {"kubespan": True}, "metal": {"phoenix": {
+        make_config({"talos": {"kubespan": True}, "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "network": {"cidr": "192.168.8.0/21", "gateway": "192.168.8.1"},
             "interfaces": {"enp2s0f0": {"role": "cluster"}},
-            "servers": {"rp001": {
+            "servers": {"srv01": {
                 "interfaces": {"enp2s0f0": {"ip": ip}},
             }},
         }}})
@@ -891,11 +891,11 @@ def test_metal_cluster_address_cannot_be_the_cluster_gateway(make_config, ip):
     with pytest.raises(ConfigError, match=r"is the L2's gateway"):
         make_config({
             "network": {"cluster": {"gateway": "192.168.0.1"}},
-            "metal": {"phoenix": {
+            "metal": {"rack1": {
                 "role": "worker",
                 "disk": "/dev/sda",
                 "interfaces": {"enp2s0f0": {"role": "cluster"}},
-                "servers": {"rp001": {
+                "servers": {"srv01": {
                     "interfaces": {"enp2s0f0": {"ip": ip}},
                 }},
             }},
@@ -911,12 +911,12 @@ def test_metal_cluster_address_cannot_be_the_network_or_broadcast(make_config, i
     ):
         make_config({
             "network": {"cluster": {"gateway": "192.168.0.1"}},
-            "metal": {"phoenix": {
+            "metal": {"rack1": {
                 "role": "worker",
                 "disk": "/dev/sda",
                 "network": {"cidr": "192.168.0.0/21", "gateway": "192.168.0.254"},
                 "interfaces": {"enp2s0f0": {"role": "cluster"}},
-                "servers": {"rp001": {
+                "servers": {"srv01": {
                     "interfaces": {"enp2s0f0": {"ip": ip}},
                 }},
             }},
@@ -937,17 +937,17 @@ def test_metal_cluster_address_cannot_be_the_cluster_gateway_on_a_shared_l2(make
                 "network": {"cluster": {"bridge": "vmbr0"}},
             },
             "network": {"cluster": {
-                "cidr": "172.29.21.0/24",
-                "gateway": "172.29.21.1",
-                "kubeapi_vip": "172.29.21.200",
+                "cidr": "198.51.100.0/24",
+                "gateway": "198.51.100.1",
+                "kubeapi_vip": "198.51.100.200",
             }},
-            "metal": {"phoenix": {
+            "metal": {"rack1": {
                 "role": "worker",
                 "disk": "/dev/sda",
-                "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.254"},
+                "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.254"},
                 "interfaces": {"enp2s0f0": {"role": "cluster"}},
-                "servers": {"rp001": {
-                    "interfaces": {"enp2s0f0": {"ip": "172.29.21.1/24"}},
+                "servers": {"srv01": {
+                    "interfaces": {"enp2s0f0": {"ip": "198.51.100.1/24"}},
                 }},
             }},
         }, remove=("openstack",))
@@ -961,7 +961,7 @@ def test_metal_cluster_address_cannot_be_the_cluster_gateway_on_a_shared_l2(make
                 "role": "worker",
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": "pxe"}},
-                "servers": {"rp001": {}},
+                "servers": {"srv01": {}},
             },
             "exactly one interface with the cluster role is required "
             r"\(got none\)",
@@ -974,7 +974,7 @@ def test_metal_cluster_address_cannot_be_the_cluster_gateway_on_a_shared_l2(make
                     "enp1s0f0": {"role": "cluster"},
                     "enp2s0f0": {"role": "cluster"},
                 },
-                "servers": {"rp001": {}},
+                "servers": {"srv01": {}},
             },
             "exactly one interface with the cluster role is required "
             r"\(got enp1s0f0, enp2s0f0\)",
@@ -984,7 +984,7 @@ def test_metal_cluster_address_cannot_be_the_cluster_gateway_on_a_shared_l2(make
                 "role": "worker",
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": "cluster"}},
-                "servers": {"rp001": {}},
+                "servers": {"srv01": {}},
             },
             "no static address",
         ),
@@ -993,7 +993,7 @@ def test_metal_cluster_address_cannot_be_the_cluster_gateway_on_a_shared_l2(make
                 "role": "worker",
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": ["cluster", "cluster"]}},
-                "servers": {"rp001": {}},
+                "servers": {"srv01": {}},
             },
             "must not repeat a role",
         ),
@@ -1003,7 +1003,7 @@ def test_metal_cluster_address_cannot_be_the_cluster_gateway_on_a_shared_l2(make
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": ["cluster", "external"]}},
                 "servers": {
-                    "rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}
+                    "srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}
                 },
             },
             "has the external role but cluster.yaml has no network.external block",
@@ -1014,7 +1014,7 @@ def test_metal_cluster_address_cannot_be_the_cluster_gateway_on_a_shared_l2(make
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": "cluster", "link_name": "ext0"}},
                 "servers": {
-                    "rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}
+                    "srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}
                 },
             },
             "sets link_name but has no external role",
@@ -1025,7 +1025,7 @@ def test_metal_cluster_address_cannot_be_the_cluster_gateway_on_a_shared_l2(make
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": "cluster", "vlan": 21}},
                 "servers": {
-                    "rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}
+                    "srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}
                 },
             },
             "sets vlan but has no external role",
@@ -1037,7 +1037,7 @@ def test_metal_cluster_address_cannot_be_the_cluster_gateway_on_a_shared_l2(make
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": "cluster"}},
                 "servers": {
-                    "rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}
+                    "srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}
                 },
             },
             "no bmc.ip",
@@ -1049,16 +1049,16 @@ def test_metal_cabling_and_bmc_facts_are_checked_at_load(make_config, metal, mes
     when the configuration loads, so `plan` never passes a metal section the
     metal commands would refuse at the first join."""
     with pytest.raises(ConfigError, match=message):
-        make_config({"metal": {"phoenix": metal}})
+        make_config({"metal": {"rack1": metal}})
 
 
 def test_metal_group_network_cannot_carry_a_kubeapi_vip(make_config):
     """The API VIP is read from network.cluster or network.external; a metal
     network naming its own would be silently ignored, so the loader refuses it."""
     with pytest.raises(
-        ConfigError, match=r"metal\.phoenix\.network: kubeapi_vip"
+        ConfigError, match=r"metal\.rack1\.network: kubeapi_vip"
     ):
-        make_config({"metal": {"phoenix": {
+        make_config({"metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "network": {"cidr": "192.168.0.0/21", "kubeapi_vip": "192.168.0.10"},
@@ -1068,15 +1068,15 @@ def test_metal_group_network_cannot_carry_a_kubeapi_vip(make_config):
 def test_metal_server_network_cannot_carry_a_kubeapi_vip(make_config):
     """A server replacing its group's network wholesale is held to the same rule."""
     with pytest.raises(
-        ConfigError, match=r"metal\.phoenix\.servers\.rp001\.network: kubeapi_vip"
+        ConfigError, match=r"metal\.rack1\.servers\.srv01\.network: kubeapi_vip"
     ):
-        make_config({"metal": {"phoenix": {
+        make_config({"metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
-            "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
-            "servers": {"rp001": {
-                "network": {"cidr": "172.29.21.0/24", "kubeapi_vip": "172.29.21.200"},
-                "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.21.5/24"}},
+            "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1"},
+            "servers": {"srv01": {
+                "network": {"cidr": "198.51.100.0/24", "kubeapi_vip": "198.51.100.200"},
+                "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "198.51.100.5/24"}},
             }},
         }}})
 
@@ -1094,7 +1094,7 @@ def test_metal_group_on_the_cluster_l2_must_agree_on_mtu_and_vlan(
     """(d) A network naming the cluster L2's cidr describes the same wire,
     so its MTU and VLAN tag cannot differ from network.cluster's."""
     with pytest.raises(ConfigError, match=message):
-        make_config({"metal": {"phoenix": {
+        make_config({"metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "network": {"cidr": "192.168.0.0/21", key: value},
@@ -1103,57 +1103,57 @@ def test_metal_group_on_the_cluster_l2_must_agree_on_mtu_and_vlan(
 
 def test_metal_group_defaults_resolve_into_each_server(make_config):
     """Servers start from the group defaults; `bmc` and `interfaces` merge per key."""
-    cfg = make_config({"talos": {"kubespan": True}, "metal": {"phoenix": {
+    cfg = make_config({"talos": {"kubespan": True}, "metal": {"rack1": {
         "role": "worker",
         "redfish": True,
         "disk": "/dev/sda",
-        "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000},
+        "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1", "mtu": 9000},
         "interfaces": {
             "enp1s0f0": {"role": "pxe"},
             "enp2s0f0": {"role": "cluster", "dns": ["192.0.2.53"]},
         },
         "bmc": {"username": "root", "password": "secret"},
         "servers": {
-            "rp001": {
-                "bmc": {"ip": "172.28.50.5"},
-                "interfaces": {"enp2s0f0": {"ip": "172.29.21.5/24"}},
+            "srv01": {
+                "bmc": {"ip": "203.0.113.5"},
+                "interfaces": {"enp2s0f0": {"ip": "198.51.100.5/24"}},
             },
-            "rp002": {
-                "bmc": {"ip": "172.28.50.6"},
+            "srv02": {
+                "bmc": {"ip": "203.0.113.6"},
                 "disk": "/dev/nvme0n1",
-                "interfaces": {"enp2s0f0": {"ip": "172.29.21.6/24"}},
+                "interfaces": {"enp2s0f0": {"ip": "198.51.100.6/24"}},
             },
         },
     }}})
 
-    group = cfg.metal.groups["phoenix"]
+    group = cfg.metal.groups["rack1"]
     assert group.network == L2Network(
-        cidr="172.29.21.0/24", gateway="172.29.21.1", mtu=9000
+        cidr="198.51.100.0/24", gateway="198.51.100.1", mtu=9000
     )
-    rp001 = group.servers["rp001"]
-    assert rp001.group == "phoenix"
-    assert rp001.role == "worker"
-    assert rp001.redfish is True
-    assert rp001.disk == "/dev/sda"
-    assert rp001.network == group.network
+    srv01 = group.servers["srv01"]
+    assert srv01.group == "rack1"
+    assert srv01.role == "worker"
+    assert srv01.redfish is True
+    assert srv01.disk == "/dev/sda"
+    assert srv01.network == group.network
     # the group's bmc credentials with the server's own BMC address merged in
-    assert rp001.bmc == MetalBmc(ip="172.28.50.5", username="root", password="secret")
+    assert srv01.bmc == MetalBmc(ip="203.0.113.5", username="root", password="secret")
     # the group's interface roles with the server's own cluster address merged in
-    assert rp001.interfaces == {
+    assert srv01.interfaces == {
         "enp1s0f0": MetalInterface(role=("pxe",)),
         "enp2s0f0": MetalInterface(
-            role=("cluster",), ip="172.29.21.5/24", dns=("192.0.2.53",)
+            role=("cluster",), ip="198.51.100.5/24", dns=("192.0.2.53",)
         ),
     }
-    # rp002 overrides its disk, BMC address and cluster address; everything
+    # srv02 overrides its disk, BMC address and cluster address; everything
     # else comes from the group
-    rp002 = group.servers["rp002"]
-    assert rp002.disk == "/dev/nvme0n1"
-    assert rp002.bmc == MetalBmc(ip="172.28.50.6", username="root", password="secret")
-    assert rp002.interfaces == {
+    srv02 = group.servers["srv02"]
+    assert srv02.disk == "/dev/nvme0n1"
+    assert srv02.bmc == MetalBmc(ip="203.0.113.6", username="root", password="secret")
+    assert srv02.interfaces == {
         "enp1s0f0": MetalInterface(role=("pxe",)),
         "enp2s0f0": MetalInterface(
-            role=("cluster",), ip="172.29.21.6/24", dns=("192.0.2.53",)
+            role=("cluster",), ip="198.51.100.6/24", dns=("192.0.2.53",)
         ),
     }
 
@@ -1163,37 +1163,37 @@ def test_metal_boot_timeout_defaults_and_overrides_per_group_and_server(make_con
     boot budget is a group default one slow machine can raise further."""
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "boot_timeout": 1800,
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "servers": {
-                "rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}},
-                "rp002": {
+                "srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}},
+                "srv02": {
                     "boot_timeout": 3600,
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}},
                 },
             },
         }},
     })
-    group = cfg.metal.groups["phoenix"]
+    group = cfg.metal.groups["rack1"]
     assert group.boot_timeout == 1800
-    assert group.servers["rp001"].boot_timeout == 1800
-    assert group.servers["rp002"].boot_timeout == 3600
+    assert group.servers["srv01"].boot_timeout == 1800
+    assert group.servers["srv02"].boot_timeout == 3600
 
 
 def test_metal_boot_timeout_defaults_to_ten_minutes(make_config):
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
-            "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
+            "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
         }},
     })
-    assert cfg.metal.groups["phoenix"].servers["rp001"].boot_timeout == 600
+    assert cfg.metal.groups["rack1"].servers["srv01"].boot_timeout == 600
 
 
 def test_metal_auto_join_defaults_to_off(make_config):
@@ -1201,50 +1201,50 @@ def test_metal_auto_join_defaults_to_off(make_config):
     so a group that says nothing about it is left to `metal join`."""
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
-            "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
+            "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
         }},
     })
-    group = cfg.metal.groups["phoenix"]
+    group = cfg.metal.groups["rack1"]
     assert group.auto_join is False
-    assert group.servers["rp001"].auto_join is False
+    assert group.servers["srv01"].auto_join is False
 
 
 def test_metal_auto_join_is_a_group_default_one_server_may_opt_out_of(make_config):
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "auto_join": True,
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "servers": {
-                "rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}},
-                "rp002": {
+                "srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}},
+                "srv02": {
                     "auto_join": False,
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}},
                 },
             },
         }},
     })
-    group = cfg.metal.groups["phoenix"]
+    group = cfg.metal.groups["rack1"]
     assert group.auto_join is True
-    assert group.servers["rp001"].auto_join is True
-    assert group.servers["rp002"].auto_join is False
+    assert group.servers["srv01"].auto_join is True
+    assert group.servers["srv02"].auto_join is False
 
 
 @pytest.mark.parametrize("bad", [0, 1, "true"])
 def test_metal_auto_join_must_be_a_boolean(make_config, bad):
     with pytest.raises(ConfigError, match="auto_join must be true or false"):
-        make_config({"metal": {"phoenix": {
+        make_config({"metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "auto_join": bad,
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
-            "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
+            "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
         }}})
 
 
@@ -1255,12 +1255,12 @@ def test_metal_boot_timeout_must_be_a_positive_whole_number(make_config, bad):
     """`true` is an int in python and `boot_timeout: true` never meant one
     second, so a bool is refused like any other non-integer."""
     with pytest.raises(ConfigError, match="boot_timeout must be a positive"):
-        make_config({"metal": {"phoenix": {
+        make_config({"metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "boot_timeout": bad,
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
-            "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
+            "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
         }}})
 
 
@@ -1268,40 +1268,40 @@ def test_metal_redfish_credentials_resolve_from_group_default_or_server_override
     """A `redfish: true` machine takes its credentials from the group or its overrides."""
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "bmc": {"username": "root", "password": "secret"},
             "servers": {
-                "rp001": {
-                    "bmc": {"ip": "172.28.50.5"},
+                "srv01": {
+                    "bmc": {"ip": "203.0.113.5"},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
                 },
             },
         }},
     })
-    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
-    assert rp001.bmc == MetalBmc(ip="172.28.50.5", username="root", password="secret")
+    srv01 = cfg.metal.groups["rack1"].servers["srv01"]
+    assert srv01.bmc == MetalBmc(ip="203.0.113.5", username="root", password="secret")
 
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "servers": {
-                "rp001": {
-                    "bmc": {"ip": "172.28.50.5", "username": "admin", "password": "s3cret"},
+                "srv01": {
+                    "bmc": {"ip": "203.0.113.5", "username": "admin", "password": "s3cret"},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
                 },
             },
         }},
     })
-    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
-    assert rp001.bmc == MetalBmc(ip="172.28.50.5", username="admin", password="s3cret")
+    srv01 = cfg.metal.groups["rack1"].servers["srv01"]
+    assert srv01.bmc == MetalBmc(ip="203.0.113.5", username="admin", password="s3cret")
 
 
 def test_metal_bmc_scheme_defaults_to_https_and_merges_like_the_credentials(make_config):
@@ -1309,50 +1309,50 @@ def test_metal_bmc_scheme_defaults_to_https_and_merges_like_the_credentials(make
     the scheme merges key by key like the rest of the `bmc` block."""
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "bmc": {"username": "root", "password": "secret", "scheme": "http"},
             "servers": {
-                "rp001": {
-                    "bmc": {"ip": "172.28.50.5"},
+                "srv01": {
+                    "bmc": {"ip": "203.0.113.5"},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
                 },
-                "rp002": {
-                    "bmc": {"ip": "172.28.50.6", "scheme": "https"},
+                "srv02": {
+                    "bmc": {"ip": "203.0.113.6", "scheme": "https"},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}},
                 },
             },
         }},
     })
-    servers = cfg.metal.groups["phoenix"].servers
-    assert servers["rp001"].bmc == MetalBmc(
-        ip="172.28.50.5", username="root", password="secret", scheme="http"
+    servers = cfg.metal.groups["rack1"].servers
+    assert servers["srv01"].bmc == MetalBmc(
+        ip="203.0.113.5", username="root", password="secret", scheme="http"
     )
     # a server override puts its own machine back on https
-    assert servers["rp002"].bmc == MetalBmc(
-        ip="172.28.50.6", username="root", password="secret", scheme="https"
+    assert servers["srv02"].bmc == MetalBmc(
+        ip="203.0.113.6", username="root", password="secret", scheme="https"
     )
 
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "servers": {
-                "rp001": {
-                    "bmc": {"ip": "172.28.50.5", "username": "root", "password": "secret"},
+                "srv01": {
+                    "bmc": {"ip": "203.0.113.5", "username": "root", "password": "secret"},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
                 },
             },
         }},
     })
-    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
-    assert rp001.bmc.scheme == "https"
+    srv01 = cfg.metal.groups["rack1"].servers["srv01"]
+    assert srv01.bmc.scheme == "https"
 
 
 @pytest.mark.parametrize("scheme", ["ftp", "", True])
@@ -1360,15 +1360,15 @@ def test_metal_bmc_scheme_is_checked_at_load(make_config, scheme):
     """An unknown scheme is refused when the configuration loads, not at first
     `metal boot` -- and never silently downgrades the Redfish transport."""
     with pytest.raises(ConfigError, match=r"bmc\.scheme must be one of: https, http"):
-        make_config({"metal": {"phoenix": {
+        make_config({"metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "servers": {
-                "rp001": {
+                "srv01": {
                     "bmc": {
-                        "ip": "172.28.50.5",
+                        "ip": "203.0.113.5",
                         "username": "root",
                         "password": "secret",
                         "scheme": scheme,
@@ -1384,7 +1384,7 @@ def test_metal_bmc_tls_verify_merges_like_the_credentials(make_config):
     the setting merges key by key like the rest of the `bmc` block."""
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
@@ -1395,47 +1395,47 @@ def test_metal_bmc_tls_verify_merges_like_the_credentials(make_config):
                 "tls_verify": "/etc/ssl/certs/bmc-ca.pem",
             },
             "servers": {
-                "rp001": {
-                    "bmc": {"ip": "172.28.50.5"},
+                "srv01": {
+                    "bmc": {"ip": "203.0.113.5"},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
                 },
-                "rp002": {
-                    "bmc": {"ip": "172.28.50.6", "tls_verify": False},
+                "srv02": {
+                    "bmc": {"ip": "203.0.113.6", "tls_verify": False},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}},
                 },
             },
         }},
     })
-    servers = cfg.metal.groups["phoenix"].servers
+    servers = cfg.metal.groups["rack1"].servers
     # the group's CA bundle with the server's own BMC address merged in
-    assert servers["rp001"].bmc == MetalBmc(
-        ip="172.28.50.5",
+    assert servers["srv01"].bmc == MetalBmc(
+        ip="203.0.113.5",
         username="root",
         password="secret",
         tls_verify="/etc/ssl/certs/bmc-ca.pem",
     )
     # a server override puts its own machine back on unverified
-    assert servers["rp002"].bmc == MetalBmc(
-        ip="172.28.50.6", username="root", password="secret", tls_verify=False
+    assert servers["srv02"].bmc == MetalBmc(
+        ip="203.0.113.6", username="root", password="secret", tls_verify=False
     )
 
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "servers": {
-                "rp001": {
-                    "bmc": {"ip": "172.28.50.5", "username": "root", "password": "secret"},
+                "srv01": {
+                    "bmc": {"ip": "203.0.113.5", "username": "root", "password": "secret"},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
                 },
             },
         }},
     })
-    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
-    assert rp001.bmc.tls_verify is False
+    srv01 = cfg.metal.groups["rack1"].servers["srv01"]
+    assert srv01.bmc.tls_verify is False
 
 
 @pytest.mark.parametrize("tls_verify", [1, "", [], None])
@@ -1446,15 +1446,15 @@ def test_metal_bmc_tls_verify_is_checked_at_load(make_config, tls_verify):
     with pytest.raises(
         ConfigError, match=r"bmc\.tls_verify must be true, false, or a CA bundle path"
     ):
-        make_config({"metal": {"phoenix": {
+        make_config({"metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "servers": {
-                "rp001": {
+                "srv01": {
                     "bmc": {
-                        "ip": "172.28.50.5",
+                        "ip": "203.0.113.5",
                         "username": "root",
                         "password": "secret",
                         "tls_verify": tls_verify,
@@ -1474,13 +1474,13 @@ def test_metal_bmc_tls_verify_is_checked_at_load(make_config, tls_verify):
         ),
         (
             {
-                "phoenix": {
+                "rack1": {
                     "role": "worker",
                     "redfish": True,
                     "disk": "/dev/sda",
                     "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
                     "servers": {
-                        "rp001": {
+                        "srv01": {
                             "bmc": {
                                 "ip": "192.0.2.51/24",
                                 "username": "root",
@@ -1490,7 +1490,7 @@ def test_metal_bmc_tls_verify_is_checked_at_load(make_config, tls_verify):
                     },
                 }
             },
-            r"metal\.phoenix\.servers\.rp001\.bmc\.ip is invalid: '192\.0\.2\.51/24'",
+            r"metal\.rack1\.servers\.srv01\.bmc\.ip is invalid: '192\.0\.2\.51/24'",
         ),
     ],
 )
@@ -1509,57 +1509,57 @@ def test_metal_redfish_credentials_load_from_whichever_file_supplies_them(
     credentials = {"username": "root", "password": "secret"}
     overrides: dict = {
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "servers": {
-                "rp001": {
-                    "bmc": {"ip": "172.28.50.5"},
+                "srv01": {
+                    "bmc": {"ip": "203.0.113.5"},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
                 },
             },
         }},
     }
     if source == "secrets.yaml":
-        _write_secrets(tmp_path, {"metal": {"phoenix": {"bmc": credentials}}})
+        _write_secrets(tmp_path, {"metal": {"rack1": {"bmc": credentials}}})
     elif source == "an include":
         (tmp_path / "bmc.yaml").write_text(
-            yaml.safe_dump({"metal": {"phoenix": {"bmc": credentials}}})
+            yaml.safe_dump({"metal": {"rack1": {"bmc": credentials}}})
         )
         overrides["include"] = ["bmc.yaml"]
     else:
-        overrides["metal"]["phoenix"]["bmc"] = credentials
+        overrides["metal"]["rack1"]["bmc"] = credentials
 
     cfg = make_config(overrides)
-    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
-    assert (rp001.bmc.username, rp001.bmc.password) == ("root", "secret")
+    srv01 = cfg.metal.groups["rack1"].servers["srv01"]
+    assert (srv01.bmc.username, srv01.bmc.password) == ("root", "secret")
 
 
 @pytest.mark.parametrize(
     ("bmc", "message"),
     [
         (
-            {"ip": "172.28.50.5"},
-            r"metal\.phoenix\.servers\.rp001: bmc\.username must be a non-empty string",
+            {"ip": "203.0.113.5"},
+            r"metal\.rack1\.servers\.srv01: bmc\.username must be a non-empty string",
         ),
         (
-            {"ip": "172.28.50.5", "username": "root"},
-            r"metal\.phoenix\.servers\.rp001: bmc\.password must be a non-empty string",
+            {"ip": "203.0.113.5", "username": "root"},
+            r"metal\.rack1\.servers\.srv01: bmc\.password must be a non-empty string",
         ),
         (
-            {"ip": "172.28.50.5", "username": "root", "password": ""},
-            r"metal\.phoenix\.servers\.rp001: bmc\.password must be a non-empty string",
+            {"ip": "203.0.113.5", "username": "root", "password": ""},
+            r"metal\.rack1\.servers\.srv01: bmc\.password must be a non-empty string",
         ),
         (
-            {"ip": "172.28.50.5", "username": "CHANGE-ME", "password": "secret"},
-            r"metal\.phoenix\.servers\.rp001: bmc\.username is still the scaffolded "
+            {"ip": "203.0.113.5", "username": "CHANGE-ME", "password": "secret"},
+            r"metal\.rack1\.servers\.srv01: bmc\.username is still the scaffolded "
             r"'CHANGE-ME' placeholder",
         ),
         (
-            {"ip": "172.28.50.5", "username": "root", "password": "CHANGE-ME"},
-            r"metal\.phoenix\.servers\.rp001: bmc\.password is still the scaffolded "
+            {"ip": "203.0.113.5", "username": "root", "password": "CHANGE-ME"},
+            r"metal\.rack1\.servers\.srv01: bmc\.password is still the scaffolded "
             r"'CHANGE-ME' placeholder",
         ),
     ],
@@ -1567,11 +1567,11 @@ def test_metal_redfish_credentials_load_from_whichever_file_supplies_them(
 def test_metal_redfish_rejects_missing_or_placeholder_credentials(make_config, bmc, message):
     """A `redfish: true` machine must end up with real BMC credentials."""
     with pytest.raises(ConfigError, match=message):
-        make_config({"metal": {"phoenix": {
+        make_config({"metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
-            "servers": {"rp001": {"bmc": bmc}},
+            "servers": {"srv01": {"bmc": bmc}},
         }}})
 
 
@@ -1579,55 +1579,55 @@ def test_metal_without_redfish_needs_no_bmc_credentials(make_config):
     """`redfish: false` never touches the BMC, so credentials may stay unset."""
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "servers": {
-                "rp001": {
-                    "bmc": {"ip": "172.28.50.5", "username": "CHANGE-ME"},
+                "srv01": {
+                    "bmc": {"ip": "203.0.113.5", "username": "CHANGE-ME"},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
                 },
             },
         }},
     })
 
-    rp001 = cfg.metal.groups["phoenix"].servers["rp001"]
-    assert rp001.bmc == MetalBmc(ip="172.28.50.5", username="CHANGE-ME")
+    srv01 = cfg.metal.groups["rack1"].servers["srv01"]
+    assert srv01.bmc == MetalBmc(ip="203.0.113.5", username="CHANGE-ME")
 
 
 def test_metal_server_opting_out_of_redfish_skips_the_credentials(make_config):
     """The requirement follows the merged flag, so a server may turn redfish off."""
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "redfish": True,
             "disk": "/dev/sda",
             "interfaces": {"enp1s0f0": {"role": "cluster"}},
             "servers": {
-                "rp001": {
+                "srv01": {
                     "redfish": False,
-                    "bmc": {"ip": "172.28.50.5"},
+                    "bmc": {"ip": "203.0.113.5"},
                     "interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}},
                 },
             },
         }},
     })
 
-    assert cfg.metal.groups["phoenix"].servers["rp001"].redfish is False
+    assert cfg.metal.groups["rack1"].servers["srv01"].redfish is False
 
 
 def test_metal_server_can_add_an_interface(make_config):
     """A server's interfaces merge with the group's per name, adding new ones."""
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
-            "interfaces": {"enp1s0f0": {"role": "pxe", "ip": "172.29.21.9/24"}},
+            "interfaces": {"enp1s0f0": {"role": "pxe", "ip": "198.51.100.9/24"}},
             "servers": {
-                "rp001": {
+                "srv01": {
                     "interfaces": {
                         "enp2s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
                     },
@@ -1636,8 +1636,8 @@ def test_metal_server_can_add_an_interface(make_config):
         }},
     })
 
-    assert cfg.metal.groups["phoenix"].servers["rp001"].interfaces == {
-        "enp1s0f0": MetalInterface(role=("pxe",), ip="172.29.21.9/24"),
+    assert cfg.metal.groups["rack1"].servers["srv01"].interfaces == {
+        "enp1s0f0": MetalInterface(role=("pxe",), ip="198.51.100.9/24"),
         "enp2s0f0": MetalInterface(role=("cluster",), ip="192.168.0.5/21"),
     }
 
@@ -1663,24 +1663,24 @@ def test_metal_interface_can_override_the_vlan_child(make_config):
                 "anchor_cidr": "169.254.32.0/20",
             },
         },
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "interfaces": {
                 "enp2s0f0": {"role": ["cluster", "external"], "link_name": "ext0", "vlan": 1600},
             },
             "servers": {
-                "rp001": {"interfaces": {"enp2s0f0": {"ip": "192.168.0.5/21", "vlan": 1691}}},
+                "srv01": {"interfaces": {"enp2s0f0": {"ip": "192.168.0.5/21", "vlan": 1691}}},
             },
         }},
     }, remove=("openstack",))
 
-    group = cfg.metal.groups["phoenix"]
+    group = cfg.metal.groups["rack1"]
     assert group.interfaces["enp2s0f0"] == MetalInterface(
         role=("cluster", "external"), link_name="ext0", vlan=1600,
     )
     # the server's own override replaces the group's vlan, keeps its link name
-    assert group.servers["rp001"].interfaces["enp2s0f0"] == MetalInterface(
+    assert group.servers["srv01"].interfaces["enp2s0f0"] == MetalInterface(
         role=("cluster", "external"), ip="192.168.0.5/21", link_name="ext0", vlan=1691,
     )
 
@@ -1715,7 +1715,7 @@ def test_metal_interface_can_override_the_vlan_child(make_config):
                 "worker": {
                     "role": "worker",
                     "disk": "/dev/sda",
-                    "network": {"cidr": "172.29.21.0/24", "anchor_cidr": "169.254.40.0/24"},
+                    "network": {"cidr": "198.51.100.0/24", "anchor_cidr": "169.254.40.0/24"},
                 }
             },
             r"metal\.worker\.network: unknown key\(s\): anchor_cidr",
@@ -1824,7 +1824,7 @@ def test_metal_interface_can_override_the_vlan_child(make_config):
             r"metal\.worker\.bmc\.ip is invalid: 'bmc\.example\.edu'",
         ),
         (
-            {"worker": {"role": "worker", "disk": "/dev/sda", "servers": ["rp001"]}},
+            {"worker": {"role": "worker", "disk": "/dev/sda", "servers": ["srv01"]}},
             r"metal\.worker\.servers must be a YAML mapping",
         ),
         (
@@ -1840,20 +1840,20 @@ def test_metal_interface_can_override_the_vlan_child(make_config):
                 "worker": {
                     "role": "worker",
                     "disk": "/dev/sda",
-                    "servers": {"rp001": {"user": "x"}},
+                    "servers": {"srv01": {"user": "x"}},
                 }
             },
-            r"metal\.worker\.servers\.rp001: unknown key\(s\): user",
+            r"metal\.worker\.servers\.srv01: unknown key\(s\): user",
         ),
         (
             {
                 "worker": {
                     "role": "worker",
                     "disk": "/dev/sda",
-                    "servers": {"rp001": {"role": "controlplane", "role2": "x"}},
+                    "servers": {"srv01": {"role": "controlplane", "role2": "x"}},
                 }
             },
-            r"metal\.worker\.servers\.rp001: unknown key\(s\): role2",
+            r"metal\.worker\.servers\.srv01: unknown key\(s\): role2",
         ),
         (
             {
@@ -1887,18 +1887,18 @@ def test_metal_group_carries_extensions(make_config):
     for its own machine like every other plain setting."""
     cfg = make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "extensions": ["siderolabs/nvidia"],
             "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
-            "servers": {"rp001": {"extensions": ["siderolabs/ice"]}},
+            "servers": {"srv01": {"extensions": ["siderolabs/ice"]}},
         }},
     })
 
-    group = cfg.metal.groups["phoenix"]
+    group = cfg.metal.groups["rack1"]
     assert group.extensions == ("siderolabs/nvidia",)
-    assert group.servers["rp001"].extensions == ("siderolabs/ice",)
+    assert group.servers["srv01"].extensions == ("siderolabs/ice",)
 
 
 def test_metal_extensions_merge_into_the_metal_installer_set(make_config):
@@ -1908,12 +1908,12 @@ def test_metal_extensions_merge_into_the_metal_installer_set(make_config):
     cfg = make_config({
         "talos": {"extensions": ["siderolabs/i915"]},
         "network": {"cluster": {"gateway": "192.168.0.1"}},
-        "metal": {"phoenix": {
+        "metal": {"rack1": {
             "role": "worker",
             "disk": "/dev/sda",
             "extensions": ["siderolabs/nvidia"],
             "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
-            "servers": {"rp001": {"extensions": ["siderolabs/ice"]}},
+            "servers": {"srv01": {"extensions": ["siderolabs/ice"]}},
         }},
     })
 
@@ -1930,15 +1930,15 @@ def test_metal_server_name_must_be_unique_across_groups(make_config):
         "role": "worker",
         "disk": "/dev/sda",
         "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
-        "servers": {"rp001": {}},
+        "servers": {"srv01": {}},
     }
     with pytest.raises(
-        ConfigError, match=r"metal server 'rp001' is defined in more than one group"
+        ConfigError, match=r"metal server 'srv01' is defined in more than one group"
     ):
         make_config({
             "metal": {
                 "a": group,
-                "b": {**group, "servers": {"rp001": {}, "rp002": {}}},
+                "b": {**group, "servers": {"srv01": {}, "srv02": {}}},
             }
         })
 
@@ -1959,7 +1959,7 @@ def _metal_groups() -> dict:
                 "enp2s0f0": {"role": "cluster", "ip": "192.168.0.5/21"},
             },
             "bmc": {"username": "root", "password": "secret"},
-            "servers": {"rp001-cp": {"bmc": {"ip": "192.0.2.10"}}},
+            "servers": {"srv01-cp": {"bmc": {"ip": "192.0.2.10"}}},
         },
         "worker": {
             "role": "worker",
@@ -1970,7 +1970,7 @@ def _metal_groups() -> dict:
                 "enp2s0f0": {"role": "cluster", "ip": "192.168.0.6/21"},
             },
             "bmc": {"username": "root", "password": "secret"},
-            "servers": {"rp001-worker": {"bmc": {"ip": "192.0.2.11"}}},
+            "servers": {"srv01-worker": {"bmc": {"ip": "192.0.2.11"}}},
         },
     }
 
@@ -2014,11 +2014,11 @@ def _expected_metal_groups(cluster: L2Network) -> MetalConfig:
     return MetalConfig(groups={
         "cp": group(
             "cp", "controlplane", "192.168.0.5/21",
-            server("rp001-cp", "cp", "controlplane", "192.168.0.5/21", "192.0.2.10"),
+            server("srv01-cp", "cp", "controlplane", "192.168.0.5/21", "192.0.2.10"),
         ),
         "worker": group(
             "worker", "worker", "192.168.0.6/21",
-            server("rp001-worker", "worker", "worker", "192.168.0.6/21", "192.0.2.11"),
+            server("srv01-worker", "worker", "worker", "192.168.0.6/21", "192.0.2.11"),
         ),
     })
 
@@ -2878,11 +2878,11 @@ def test_proxmox_sdn_metal_address_inside_the_static_layout_is_rejected(
     overrides = _proxmox_sdn_overrides()
     overrides["workers"] = {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}}
     overrides["network"]["cluster"]["gateway"] = "192.168.0.1"
-    overrides["metal"] = {"phoenix": {
+    overrides["metal"] = {"rack1": {
         "role": "worker",
         "disk": "/dev/sda",
         "interfaces": {"enp2s0f0": {"role": "cluster"}},
-        "servers": {"rp001": {
+        "servers": {"srv01": {
             "interfaces": {"enp2s0f0": {"ip": ip}},
         }},
     }}
@@ -2897,16 +2897,16 @@ def test_proxmox_sdn_metal_address_outside_the_static_layout_loads(make_config):
     machine parked in a free slot of the same L2 still loads."""
     overrides = _proxmox_sdn_overrides()
     overrides["network"]["cluster"]["gateway"] = "192.168.0.1"
-    overrides["metal"] = {"phoenix": {
+    overrides["metal"] = {"rack1": {
         "role": "worker",
         "disk": "/dev/sda",
         "interfaces": {"enp2s0f0": {"role": "cluster"}},
-        "servers": {"rp001": {
+        "servers": {"srv01": {
             "interfaces": {"enp2s0f0": {"ip": "192.168.0.5/21"}},
         }},
     }}
     cfg = make_config(overrides, remove=("openstack",))
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     assert server.interfaces["enp2s0f0"].ip == "192.168.0.5/21"
 
 
@@ -2968,7 +2968,7 @@ def test_unknown_top_level_secrets_plugin_key_still_rejected(make_config, tmp_pa
     "overrides, field",
     [
         ({"talos": {"extensons": ["siderolabs/foo"]}}, r"talos: unknown key\(s\): extensons"),
-        ({"network": {"dnss": ["9.9.9.9"]}}, r"network: unknown key\(s\): dnss"),
+        ({"network": {"dnss": ["192.0.2.53"]}}, r"network: unknown key\(s\): dnss"),
         ({"openstack": {"regoin": "RegionTwo"}}, r"openstack: unknown key\(s\): regoin"),
         ({"kubernetes": {"verson": "v1.31.0"}}, r"kubernetes: unknown key\(s\): verson"),
         ({"tailscale": {"login_serer": "https://hs.example"}},
@@ -3106,7 +3106,7 @@ def _proxmox_new_network() -> dict:
 def test_network_blocks_are_parsed(make_config):
     cfg = make_config(_proxmox_new_network(), remove=("openstack",))
 
-    assert cfg.network.dns == ["1.1.1.1"]
+    assert cfg.network.dns == ["192.0.2.53"]
     assert cfg.network.ntp == ["ntp.example.com"]
     assert cfg.network.cluster.cidr == "192.168.0.0/21"
     assert cfg.network.cluster.gateway == "192.168.0.1"
@@ -3626,7 +3626,7 @@ def test_a_missing_include_loads_as_empty_when_allowed(tmp_path, capsys):
         },
         "network": {
             "cluster": {"cidr": "192.168.0.0/21"},
-            "dns": ["1.1.1.1"],
+            "dns": ["192.0.2.53"],
             "ntp": ["ntp.example.com"],
         },
         "include": ["secrets.yaml"],

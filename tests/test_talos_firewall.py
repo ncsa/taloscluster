@@ -103,9 +103,9 @@ METAL = {
     "rack": {
         "role": "worker",
         "disk": "/dev/sda",
-        "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
+        "network": {"cidr": "192.168.16.0/24", "gateway": "192.168.16.1"},
         "servers": {
-            "rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.22.5/24"}}},
+            "srv01": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.16.5/24"}}},
         },
     },
 }
@@ -118,20 +118,20 @@ def test_firewall_documents_admit_a_metal_group_on_another_l2(make_config):
     rules = _rules(machineconfig._firewall_docs(cfg))
 
     for name in ("cluster-tcp", "cluster-udp"):
-        assert {"subnet": "172.29.22.0/24"} in rules[name]["ingress"]
+        assert {"subnet": "192.168.16.0/24"} in rules[name]["ingress"]
     assert rules["kubespan"]["portSelector"] == {"ports": [51820], "protocol": "udp"}
-    assert rules["kubespan"]["ingress"] == [{"subnet": "172.29.22.0/24"}]
+    assert rules["kubespan"]["ingress"] == [{"subnet": "192.168.16.0/24"}]
 
 
 def test_metal_node_firewall_is_keyed_on_its_own_l2(make_config):
     """A metal node's own stack, keyed on its group L2, still admits the
     cluster L2: apid, kubelet and etcd arrive from the VM nodes' addresses."""
     cfg = make_config({"talos": {"kubespan": True}, "metal": METAL})
-    rules = _rules(machineconfig._firewall_docs(cfg, node_cidr="172.29.22.0/24"))
+    rules = _rules(machineconfig._firewall_docs(cfg, node_cidr="192.168.16.0/24"))
 
     for name in ("cluster-tcp", "cluster-udp"):
         assert {"subnet": cfg.network.cluster.cidr} in rules[name]["ingress"]
-        assert {"subnet": "172.29.22.0/24"} in rules[name]["ingress"]
+        assert {"subnet": "192.168.16.0/24"} in rules[name]["ingress"]
     # the group L2's own UDP already rides the allow-all rule; the KubeSpan
     # port is opened for the peers off it
     assert rules["kubespan"]["ingress"] == [{"subnet": cfg.network.cluster.cidr}]
@@ -144,15 +144,15 @@ def test_firewall_documents_admit_a_server_that_replaces_its_groups_l2(make_conf
         "rack": {
             "role": "worker",
             "disk": "/dev/sda",
-            "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
+            "network": {"cidr": "192.168.16.0/24", "gateway": "192.168.16.1"},
             "servers": {
-                "rp001": {
-                    "network": {"cidr": "172.29.23.0/24", "gateway": "172.29.23.1"},
-                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.23.5/24"}},
+                "srv01": {
+                    "network": {"cidr": "192.168.17.0/24", "gateway": "192.168.17.1"},
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.17.5/24"}},
                 },
-                "rp002": {
-                    "network": {"cidr": "172.29.24.0/24", "gateway": "172.29.24.1"},
-                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.24.5/24"}},
+                "srv02": {
+                    "network": {"cidr": "192.168.18.0/24", "gateway": "192.168.18.1"},
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.18.5/24"}},
                 },
             },
         },
@@ -161,23 +161,23 @@ def test_firewall_documents_admit_a_server_that_replaces_its_groups_l2(make_conf
     rules = _rules(machineconfig._firewall_docs(cfg))
 
     for name in ("cluster-tcp", "cluster-udp"):
-        assert {"subnet": "172.29.23.0/24"} in rules[name]["ingress"]
-        assert {"subnet": "172.29.24.0/24"} in rules[name]["ingress"]
+        assert {"subnet": "192.168.17.0/24"} in rules[name]["ingress"]
+        assert {"subnet": "192.168.18.0/24"} in rules[name]["ingress"]
     assert rules["kubespan"]["ingress"] == [
-        {"subnet": "172.29.22.0/24"},
-        {"subnet": "172.29.23.0/24"},
-        {"subnet": "172.29.24.0/24"},
+        {"subnet": "192.168.16.0/24"},
+        {"subnet": "192.168.17.0/24"},
+        {"subnet": "192.168.18.0/24"},
     ]
 
     # a server's own stack, keyed on its L2, still admits the other L2s
-    own = _rules(machineconfig._firewall_docs(cfg, node_cidr="172.29.23.0/24"))
+    own = _rules(machineconfig._firewall_docs(cfg, node_cidr="192.168.17.0/24"))
     for name in ("cluster-tcp", "cluster-udp"):
         assert {"subnet": cfg.network.cluster.cidr} in own[name]["ingress"]
-        assert {"subnet": "172.29.24.0/24"} in own[name]["ingress"]
+        assert {"subnet": "192.168.18.0/24"} in own[name]["ingress"]
     assert own["kubespan"]["ingress"] == [
         {"subnet": cfg.network.cluster.cidr},
-        {"subnet": "172.29.22.0/24"},
-        {"subnet": "172.29.24.0/24"},
+        {"subnet": "192.168.16.0/24"},
+        {"subnet": "192.168.18.0/24"},
     ]
 
 
@@ -194,7 +194,7 @@ def test_no_kubespan_rule_without_another_l2(make_config):
                 "role": "worker",
                 "disk": "/dev/sda",
                 "servers": {
-                    "rp001": {
+                    "srv01": {
                         "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
                     },
                 },

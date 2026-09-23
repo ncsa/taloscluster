@@ -77,14 +77,14 @@ def test_report_lists_the_metal_servers(report):
     from cluster.yaml -- the machines check verifies the cluster against."""
     metal = report({
         "metal": _metal({
-            "rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}},
-            "rp002": {
+            "srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}},
+            "srv02": {
                 "role": "controlplane",
                 "interfaces": {"enp1s0f0": {"ip": "192.168.0.6/21"}},
             },
         }),
     })
-    assert metal["metal"] == {"rp001": "worker", "rp002": "controlplane"}
+    assert metal["metal"] == {"srv01": "worker", "srv02": "controlplane"}
     # the provider-managed half is unchanged
     assert metal["resources"] == {"vms": ["testcluster-controlplane-01"]}
     assert metal["nodes"] == []
@@ -99,7 +99,7 @@ def test_text_output_names_the_metal_servers(
 ):
     make_config(
         {**PROXMOX, "metal": _metal(
-            {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
+            {"srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
         )},
         remove=("openstack",),
     )
@@ -109,4 +109,4 @@ def test_text_output_names_the_metal_servers(
     converge.status(tmp_path)
     out = capsys.readouterr().out
     assert "==> metal" in out
-    assert "    rp001: worker" in out
+    assert "    srv01: worker" in out

@@ -4,7 +4,7 @@ A mix of prose, docstrings and CLI messages drifted from the code over time.
 These tests keep the surviving wording honest so the drift does not resurface:
 
 - `sdn.exit_nodes` defaults to every cluster node, offline included.
-- The managed-SDN docs example uses a placeholder, not the real host `phoenix`.
+- The managed-SDN docs example names the cluster with a placeholder.
 - The VIP move is not claimed to happen "without a reboot".
 - The scaffold comment no longer says every node gets `ncsa/project`.
 - The reachability-timeout message points at the troubleshooting guide, not the
@@ -48,10 +48,9 @@ def test_exit_nodes_docs_default_includes_offline_nodes():
     assert "every online node" not in text
 
 
-def test_managed_sdn_example_uses_a_placeholder_not_phoenix():
+def test_managed_sdn_example_uses_a_placeholder_name():
     text = (DOCS / "providers" / "proxmox.md").read_text()
     assert "name: mycl" in text
-    assert "name: phoenix" not in text
 
 
 def test_vip_move_is_not_claimed_to_avoid_a_reboot():

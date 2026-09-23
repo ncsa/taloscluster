@@ -24,7 +24,7 @@ CLUSTER = {
         "availability_zone": "nova",
         "external_net": "ext-net",
     },
-    "network": {"cluster": {"cidr": "192.168.0.0/21"}, "dns": ["1.1.1.1"],
+    "network": {"cluster": {"cidr": "192.168.0.0/21"}, "dns": ["192.0.2.53"],
                 "ntp": ["ntp.example.com"]},
 }
 
@@ -144,7 +144,7 @@ def test_host_network_overlap_is_warned(cluster_dir, upstream, nodes, capsys):
                 **CLUSTER,
                 "network": {
                     "cluster": {"cidr": "10.244.7.0/24"},
-                    "dns": ["1.1.1.1"],
+                    "dns": ["192.0.2.53"],
                     "ntp": ["ntp.example.com"],
                 },
             }
@@ -329,7 +329,7 @@ def test_missing_metal_node_is_incomplete(cluster_dir, upstream, nodes, capsys):
                         "role": "worker",
                         "disk": "/dev/sda",
                         "servers": {
-                            "rp001-worker": {
+                            "srv01-worker": {
                                 "interfaces": {
                                     "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
                                 }
@@ -352,7 +352,7 @@ def test_missing_metal_node_is_incomplete(cluster_dir, upstream, nodes, capsys):
     report = _report(capsys)
     assert report["incomplete"] is True
     assert report["incomplete_reasons"] == [
-        "node rp001-worker is missing from both Talos discovery and Kubernetes"
+        "node srv01-worker is missing from both Talos discovery and Kubernetes"
     ]
     assert report["up_to_date"] is False
     assert rc == 1

@@ -370,8 +370,8 @@ def test_metal_dispatches(monkeypatch, tmp_path, action, expected_kwargs):
         cli._metal, action,
         lambda root, name, **kw: seen.update(root=root, name=name, **kw),
     )
-    assert cli.main(["metal", action, "rp001", "-C", str(tmp_path)]) == 0
-    assert seen == {"root": tmp_path, "name": "rp001", **expected_kwargs}
+    assert cli.main(["metal", action, "srv01", "-C", str(tmp_path)]) == 0
+    assert seen == {"root": tmp_path, "name": "srv01", **expected_kwargs}
 
 
 def test_metal_boot_forwards_serve(monkeypatch, tmp_path):
@@ -380,8 +380,8 @@ def test_metal_boot_forwards_serve(monkeypatch, tmp_path):
         cli._metal, "boot",
         lambda root, name, **kw: seen.update(root=root, name=name, **kw),
     )
-    assert cli.main(["metal", "boot", "rp001", "--serve", "-C", str(tmp_path)]) == 0
-    assert seen == {"root": tmp_path, "name": "rp001", "serve": True, "force": False}
+    assert cli.main(["metal", "boot", "srv01", "--serve", "-C", str(tmp_path)]) == 0
+    assert seen == {"root": tmp_path, "name": "srv01", "serve": True, "force": False}
 
 
 def test_metal_join_forwards_force(monkeypatch, tmp_path):
@@ -392,12 +392,12 @@ def test_metal_join_forwards_force(monkeypatch, tmp_path):
         cli._metal, "join",
         lambda root, name, **kw: seen.update(root=root, name=name, **kw),
     )
-    assert cli.main(["metal", "join", "rp001", "--force", "-C", str(tmp_path)]) == 0
-    assert seen == {"root": tmp_path, "name": "rp001", "serve": False, "force": True}
+    assert cli.main(["metal", "join", "srv01", "--force", "-C", str(tmp_path)]) == 0
+    assert seen == {"root": tmp_path, "name": "srv01", "serve": False, "force": True}
 
 
 def test_metal_serve_is_rejected_for_the_bmc_free_actions(tmp_path, capsys):
-    assert cli.main(["metal", "wait", "rp001", "--serve", "-C", str(tmp_path)]) == 1
+    assert cli.main(["metal", "wait", "srv01", "--serve", "-C", str(tmp_path)]) == 1
     assert "--serve" in capsys.readouterr().err
 
 
@@ -405,7 +405,7 @@ def test_metal_dry_run_sets_the_global_flag(monkeypatch, tmp_path):
     seen = {}
     monkeypatch.setattr(cli, "set_dry_run", lambda enabled: seen.update(dry_run=enabled))
     monkeypatch.setattr(cli._metal, "inspect", lambda root, name: None)
-    assert cli.main(["metal", "inspect", "rp001", "-C", str(tmp_path), "--dry-run"]) == 0
+    assert cli.main(["metal", "inspect", "srv01", "-C", str(tmp_path), "--dry-run"]) == 0
     assert seen == {"dry_run": True}
 
 

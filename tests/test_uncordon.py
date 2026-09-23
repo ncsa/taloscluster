@@ -477,12 +477,12 @@ def test_reconcile_talos_upgrades_a_joined_metal_node(monkeypatch, make_config):
                     "redfish": False,
                     "disk": "/dev/sda",
                     "servers": {
-                        "rp001": {
+                        "srv01": {
                             "interfaces": {
                                 "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
                             }
                         },
-                        "rp002": {
+                        "srv02": {
                             "interfaces": {
                                 "enp1s0f0": {"role": "cluster", "ip": "192.168.0.6/21"}
                             }
@@ -505,8 +505,8 @@ def test_reconcile_talos_upgrades_a_joined_metal_node(monkeypatch, make_config):
     monkeypatch.setattr(converge, "_wait_version", lambda *_a, **_kw: None)
     monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
     monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_kw: True)
-    # rp001 has joined (a kube Node exists); rp002 never did
-    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, n: n == "rp001")
+    # srv01 has joined (a kube Node exists); srv02 never did
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, n: n == "srv01")
 
     converge._reconcile_talos(
         cfg, {}, InfrastructureInventory(), NetworkResult(), {}, {},
@@ -538,7 +538,7 @@ def test_reconcile_talos_reinstalls_a_metal_node_joined_by_an_early_dev_build(
                     "redfish": False,
                     "disk": "/dev/sda",
                     "servers": {
-                        "rp001": {
+                        "srv01": {
                             "interfaces": {
                                 "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
                             }
@@ -567,7 +567,7 @@ def test_reconcile_talos_reinstalls_a_metal_node_joined_by_an_early_dev_build(
     monkeypatch.setattr(converge, "_wait_version", lambda *_a, **_kw: None)
     monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
     monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_kw: True)
-    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, n: n == "rp001")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, n: n == "srv01")
 
     converge._reconcile_talos(
         cfg, {}, InfrastructureInventory(), NetworkResult(), {}, {},
@@ -579,7 +579,7 @@ def test_reconcile_talos_reinstalls_a_metal_node_joined_by_an_early_dev_build(
     assert upgrades == [
         ("192.168.0.5", "factory.talos.dev/metal-installer/m-sch:v1.13.9")
     ]
-    assert "rp001: extensions changed" in capsys.readouterr().out
+    assert "srv01: extensions changed" in capsys.readouterr().out
 
 
 def test_reconcile_talos_health_checks_a_metal_control_plane_at_target(
@@ -597,7 +597,7 @@ def test_reconcile_talos_health_checks_a_metal_control_plane_at_target(
                     "redfish": False,
                     "disk": "/dev/sda",
                     "servers": {
-                        "rp001": {
+                        "srv01": {
                             "interfaces": {
                                 "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
                             }
@@ -884,7 +884,7 @@ def test_upgrade_k8s_sweep_uncordons_metal_nodes_too(monkeypatch, make_config):
                     "redfish": False,
                     "disk": "/dev/sda",
                     "servers": {
-                        "rp001": {
+                        "srv01": {
                             "interfaces": {
                                 "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
                             }
@@ -905,7 +905,7 @@ def test_upgrade_k8s_sweep_uncordons_metal_nodes_too(monkeypatch, make_config):
     # a running version older than the pin sends _upgrade through upgrade-k8s
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.30.2")
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda *_a: True)
-    monkeypatch.setattr(converge.kubectl, "unschedulable", lambda _kc: ["cp-01", "rp001"])
+    monkeypatch.setattr(converge.kubectl, "unschedulable", lambda _kc: ["cp-01", "srv01"])
     monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
     monkeypatch.setattr(converge, "_k8s_upgrade_path", lambda *_a, **_kw: ["v1.31.0"])
     monkeypatch.setattr(converge.talosctl, "upgrade_k8s", lambda *_a, **_kw: None)
@@ -919,7 +919,7 @@ def test_upgrade_k8s_sweep_uncordons_metal_nodes_too(monkeypatch, make_config):
         {("base",): "sch-123"}, Path("talosconfig"), Path("kubeconfig"),
     )
 
-    assert sorted(uncordoned) == ["cp-01", "rp001"]
+    assert sorted(uncordoned) == ["cp-01", "srv01"]
 
 
 def test_upgrade_aborts_when_version_unresolved_and_no_control_plane_resolves(monkeypatch):
@@ -968,7 +968,7 @@ def test_upgrade_drives_through_a_joined_metal_control_plane(monkeypatch):
     """With no VM control plane address resolving, a joined metal control plane
     is a valid upgrade-k8s target at its static cluster address."""
     metal = SimpleNamespace(groups={"site": SimpleNamespace(servers={
-        "rp001": SimpleNamespace(name="rp001", role="controlplane"),
+        "srv01": SimpleNamespace(name="srv01", role="controlplane"),
     })})
     cfg = SimpleNamespace(
         name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8",
@@ -1003,7 +1003,7 @@ def test_upgrade_ignores_a_metal_control_plane_that_has_not_joined(monkeypatch):
     nothing on it to upgrade: it is not an upgrade-k8s target and the run
     fails rather than skipping."""
     metal = SimpleNamespace(groups={"site": SimpleNamespace(servers={
-        "rp001": SimpleNamespace(name="rp001", role="controlplane"),
+        "srv01": SimpleNamespace(name="srv01", role="controlplane"),
     })})
     cfg = SimpleNamespace(
         name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8",

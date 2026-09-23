@@ -357,7 +357,7 @@ def test_real_rancher_and_argocd_check_hand_off_the_downstream_id_on_a_mismatch(
         "argocd:\n  admins: []\n  users: []\n"
     )
     (tmp_path / "secrets.yaml").write_text(
-        "rancher:\n  url: https://200.1.2.3/\n  token: token-x:y\n"
+        "rancher:\n  url: https://198.51.100.10/\n  token: token-x:y\n"
         "argocd:\n  kubeconfig: ./kubeconfig\n"
     )
     (tmp_path / "kubeconfig").write_text(

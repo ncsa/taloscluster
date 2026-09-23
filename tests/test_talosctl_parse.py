@@ -7,6 +7,7 @@ logic.
 
 from __future__ import annotations
 
+import ipaddress
 import shutil
 import subprocess
 from pathlib import Path
@@ -34,27 +35,27 @@ Server:
 
 def test_server_version_returns_server_tag(monkeypatch):
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: VERSION_OUTPUT)
-    tag = talosctl.server_version(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    tag = talosctl.server_version(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert tag == "v1.8.3"
 
 
 def test_server_version_empty_output_returns_empty(monkeypatch):
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: "")
-    assert talosctl.server_version(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
+    assert talosctl.server_version(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
 
 
 def test_server_version_garbage_output_returns_empty(monkeypatch):
     monkeypatch.setattr(
         talosctl, "_run", lambda args, capture=False, timeout=None: "nonsense\nno tags here"
     )
-    assert talosctl.server_version(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
+    assert talosctl.server_version(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
 
 
 def test_server_version_client_only_no_server_returns_empty(monkeypatch):
     """If no Server: block is present, there is no server tag."""
     out = "Client:\n    Tag: v1.8.0\n"
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: out)
-    assert talosctl.server_version(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
+    assert talosctl.server_version(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
 
 
 def test_server_version_passes_a_subprocess_timeout(monkeypatch):
@@ -128,7 +129,7 @@ def test_running_schematic_reads_the_factory_schematic_extension(monkeypatch):
     monkeypatch.setattr(
         talosctl, "_run", lambda args, capture=False, timeout=None: EXTENSIONS_OUTPUT
     )
-    got = talosctl.running_schematic(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    got = talosctl.running_schematic(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert got == SCHEMATIC
 
 
@@ -145,12 +146,12 @@ def test_running_schematic_empty_when_no_factory_schematic(monkeypatch):
         "        version: 1.2"
     )
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: out)
-    assert talosctl.running_schematic(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
+    assert talosctl.running_schematic(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
 
 
 def test_running_schematic_empty_on_empty_output(monkeypatch):
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: "")
-    assert talosctl.running_schematic(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
+    assert talosctl.running_schematic(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
 
 
 def test_running_schematic_passes_a_subprocess_timeout(monkeypatch):
@@ -174,7 +175,7 @@ def test_running_schematic_passes_a_subprocess_timeout(monkeypatch):
 
 def test_running_extensions_lists_every_extension_name(monkeypatch):
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: EXTENSIONS_OUTPUT)
-    got = talosctl.running_extensions(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    got = talosctl.running_extensions(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert got == ["schematic", "qemu-guest-agent", "siderolabs/tailscale"]
 
 
@@ -190,13 +191,13 @@ def test_running_extensions_falls_back_to_the_resource_id(monkeypatch):
         "    image: ghcr.io/siderolabs/tailscale:1.0.0\n"
     )
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: out)
-    got = talosctl.running_extensions(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    got = talosctl.running_extensions(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert got == ["siderolabs-tailscale-v1.86.0"]
 
 
 def test_running_extensions_empty_on_empty_output(monkeypatch):
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False: "")
-    assert talosctl.running_extensions(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == []
+    assert talosctl.running_extensions(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == []
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +236,7 @@ def test_running_install_disk_reads_the_running_configurations_disk(monkeypatch)
     monkeypatch.setattr(
         talosctl, "_run", lambda args, capture=False, timeout=None: MACHINECONFIG_OUTPUT
     )
-    got = talosctl.running_install_disk(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    got = talosctl.running_install_disk(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert got == "/dev/sda"
 
 
@@ -253,7 +254,7 @@ def test_running_install_disk_also_reads_an_inline_spec(monkeypatch):
         "            disk: /dev/nvme0n1\n"
     )
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: out)
-    got = talosctl.running_install_disk(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    got = talosctl.running_install_disk(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert got == "/dev/nvme0n1"
 
 
@@ -268,7 +269,9 @@ def test_running_install_disk_empty_without_a_disk(monkeypatch):
         "        type: worker\n"
     )
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: out)
-    assert talosctl.running_install_disk(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01") == ""
+    assert (
+        talosctl.running_install_disk(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
+    )
 
 
 def test_running_install_disk_empty_on_garbage_or_empty_output(monkeypatch):
@@ -277,7 +280,7 @@ def test_running_install_disk_empty_on_garbage_or_empty_output(monkeypatch):
             talosctl, "_run", lambda args, capture=False, timeout=None, out=out: out
         )
         assert talosctl.running_install_disk(
-            Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+            Path("/dev/null/talosconfig"), "192.0.2.1", "node-01"
         ) == ""
 
 
@@ -289,7 +292,7 @@ def test_running_install_disk_targets_the_machineconfig_resource(monkeypatch):
         return ""
 
     monkeypatch.setattr(talosctl, "_run", fake_run)
-    talosctl.running_install_disk(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    talosctl.running_install_disk(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert "get" in seen["args"] and "machineconfig" in seen["args"]
 
 
@@ -342,7 +345,7 @@ def test_running_install_disk_reads_the_unattended_install_document(monkeypatch)
     monkeypatch.setattr(
         talosctl, "_run", lambda args, capture=False, timeout=None: UNATTENDED_OUTPUT
     )
-    got = talosctl.running_install_disk(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    got = talosctl.running_install_disk(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert got == "/dev/sda"
 
 
@@ -364,7 +367,7 @@ def test_running_install_disk_empty_when_the_selector_does_not_name_a_disk(monke
     )
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: out)
     assert talosctl.running_install_disk(
-        Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+        Path("/dev/null/talosconfig"), "192.0.2.1", "node-01"
     ) == ""
 
 
@@ -394,7 +397,7 @@ def test_secureboot_enforced_reads_the_security_state_resource(monkeypatch):
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, quiet_stderr=False:
                         SECURITYSTATE_OUTPUT)
     assert talosctl.secureboot_enforced(
-        Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+        Path("/dev/null/talosconfig"), "192.0.2.1", "node-01"
     ) is True
 
 
@@ -404,7 +407,7 @@ def test_secureboot_enforced_reports_an_unenforced_node(monkeypatch):
     out = SECURITYSTATE_OUTPUT.replace("secureBoot: true", "secureBoot: false")
     monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, quiet_stderr=False: out)
     assert talosctl.secureboot_enforced(
-        Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+        Path("/dev/null/talosconfig"), "192.0.2.1", "node-01"
     ) is False
 
 
@@ -415,7 +418,7 @@ def test_secureboot_enforced_none_on_a_failed_read(monkeypatch):
 
     monkeypatch.setattr(talosctl, "_run", fail)
     assert talosctl.secureboot_enforced(
-        Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+        Path("/dev/null/talosconfig"), "192.0.2.1", "node-01"
     ) is None
 
 
@@ -424,7 +427,7 @@ def test_secureboot_enforced_none_on_garbage_output(monkeypatch):
         talosctl, "_run", lambda args, capture=False, quiet_stderr=False: "nonsense"
     )
     assert talosctl.secureboot_enforced(
-        Path("/dev/null/talosconfig"), "1.2.3.4", "node-01"
+        Path("/dev/null/talosconfig"), "192.0.2.1", "node-01"
     ) is None
 
 
@@ -433,7 +436,7 @@ def test_secureboot_enforced_targets_the_securitystate_resource(monkeypatch):
     monkeypatch.setattr(talosctl, "_run",
                         lambda args, capture=False, quiet_stderr=False:
                         args_seen.append(args) or "")
-    talosctl.secureboot_enforced(Path("/dev/null/talosconfig"), "1.2.3.4", "node-01")
+    talosctl.secureboot_enforced(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert args_seen and args_seen[0][-4:] == ["get", "securitystate", "-o", "yaml"]
 
 
@@ -594,8 +597,8 @@ def test_is_tailscale_covers_the_full_cgnat_range():
     assert talosctl._is_tailscale("100.127.255.254")
     # the boundary masked prefix is what the old `100.64.` startswith missed
     assert talosctl._is_tailscale("100.65.0.5")
-    # outside the CGNAT range -- a public or normal private address
-    assert not talosctl._is_tailscale("100.128.0.1")
+    # the first address past the CGNAT range is not tailscale either
+    assert not talosctl._is_tailscale(str(ipaddress.ip_network("100.64.0.0/10")[-1] + 1))
     assert not talosctl._is_tailscale("192.168.1.9")
     assert not talosctl._is_tailscale("203.0.113.4")
     # malformed addresses are not tailscale
@@ -812,7 +815,7 @@ def test_plan_apply_config_redacts_secret_values(tmp_path, monkeypatch, capsys):
         "+    token: ghi.jkl\n"
         "     secretboxEncryptionSecret: xyz\n"
         "         crt: LS0tLS1CRUdJTiBDRVJU\n"
-        "-        endpoint: https://1.2.3.4:6443\n"
+        "-        endpoint: https://192.0.2.1:6443\n"
         "+    - TS_AUTHKEY=hskey-auth-JwDFrXEz\n"
         "+    - TS_HOSTNAME=quad-worker-01\n"
     )
@@ -829,7 +832,7 @@ def test_plan_apply_config_redacts_secret_values(tmp_path, monkeypatch, capsys):
     assert "key: <redacted>" in out
     assert "-    token: <redacted>" in out
     assert "crt: LS0tLS1CRUdJTiBDRVJU" in out  # certificates are public
-    assert "-        endpoint: https://1.2.3.4:6443" in out
+    assert "-        endpoint: https://192.0.2.1:6443" in out
     assert "+    - TS_AUTHKEY=<redacted>" in out
     assert "+    - TS_HOSTNAME=quad-worker-01" in out
 
@@ -1400,8 +1403,8 @@ def test_maintenance_reachable_runs_insecure_behind_the_subcommand(monkeypatch):
 
     monkeypatch.setattr(talosctl, "_run_nocheck", fake_run_nocheck)
 
-    assert talosctl.maintenance_reachable("172.29.21.5") is True
-    assert seen["args"] == ["version", "--insecure", "-n", "172.29.21.5"]
+    assert talosctl.maintenance_reachable("198.51.100.5") is True
+    assert seen["args"] == ["version", "--insecure", "-n", "198.51.100.5"]
     assert seen["timeout"] == talosctl.PROBE_TIMEOUT_S
 
 
@@ -1414,7 +1417,7 @@ def test_reachable_passes_a_subprocess_timeout(monkeypatch):
 
     monkeypatch.setattr(talosctl, "_run_nocheck", fake_run_nocheck)
 
-    assert talosctl.reachable(Path("talosconfig"), "ep", "172.29.21.5") is True
+    assert talosctl.reachable(Path("talosconfig"), "ep", "198.51.100.5") is True
     assert seen["timeout"] == talosctl.PROBE_TIMEOUT_S
 
 
@@ -1427,7 +1430,7 @@ def test_reachable_treats_a_timed_out_probe_as_unreachable(monkeypatch):
         raise subprocess.TimeoutExpired(talosctl.BIN, timeout)
 
     monkeypatch.setattr(talosctl, "_run_nocheck", hangs)
-    assert talosctl.reachable(Path("talosconfig"), "ep", "172.29.21.5") is False
+    assert talosctl.reachable(Path("talosconfig"), "ep", "198.51.100.5") is False
 
 
 def test_maintenance_reachable_treats_a_timed_out_probe_as_unreachable(monkeypatch):
@@ -1435,7 +1438,7 @@ def test_maintenance_reachable_treats_a_timed_out_probe_as_unreachable(monkeypat
         raise subprocess.TimeoutExpired(talosctl.BIN, timeout)
 
     monkeypatch.setattr(talosctl, "_run_nocheck", hangs)
-    assert talosctl.maintenance_reachable("172.29.21.5") is False
+    assert talosctl.maintenance_reachable("198.51.100.5") is False
 
 
 def test_apply_config_insecure_runs_insecure_behind_the_subcommand(monkeypatch):
@@ -1451,10 +1454,10 @@ def test_apply_config_insecure_runs_insecure_behind_the_subcommand(monkeypatch):
 
     monkeypatch.setattr(talosctl, "_run", fake_run)
 
-    talosctl.apply_config_insecure("172.29.21.5", "version: v1alpha1")
+    talosctl.apply_config_insecure("198.51.100.5", "version: v1alpha1")
 
     assert seen["args"] == [
-        "apply-config", "--insecure", "-n", "172.29.21.5",
+        "apply-config", "--insecure", "-n", "198.51.100.5",
         "--file", seen["args"][5],
     ]
     assert seen["timeout"] == talosctl.PROBE_TIMEOUT_S

@@ -248,9 +248,9 @@ METAL = {"metal": {
     "rack": {
         "role": "worker",
         "disk": "/dev/sda",
-        "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
+        "network": {"cidr": "192.168.16.0/24", "gateway": "192.168.16.1"},
         "servers": {
-            "rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.22.5/24"}}},
+            "srv01": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.16.5/24"}}},
         },
     },
 }}
@@ -262,9 +262,9 @@ def test_desired_rules_admit_a_metal_group_on_another_l2(make_config):
     cfg = make_config({"talos": {"kubespan": True}, **METAL})
     rules = _desired_rules(cfg)
 
-    assert ("tcp", None, None, "172.29.22.0/24", None) in rules
-    assert ("udp", None, None, "172.29.22.0/24", None) in rules
-    assert ("udp", 51820, 51820, "172.29.22.0/24", None) in rules
+    assert ("tcp", None, None, "192.168.16.0/24", None) in rules
+    assert ("udp", None, None, "192.168.16.0/24", None) in rules
+    assert ("udp", 51820, 51820, "192.168.16.0/24", None) in rules
     # the intra-SG rules stay as they are
     assert ("tcp", None, None, None, SELF) in rules
     assert ("udp", None, None, None, SELF) in rules
@@ -278,17 +278,17 @@ def test_desired_rules_admit_a_server_that_replaces_its_groups_l2(make_config):
         **rack,
         "servers": {
             **rack["servers"],
-            "rp002": {
-                "network": {"cidr": "172.29.23.0/24", "gateway": "172.29.23.1"},
-                "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.23.5/24"}},
+            "srv02": {
+                "network": {"cidr": "192.168.17.0/24", "gateway": "192.168.17.1"},
+                "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.17.5/24"}},
             },
         },
     }}})
     rules = _desired_rules(cfg)
 
-    assert ("tcp", None, None, "172.29.23.0/24", None) in rules
-    assert ("udp", None, None, "172.29.23.0/24", None) in rules
-    assert ("udp", 51820, 51820, "172.29.23.0/24", None) in rules
+    assert ("tcp", None, None, "192.168.17.0/24", None) in rules
+    assert ("udp", None, None, "192.168.17.0/24", None) in rules
+    assert ("udp", 51820, 51820, "192.168.17.0/24", None) in rules
 
 
 def test_desired_rules_no_metal_cidr_rules_without_another_l2(make_config):

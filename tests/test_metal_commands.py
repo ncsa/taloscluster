@@ -24,23 +24,23 @@ from taloscluster.k8s import kubectl
 from taloscluster.metal import commands, redfish
 from taloscluster.output import set_dry_run
 
-VIP = "172.29.21.200"
+VIP = "198.51.100.200"
 ISO_URL = "https://factory.talos.dev/image/abc123/v1.13.9/nocloud-amd64.iso"
 
 GROUP = {
     "role": "worker",
     "redfish": True,
     "disk": "/dev/sda",
-    "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1"},
+    "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1"},
     "interfaces": {
         "enp1s0f0": {"role": "pxe"},
         "enp2s0f0": {"role": "cluster"},
     },
     "bmc": {"username": "root", "password": "hunter2"},
     "servers": {
-        "rp001": {
+        "srv01": {
             "bmc": {"ip": "198.51.100.10"},
-            "interfaces": {"enp2s0f0": {"ip": "172.29.21.5/24"}},
+            "interfaces": {"enp2s0f0": {"ip": "198.51.100.5/24"}},
         },
     },
 }
@@ -52,7 +52,7 @@ def _cfg(make_config, metal=None):
             "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
             "network": {
                 "cluster": {
-                    "cidr": "172.29.21.0/24", "gateway": "172.29.21.1",
+                    "cidr": "198.51.100.0/24", "gateway": "198.51.100.1",
                     "kubeapi_vip": VIP,
                 },
                 "dns": ["192.0.2.53"],
@@ -63,7 +63,7 @@ def _cfg(make_config, metal=None):
                 "iso_storage": "isos",
                 "network": {"cluster": {"bridge": "vmbr0"}},
             },
-            "metal": {"phoenix": GROUP if metal is None else metal},
+            "metal": {"rack1": GROUP if metal is None else metal},
         },
         remove=("openstack",),
     )
@@ -148,9 +148,9 @@ def cluster_endpoint(monkeypatch):
 
 def test_find_server_and_cluster_ip(make_config):
     cfg = _cfg(make_config)
-    server = commands._find_server(cfg, "rp001")
-    assert server.group == "phoenix"
-    assert commands._cluster_ip(server) == "172.29.21.5"
+    server = commands._find_server(cfg, "srv01")
+    assert server.group == "rack1"
+    assert commands._cluster_ip(server) == "198.51.100.5"
 
 
 def test_find_server_rejects_unknown_names(make_config):
@@ -165,7 +165,7 @@ def test_cluster_ip_requires_a_static_address(make_config):
     metal = {
         **GROUP,
         "servers": {
-            "rp001": {"bmc": {"ip": "198.51.100.10"}, "interfaces": {"enp2s0f0": {}}}
+            "srv01": {"bmc": {"ip": "198.51.100.10"}, "interfaces": {"enp2s0f0": {}}}
         },
     }
     with pytest.raises(ConfigError, match="no static address"):
@@ -175,7 +175,7 @@ def test_cluster_ip_requires_a_static_address(make_config):
 def test_bmc_skips_a_redfish_disabled_server(make_config, capsys):
     """`redfish: false` never constructs a client: None plus the notice."""
     metal = {**GROUP, "redfish": False}
-    server = commands._find_server(_cfg(make_config, metal), "rp001")
+    server = commands._find_server(_cfg(make_config, metal), "srv01")
     assert commands._bmc(server) is None
     assert "redfish disabled" in capsys.readouterr().out
 
@@ -183,7 +183,7 @@ def test_bmc_skips_a_redfish_disabled_server(make_config, capsys):
 def test_bmc_address_is_required_at_load(make_config):
     """A `redfish: true` machine without a bmc.ip has nothing to talk to, so
     the configuration is refused at load, not at first `metal boot`."""
-    metal = {**GROUP, "servers": {"rp001": {}}}
+    metal = {**GROUP, "servers": {"srv01": {}}}
     with pytest.raises(ConfigError, match="no bmc.ip"):
         _cfg(make_config, metal)
 
@@ -205,9 +205,9 @@ def test_installer_image_is_the_metal_installer(make_config, stub_factory):
 
 def test_inspect_prints_the_redfish_summary(make_config, tmp_path, fake_redfish, capsys):
     _cfg(make_config)
-    commands.inspect(tmp_path, "rp001")
+    commands.inspect(tmp_path, "srv01")
     out = capsys.readouterr().out
-    assert "rp001" in out
+    assert "srv01" in out
     assert "power: On" in out
     assert "02:00:00:00:00:01" in out
     assert "ST600MM0009" in out
@@ -218,7 +218,7 @@ def test_inspect_skips_a_redfish_disabled_group(
 ):
     metal = {**GROUP, "redfish": False}
     _cfg(make_config, metal)
-    commands.inspect(tmp_path, "rp001")
+    commands.inspect(tmp_path, "srv01")
     assert fake_redfish == []
     assert "redfish disabled" in capsys.readouterr().out
 
@@ -228,7 +228,7 @@ def test_boot_mounts_one_time_boots_and_powers_on(
 ):
     _cfg(make_config)
     monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
-    commands.boot(tmp_path, "rp001")
+    commands.boot(tmp_path, "srv01")
     # boot always clears the tray first, so a re-run is safe
     assert fake_redfish[-1].calls == [
         "eject", ("insert", ISO_URL), "boot-once", "power-on",
@@ -241,7 +241,7 @@ def test_boot_ejects_media_already_mounted_first(
     _cfg(make_config)
     monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
     monkeypatch.setattr(FakeRedfish, "pre_mounted", True)
-    commands.boot(tmp_path, "rp001")
+    commands.boot(tmp_path, "srv01")
     assert fake_redfish[-1].calls == [
         "eject", ("insert", ISO_URL), "boot-once", "power-on",
     ]
@@ -261,7 +261,7 @@ def test_boot_serve_hands_the_iso_out_over_the_lan(
     monkeypatch.setattr(commands, "_download_iso", fake_download)
     monkeypatch.setattr(commands, "_local_address_for", lambda _target: "127.0.0.1")
 
-    commands.boot(tmp_path, "rp001", serve=True, foreground=False)
+    commands.boot(tmp_path, "srv01", serve=True, foreground=False)
 
     mounted = fake_redfish[-1].calls[1][1]
     parsed = urllib.parse.urlparse(mounted)
@@ -292,7 +292,7 @@ def test_boot_serve_keeps_serving_until_interrupted(
 
     monkeypatch.setattr(commands.time, "sleep", interrupt)
     with pytest.raises(KeyboardInterrupt):
-        commands.boot(tmp_path, "rp001", serve=True)
+        commands.boot(tmp_path, "srv01", serve=True)
 
 
 def test_boot_skips_a_server_that_turns_redfish_off(
@@ -302,15 +302,15 @@ def test_boot_skips_a_server_that_turns_redfish_off(
     metal = {
         **GROUP,
         "servers": {
-            "rp001": {
+            "srv01": {
                 "redfish": False,
                 "bmc": {"ip": "198.51.100.10"},
-                "interfaces": {"enp2s0f0": {"ip": "172.29.21.5/24"}},
+                "interfaces": {"enp2s0f0": {"ip": "198.51.100.5/24"}},
             }
         },
     }
     _cfg(make_config, metal)
-    commands.boot(tmp_path, "rp001")
+    commands.boot(tmp_path, "srv01")
     assert fake_redfish == []
     assert "redfish disabled" in capsys.readouterr().out
 
@@ -328,7 +328,7 @@ def test_boot_refuses_a_machine_that_is_already_configured(
         commands.talosctl, "reachable", lambda tc, endpoint, node: True
     )
     with pytest.raises(ReconcileError, match="already answers apid"):
-        commands.boot(tmp_path, "rp001")
+        commands.boot(tmp_path, "srv01")
     assert all(rf.calls == [] for rf in fake_redfish)
 
 
@@ -344,7 +344,7 @@ def test_boot_allows_a_machine_in_maintenance_mode(
         commands.talosctl, "reachable", lambda tc, endpoint, node: True
     )
     monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
-    commands.boot(tmp_path, "rp001")
+    commands.boot(tmp_path, "srv01")
     assert fake_redfish[-1].calls == [
         "eject", ("insert", ISO_URL), "boot-once", "power-on",
     ]
@@ -375,12 +375,12 @@ def test_boot_probes_the_cluster_apid_through_the_control_plane(
     monkeypatch.setattr(commands.talosctl, "reachable", cluster)
 
     with pytest.raises(ReconcileError, match="cannot be told from a joined"):
-        commands.boot(tmp_path, "rp001")
+        commands.boot(tmp_path, "srv01")
 
     assert seen == {
-        "maintenance_node": "172.29.21.5",
+        "maintenance_node": "198.51.100.5",
         "endpoint": "testcluster-controlplane-01",
-        "node": "172.29.21.5",
+        "node": "198.51.100.5",
     }
 
 
@@ -398,7 +398,7 @@ def test_boot_refuses_a_machine_that_answers_no_probe(
     monkeypatch.setattr(commands.talosctl, "reachable", lambda *_a, **_k: False)
 
     with pytest.raises(ReconcileError, match="cannot be told from a joined"):
-        commands.boot(tmp_path, "rp001")
+        commands.boot(tmp_path, "srv01")
     # the client is constructed for the redfish-off check, but never driven
     assert all(rf.calls == [] for rf in fake_redfish)
 
@@ -413,7 +413,7 @@ def test_boot_force_reinstalls_a_machine_no_probe_could_decide(
     monkeypatch.setattr(commands.talosctl, "maintenance_reachable", lambda ip: False)
     monkeypatch.setattr(commands.talosctl, "reachable", lambda *_a, **_k: False)
     monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
-    commands.boot(tmp_path, "rp001", force=True)
+    commands.boot(tmp_path, "srv01", force=True)
     assert fake_redfish[-1].calls == [
         "eject", ("insert", ISO_URL), "boot-once", "power-on",
     ]
@@ -437,9 +437,9 @@ def test_boot_refusal_survives_a_missing_talosconfig(
     )
 
     with pytest.raises(ReconcileError, match="cannot be told from a joined"):
-        commands.boot(tmp_path, "rp001")
+        commands.boot(tmp_path, "srv01")
 
-    assert generated == {"cluster": "testcluster", "endpoint": "172.29.21.5"}
+    assert generated == {"cluster": "testcluster", "endpoint": "198.51.100.5"}
 
 
 def test_boot_without_talosconfig_or_secrets_has_nothing_to_refuse(
@@ -454,7 +454,7 @@ def test_boot_without_talosconfig_or_secrets_has_nothing_to_refuse(
         lambda ip: pytest.fail("a machine of a cluster with no identity must not be probed"),
     )
     monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
-    commands.boot(tmp_path, "rp001")
+    commands.boot(tmp_path, "srv01")
     assert fake_redfish[-1].calls == [
         "eject", ("insert", ISO_URL), "boot-once", "power-on",
     ]
@@ -467,7 +467,7 @@ def test_wait_polls_the_maintenance_apid(make_config, tmp_path, monkeypatch):
         commands.talosctl, "maintenance_reachable", lambda ip: next(answers)
     )
     monkeypatch.setattr(commands.time, "sleep", lambda _s: None)
-    commands.wait(tmp_path, "rp001", timeout_s=60, interval_s=0)
+    commands.wait(tmp_path, "srv01", timeout_s=60, interval_s=0)
 
 
 def test_wait_times_out_when_nothing_answers(make_config, tmp_path, monkeypatch):
@@ -475,7 +475,7 @@ def test_wait_times_out_when_nothing_answers(make_config, tmp_path, monkeypatch)
     monkeypatch.setattr(commands.talosctl, "maintenance_reachable", lambda ip: False)
     monkeypatch.setattr(commands.time, "sleep", lambda _s: None)
     with pytest.raises(TimeoutError, match="maintenance apid"):
-        commands.wait(tmp_path, "rp001", timeout_s=0, interval_s=0)
+        commands.wait(tmp_path, "srv01", timeout_s=0, interval_s=0)
 
 
 def test_apply_generates_and_pushes_the_config(
@@ -499,12 +499,12 @@ def test_apply_generates_and_pushes_the_config(
         lambda node, config: seen.update(node=node, pushed=config),
     )
 
-    commands.apply(tmp_path, "rp001")
+    commands.apply(tmp_path, "srv01")
 
-    path = tmp_path / ".metal" / "rp001-worker.yaml"
-    assert path.read_text() == "# config for rp001\n"
-    assert seen["node"] == "172.29.21.5"
-    assert seen["pushed"] == "# config for rp001\n"
+    path = tmp_path / ".metal" / "srv01-worker.yaml"
+    assert path.read_text() == "# config for srv01\n"
+    assert seen["node"] == "198.51.100.5"
+    assert seen["pushed"] == "# config for srv01\n"
     assert seen["installer"] == "factory.talos.dev/metal-installer/abc123:v1.13.9"
     # the config is generated against the endpoint the provider resolved
     assert seen["endpoint"] == cluster_endpoint
@@ -527,12 +527,12 @@ def test_apply_tightens_a_pre_existing_broader_config_file(
     monkeypatch.setattr(
         commands.talosctl, "apply_config_insecure", lambda node, config: None
     )
-    path = tmp_path / ".metal" / "rp001-worker.yaml"
+    path = tmp_path / ".metal" / "srv01-worker.yaml"
     path.parent.mkdir()
     path.write_text("old")            # born 0644 under a default umask
     os.chmod(path, 0o644)
 
-    commands.apply(tmp_path, "rp001")
+    commands.apply(tmp_path, "srv01")
 
     assert path.read_text() == "# config\n"
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
@@ -553,7 +553,7 @@ def test_apply_warns_when_gitignore_does_not_cover_metal(
         commands.talosctl, "apply_config_insecure", lambda node, config: None
     )
 
-    commands.apply(tmp_path, "rp001")
+    commands.apply(tmp_path, "srv01")
 
     assert "does not ignore .metal/" in capsys.readouterr().err
 
@@ -571,7 +571,7 @@ def test_apply_is_quiet_when_gitignore_covers_metal(
         commands.talosctl, "apply_config_insecure", lambda node, config: None
     )
 
-    commands.apply(tmp_path, "rp001")
+    commands.apply(tmp_path, "srv01")
 
     assert capsys.readouterr().err == ""
 
@@ -591,14 +591,14 @@ def test_apply_bakes_the_running_version_of_a_bootstrapped_cluster(
     def fake_build(server, cfg, secrets, installer, endpoint,
                    default_tags=None, kubernetes_version=None):
         seen["kubernetes_version"] = kubernetes_version
-        return "# config for rp001\n"
+        return "# config for srv01\n"
 
     monkeypatch.setattr(commands.metal_talos, "build_config", fake_build)
     monkeypatch.setattr(
         commands.talosctl, "apply_config_insecure", lambda node, config: None
     )
 
-    commands.apply(tmp_path, "rp001")
+    commands.apply(tmp_path, "srv01")
 
     assert seen["kubernetes_version"] == "v1.30.4"
 
@@ -623,14 +623,14 @@ def test_apply_bakes_the_target_before_the_cluster_is_bootstrapped(
     def fake_build(server, cfg, secrets, installer, endpoint,
                    default_tags=None, kubernetes_version=None):
         seen["kubernetes_version"] = kubernetes_version
-        return "# config for rp001\n"
+        return "# config for srv01\n"
 
     monkeypatch.setattr(commands.metal_talos, "build_config", fake_build)
     monkeypatch.setattr(
         commands.talosctl, "apply_config_insecure", lambda node, config: None
     )
 
-    commands.apply(tmp_path, "rp001")
+    commands.apply(tmp_path, "srv01")
 
     assert seen["kubernetes_version"] == "v1.31.0"
 
@@ -651,7 +651,7 @@ def test_apply_refuses_to_guess_when_the_running_version_is_unreadable(
     )
 
     with pytest.raises(ReconcileError, match="could not determine the running"):
-        commands.apply(tmp_path, "rp001")
+        commands.apply(tmp_path, "srv01")
 
 
 def _openstack_cfg(make_config):
@@ -660,7 +660,7 @@ def _openstack_cfg(make_config):
     return make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
         "metal": {
-            "phoenix": {
+            "rack1": {
                 "role": "worker",
                 "redfish": True,
                 "disk": "/dev/sda",
@@ -670,7 +670,7 @@ def _openstack_cfg(make_config):
                 },
                 "bmc": {"username": "root", "password": "hunter2"},
                 "servers": {
-                    "rp001": {
+                    "srv01": {
                         "bmc": {"ip": "198.51.100.10"},
                         "interfaces": {"enp2s0f0": {"ip": "192.168.0.5/21"}},
                     },
@@ -700,14 +700,14 @@ def test_apply_uses_the_provider_endpoint_on_openstack(
                    default_tags=None, kubernetes_version=None):
         seen["endpoint"] = endpoint
         seen["default_tags"] = default_tags
-        return "# config for rp001\n"
+        return "# config for srv01\n"
 
     monkeypatch.setattr(commands.metal_talos, "build_config", fake_build)
     monkeypatch.setattr(
         commands.talosctl, "apply_config_insecure", lambda node, config: None
     )
 
-    commands.apply(tmp_path, "rp001")
+    commands.apply(tmp_path, "srv01")
 
     assert seen["endpoint"] == resolved
     assert seen["default_tags"] == {"ncsa/project": "bbdb"}
@@ -729,7 +729,7 @@ def test_apply_refuses_when_the_provider_resolved_no_endpoint(
     )
 
     with pytest.raises(ReconcileError, match="has not resolved the cluster's kube-api"):
-        commands.apply(tmp_path, "rp001")
+        commands.apply(tmp_path, "srv01")
 
 
 def test_apply_refuses_a_machine_that_is_already_configured(
@@ -749,14 +749,14 @@ def test_apply_refuses_a_machine_that_is_already_configured(
     )
 
     with pytest.raises(ReconcileError, match="already answers apid"):
-        commands.apply(tmp_path, "rp001")
+        commands.apply(tmp_path, "srv01")
 
 
 def test_eject_reports_when_nothing_is_mounted(
     make_config, tmp_path, fake_redfish, capsys
 ):
     _cfg(make_config)
-    commands.eject(tmp_path, "rp001")
+    commands.eject(tmp_path, "srv01")
     assert "no virtual media mounted" in capsys.readouterr().out
 
 
@@ -765,7 +765,7 @@ def test_eject_skips_a_redfish_disabled_group(
 ):
     metal = {**GROUP, "redfish": False}
     _cfg(make_config, metal)
-    commands.eject(tmp_path, "rp001")
+    commands.eject(tmp_path, "srv01")
     assert fake_redfish == []
     assert "redfish disabled" in capsys.readouterr().out
 
@@ -783,7 +783,7 @@ def test_verify_waits_for_the_configured_node(
         commands.talosctl, "server_version", lambda tc, endpoint, node: "v1.13.9"
     )
     monkeypatch.setattr(commands.time, "sleep", lambda _s: None)
-    commands.verify(tmp_path, "rp001")
+    commands.verify(tmp_path, "srv01")
     assert "running v1.13.9" in capsys.readouterr().out
 
 
@@ -800,7 +800,7 @@ def test_verify_waits_while_the_node_still_runs_maintenance_mode(
     )
     monkeypatch.setattr(commands.time, "sleep", lambda _s: None)
     with pytest.raises(TimeoutError, match="come back with its configuration"):
-        commands.verify(tmp_path, "rp001", timeout_s=0, interval_s=0)
+        commands.verify(tmp_path, "srv01", timeout_s=0, interval_s=0)
 
 
 def test_verify_derives_a_client_config_from_the_secrets(
@@ -822,8 +822,8 @@ def test_verify_derives_a_client_config_from_the_secrets(
         lambda cluster, endpoint, secrets, client_endpoint=None:
             generated.update(cluster=cluster, endpoint=endpoint) or "dummy",
     )
-    commands.verify(tmp_path, "rp001")
-    assert generated == {"cluster": "testcluster", "endpoint": "172.29.21.5"}
+    commands.verify(tmp_path, "srv01")
+    assert generated == {"cluster": "testcluster", "endpoint": "198.51.100.5"}
 
 
 def test_join_runs_the_flow_in_order(make_config, tmp_path, monkeypatch):
@@ -839,7 +839,7 @@ def test_join_runs_the_flow_in_order(make_config, tmp_path, monkeypatch):
             commands, step,
             lambda root, name, step=step, **kw: order.append((step, None)),
         )
-    commands.join(tmp_path, "rp001", serve=True)
+    commands.join(tmp_path, "srv01", serve=True)
     assert order == [("boot", True), ("wait", None), ("apply", None),
                      ("eject", None), ("verify", None)]
 
@@ -855,7 +855,7 @@ def test_join_without_redfish_is_wait_apply_verify(
         monkeypatch.setattr(
             commands, step, lambda root, name, step=step, **kw: order.append(step)
         )
-    commands.join(tmp_path, "rp001")
+    commands.join(tmp_path, "srv01")
     assert order == ["wait", "apply", "verify"]
     assert fake_redfish == []
     assert "redfish disabled" in capsys.readouterr().out
@@ -871,7 +871,7 @@ def test_join_refuses_a_machine_that_is_already_configured(
         commands.talosctl, "reachable", lambda tc, endpoint, node: True
     )
     with pytest.raises(ReconcileError, match="already answers apid"):
-        commands.join(tmp_path, "rp001")
+        commands.join(tmp_path, "srv01")
 
 
 def test_join_without_a_talosconfig_has_nothing_to_refuse(
@@ -882,8 +882,8 @@ def test_join_without_a_talosconfig_has_nothing_to_refuse(
     monkeypatch.setattr(commands, "boot", lambda root, name, **kw: joined.append(name))
     for step in ("wait", "apply", "eject", "verify"):
         monkeypatch.setattr(commands, step, lambda root, name, **kw: None)
-    commands.join(tmp_path, "rp001")
-    assert joined == ["rp001"]
+    commands.join(tmp_path, "srv01")
+    assert joined == ["srv01"]
 
 
 # -- dry-run --------------------------------------------------------------------
@@ -902,7 +902,7 @@ def test_boot_dry_run_prints_the_actions_without_touching_the_bmc(
 ):
     _cfg(make_config)
     monkeypatch.setattr(commands, "_iso_url", lambda cfg: ISO_URL)
-    commands.boot(tmp_path, "rp001")
+    commands.boot(tmp_path, "srv01")
     # the client is constructed (the redfish-off check needs it) but never used
     assert fake_redfish[-1].calls == []
     out = capsys.readouterr().out
@@ -919,7 +919,7 @@ def test_boot_dry_run_serve_never_downloads_or_serves(
     monkeypatch.setattr(
         commands, "_ServedIso", lambda url: pytest.fail("no ISO must be downloaded")
     )
-    commands.boot(tmp_path, "rp001", serve=True)
+    commands.boot(tmp_path, "srv01", serve=True)
     assert fake_redfish[-1].calls == []
     assert "served from this machine" in capsys.readouterr().out
 
@@ -931,26 +931,26 @@ def test_apply_dry_run_writes_and_pushes_nothing(
     _cfg(make_config)
     (tmp_path / "talossecrets.yaml").write_text("dummy")
     monkeypatch.setattr(
-        commands.metal_talos, "build_config", lambda *_a, **_k: "# config for rp001\n"
+        commands.metal_talos, "build_config", lambda *_a, **_k: "# config for srv01\n"
     )
     monkeypatch.setattr(
         commands.talosctl, "apply_config_insecure",
         lambda node, config: pytest.fail("no config must be pushed"),
     )
 
-    commands.apply(tmp_path, "rp001")
+    commands.apply(tmp_path, "srv01")
 
     assert not (tmp_path / ".metal").exists()
     out = capsys.readouterr().out
     assert "[dry-run] write the machine config to" in out
-    assert "[dry-run] push it to the maintenance-mode node at 172.29.21.5" in out
+    assert "[dry-run] push it to the maintenance-mode node at 198.51.100.5" in out
 
 
 def test_eject_dry_run_skips_the_bmc(
     make_config, tmp_path, fake_redfish, capsys, dry_run_mode
 ):
     _cfg(make_config)
-    commands.eject(tmp_path, "rp001")
+    commands.eject(tmp_path, "srv01")
     assert fake_redfish[-1].calls == []
     assert "[dry-run] eject the virtual media of 198.51.100.10" in capsys.readouterr().out
 
@@ -967,16 +967,16 @@ def test_join_dry_run_lists_the_flow_without_polling(
         lambda ip: polled.append(ip) or True,
     )
 
-    commands.join(tmp_path, "rp001")
+    commands.join(tmp_path, "srv01")
 
     assert polled == []
     assert fake_redfish[-1].calls == []
     out = capsys.readouterr().out
     assert "[dry-run] mount" in out
-    assert "[dry-run] wait for the maintenance apid on 172.29.21.5" in out
-    assert "[dry-run] generate the machine config for rp001 and push it to 172.29.21.5" in out
+    assert "[dry-run] wait for the maintenance apid on 198.51.100.5" in out
+    assert "[dry-run] generate the machine config for srv01 and push it to 198.51.100.5" in out
     assert "[dry-run] eject the virtual media of 198.51.100.10" in out
-    assert "[dry-run] wait for rp001 to come back with its configuration" in out
+    assert "[dry-run] wait for srv01 to come back with its configuration" in out
 
 
 # -- the Redfish client ----------------------------------------------------------

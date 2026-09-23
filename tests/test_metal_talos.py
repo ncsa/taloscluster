@@ -36,8 +36,8 @@ from taloscluster.metal import talos as metal_talos
 from taloscluster.talos import machineconfig
 
 INSTALLER = "factory.talos.dev/metal-installer/abc123:v1.13.9"
-VIP = "172.29.21.200"
-ANCHOR = "169.254.37.35/32"  # sha256(testcluster/rp001) in 169.254.32.0/20
+VIP = "198.51.100.200"
+ANCHOR = "169.254.42.214/32"  # sha256(testcluster/srv01) in 169.254.32.0/20
 
 EXTERNAL = {
     "cidr": "203.0.113.0/24",
@@ -47,15 +47,15 @@ EXTERNAL = {
 }
 
 # the csfarm shape: PXE boot link, one [cluster, external] NIC on a jumbo L2
-PHOENIX = {
+RACK1 = {
     "role": "worker",
     "disk": "/dev/sda",
-    "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000},
+    "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1", "mtu": 9000},
     "interfaces": {
         "enp1s0f0": {"role": "pxe"},
         "enp2s0f0": {"role": ["cluster", "external"], "dns": ["198.51.100.53"]},
     },
-    "servers": {"rp001": {"interfaces": {"enp2s0f0": {"ip": "172.29.21.5/24"}}}},
+    "servers": {"srv01": {"interfaces": {"enp2s0f0": {"ip": "198.51.100.5/24"}}}},
 }
 
 
@@ -63,7 +63,7 @@ def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
          kubernetes_version=None, tailscale=None, vip=VIP, tags=None,
          talos_extensions=None):
     cluster: dict = {
-        "cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000,
+        "cidr": "198.51.100.0/24", "gateway": "198.51.100.1", "mtu": 9000,
     }
     if vip is not None:
         cluster["kubeapi_vip"] = vip
@@ -85,7 +85,7 @@ def _cfg(make_config, *, metal=None, external=EXTERNAL, talos_version=None,
             "iso_storage": "isos",
             "network": proxmox_network,
         },
-        "metal": {"phoenix": PHOENIX if metal is None else metal},
+        "metal": {"rack1": RACK1 if metal is None else metal},
     }
     if tailscale is not None:
         overrides["tailscale"] = tailscale
@@ -133,37 +133,37 @@ def _build(
     rendered = _render(monkeypatch, output or _GEN_OUTPUT)
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     out = metal_talos.build_config(
         server, cfg, secrets_path, INSTALLER, endpoint or _endpoint(cfg),
         default_tags=default_tags,
     )
     assert len(rendered) == 1
-    return rendered["rp001"], out
+    return rendered["srv01"], out
 
 
 MACHINE_PATCH = {
     "machine": {
         "nodeLabels": {
-            "ncsa/role": "worker", "ncsa/pool": "phoenix",
+            "ncsa/role": "worker", "ncsa/pool": "rack1",
             "ncsa/project": "bbdb", "team": "platform",
         },
         "kubelet": {
             "extraArgs": {"rotate-server-certificates": True},
-            "nodeIP": {"validSubnets": ["172.29.21.0/24"]},
+            "nodeIP": {"validSubnets": ["198.51.100.0/24"]},
         },
         "install": {"wipe": True},
         "time": {"servers": ["ntp.example.com"]},
     }
 }
 
-HOSTNAME_FIELD_PATCH = {"machine": {"network": {"hostname": "rp001"}}}
+HOSTNAME_FIELD_PATCH = {"machine": {"network": {"hostname": "srv01"}}}
 
 HOSTNAME_DOCUMENT_PATCH = {
     "apiVersion": "v1alpha1",
     "kind": "HostnameConfig",
     "auto": {"$patch": "delete"},
-    "hostname": "rp001",
+    "hostname": "srv01",
 }
 
 KUBESPAN_PATCH = {
@@ -180,8 +180,8 @@ NETWORK_DOCS = [
     {
         "apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "enp2s0f0",
         "mtu": 9000,
-        "addresses": [{"address": "172.29.21.5/24"}],
-        "routes": [{"gateway": "172.29.21.1", "mtu": 1500}],
+        "addresses": [{"address": "198.51.100.5/24"}],
+        "routes": [{"gateway": "198.51.100.1", "mtu": 1500}],
     },
     {
         "apiVersion": "v1alpha1", "kind": "VLANConfig", "name": "enp2s0f0.1691",
@@ -217,12 +217,12 @@ FIREWALL_DOCS = [
     {
         "apiVersion": "v1alpha1", "kind": "NetworkRuleConfig", "name": "cluster-tcp",
         "portSelector": {"ports": ["1-65535"], "protocol": "tcp"},
-        "ingress": [{"subnet": "172.29.21.0/24"}],
+        "ingress": [{"subnet": "198.51.100.0/24"}],
     },
     {
         "apiVersion": "v1alpha1", "kind": "NetworkRuleConfig", "name": "cluster-udp",
         "portSelector": {"ports": ["1-65535"], "protocol": "udp"},
-        "ingress": [{"subnet": "172.29.21.0/24"}],
+        "ingress": [{"subnet": "198.51.100.0/24"}],
     },
     {
         "apiVersion": "v1alpha1", "kind": "NetworkRuleConfig", "name": "dhcp-client",
@@ -248,7 +248,7 @@ _GEN_OUTPUT = yaml.safe_dump_all(
     [
         {
             "machine": {
-                "network": {"hostname": "rp001"},
+                "network": {"hostname": "srv01"},
                 "install": {
                     "disk": "/dev/sda",
                     "image": INSTALLER,
@@ -298,7 +298,7 @@ def test_metal_jumbo_external_l2_clamps_the_table_100_default_route(make_config)
     off-subnet. The child inherits the jumbo parent's MTU, so it states none."""
     external = {**EXTERNAL, "mtu": 9000}
     cfg = _cfg(make_config, external=external)
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
 
     (child,) = [
         d for d in metal_talos._cabling(server, cfg)[0] if d["kind"] == "VLANConfig"
@@ -319,19 +319,19 @@ def test_metal_firewall_admits_the_cluster_l2_and_kubespan(
     other_l2 = {
         "role": "worker",
         "disk": "/dev/sda",
-        "network": {"cidr": "172.29.31.0/24", "gateway": "172.29.31.1"},
+        "network": {"cidr": "192.168.19.0/24", "gateway": "192.168.19.1"},
         "interfaces": {"enp1s0f0": {"role": "cluster"}},
-        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "172.29.31.5/24"}}}},
+        "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.19.5/24"}}}},
     }
     stack, _ = _build(make_config, monkeypatch, tmp_path, metal=other_l2, external=None)
 
     firewall = stack[2]
     rules = {d["name"]: d for d in firewall if d["kind"] == "NetworkRuleConfig"}
     for name in ("cluster-tcp", "cluster-udp"):
-        assert {"subnet": "172.29.21.0/24"} in rules[name]["ingress"]
-        assert {"subnet": "172.29.31.0/24"} in rules[name]["ingress"]
+        assert {"subnet": "198.51.100.0/24"} in rules[name]["ingress"]
+        assert {"subnet": "192.168.19.0/24"} in rules[name]["ingress"]
     assert rules["kubespan"]["portSelector"] == {"ports": [51820], "protocol": "udp"}
-    assert rules["kubespan"]["ingress"] == [{"subnet": "172.29.21.0/24"}]
+    assert rules["kubespan"]["ingress"] == [{"subnet": "198.51.100.0/24"}]
 
 
 def test_metal_kubespan_mtu_follows_the_routed_path_across_l2s(
@@ -343,9 +343,9 @@ def test_metal_kubespan_mtu_follows_the_routed_path_across_l2s(
     other_l2 = {
         "role": "worker",
         "disk": "/dev/sda",
-        "network": {"cidr": "172.29.31.0/24", "gateway": "172.29.31.1", "mtu": 9000},
+        "network": {"cidr": "192.168.19.0/24", "gateway": "192.168.19.1", "mtu": 9000},
         "interfaces": {"enp1s0f0": {"role": "cluster"}},
-        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "172.29.31.5/24"}}}},
+        "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.19.5/24"}}}},
     }
     stack, _ = _build(make_config, monkeypatch, tmp_path, metal=other_l2)
 
@@ -365,18 +365,18 @@ def test_metal_control_plane_on_another_l2_matches_golden(
     other_l2 = {
         "role": "controlplane",
         "disk": "/dev/sda",
-        "network": {"cidr": "172.29.31.0/24", "gateway": "172.29.31.1"},
+        "network": {"cidr": "192.168.19.0/24", "gateway": "192.168.19.1"},
         "interfaces": {"enp1s0f0": {"role": "cluster"}},
-        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "172.29.31.5/24"}}}},
+        "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.19.5/24"}}}},
     }
     stack, _ = _build(make_config, monkeypatch, tmp_path, metal=other_l2, external=None)
 
     assert stack[0][0] == {
         "machine": {
-            "nodeLabels": {"ncsa/role": "controlplane", "ncsa/pool": "phoenix"},
+            "nodeLabels": {"ncsa/role": "controlplane", "ncsa/pool": "rack1"},
             "kubelet": {
                 "extraArgs": {"rotate-server-certificates": True},
-                "nodeIP": {"validSubnets": ["172.29.31.0/24"]},
+                "nodeIP": {"validSubnets": ["192.168.19.0/24"]},
             },
             "install": {"wipe": True},
             "time": {"servers": ["ntp.example.com"]},
@@ -391,7 +391,7 @@ def test_metal_control_plane_on_another_l2_matches_golden(
                 {"name": "metrics-server",
                  "contents": machineconfig.METRICS_SERVER_MANIFEST},
             ],
-            "etcd": {"advertisedSubnets": ["172.29.31.0/24"]},
+            "etcd": {"advertisedSubnets": ["192.168.19.0/24"]},
         }
     }
 
@@ -402,7 +402,7 @@ TAILSCALE_PATCH = {
     "name": "tailscale",
     "environment": [
         "TS_AUTHKEY=tskey-secret",
-        "TS_HOSTNAME=rp001",
+        "TS_HOSTNAME=srv01",
         "TS_EXTRA_ARGS=--login-server=https://headscale.example.com",
     ],
 }
@@ -430,24 +430,24 @@ def test_metal_tailscale_cluster_tells_the_node_to_join_the_tailnet(
     monkeypatch.setattr(metal_talos.talosctl, "gen_config", fake_gen_config)
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     metal_talos.build_config(server, cfg, secrets_path, INSTALLER, _endpoint(cfg))
 
     # the tailscale document rides the shared stack between kubespan and the
     # cabling plan, exactly where build_configs puts it for the VM machines
     assert seen["names"] == [
-        "rp001-machine.yaml",
-        "rp001-hostname.yaml",
-        "rp001-firewall.yaml",
-        "rp001-kubespan.yaml",
-        "rp001-tailscale.yaml",
-        "rp001-network.yaml",
-        "rp001-interfaces.yaml",
-        "rp001-return-path.yaml",
+        "srv01-machine.yaml",
+        "srv01-hostname.yaml",
+        "srv01-firewall.yaml",
+        "srv01-kubespan.yaml",
+        "srv01-tailscale.yaml",
+        "srv01-network.yaml",
+        "srv01-interfaces.yaml",
+        "srv01-return-path.yaml",
     ]
     (tailscale,) = next(
         docs for name, docs in zip(seen["names"], seen["patches"], strict=True)
-        if name == "rp001-tailscale.yaml"
+        if name == "srv01-tailscale.yaml"
     )
     assert tailscale == TAILSCALE_PATCH
 
@@ -484,14 +484,14 @@ def test_metal_machine_encrypts_system_disks_when_secrets_carry_the_passphrase(
         f"cluster:\n  id: abc\n"
         f"{machineconfig.DISK_PASSPHRASE_KEY}: metal-passphrase-0123\n"
     )
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     metal_talos.build_config(server, cfg, secrets_path, INSTALLER, _endpoint(cfg))
 
     # the encryption patch rides the shared stack right after the hostname
-    assert seen["names"][2] == "rp001-encryption.yaml"
+    assert seen["names"][2] == "srv01-encryption.yaml"
     (encryption,) = next(
         docs for name, docs in zip(seen["names"], seen["patches"], strict=True)
-        if name == "rp001-encryption.yaml"
+        if name == "srv01-encryption.yaml"
     )
     for partition in ("state", "ephemeral"):
         (key,) = encryption["machine"]["systemDiskEncryption"][partition]["keys"]
@@ -547,11 +547,11 @@ def test_metal_explicit_extension_without_a_section_still_configures(
     rendered = _render(monkeypatch, _GEN_OUTPUT)
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     metal_talos.build_config(server, cfg, secrets_path, INSTALLER, _endpoint(cfg))
 
     (tailscale,) = [
-        doc for group in rendered["rp001"] for doc in group
+        doc for group in rendered["srv01"] for doc in group
         if doc.get("kind") == "ExtensionServiceConfig"
     ]
     assert tailscale == TAILSCALE_PATCH
@@ -583,7 +583,7 @@ def test_metal_config_on_talos_1_14_uses_the_hostname_document(
 def test_metal_return_path_pod_matches_the_vlan_child(make_config):
     """The marking rule matches the external VLAN child by its stable name."""
     cfg = _cfg(make_config)
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     child = metal_talos._external_child_link(server, cfg)
 
     pod = metal_talos.return_path_pod(server, cfg, child)
@@ -626,7 +626,7 @@ def test_metal_config_bakes_the_running_version_when_one_is_passed(
     monkeypatch.setattr(metal_talos.talosctl, "gen_config", fake_gen_config)
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
 
     metal_talos.build_config(
         server, cfg, secrets_path, INSTALLER, _endpoint(cfg),
@@ -658,7 +658,7 @@ def test_metal_interface_overrides_name_and_tag_the_vlan_child(
     metal = {
         "role": "worker",
         "disk": "/dev/sda",
-        "network": {"cidr": "172.29.21.0/24", "gateway": "172.29.21.1", "mtu": 9000},
+        "network": {"cidr": "198.51.100.0/24", "gateway": "198.51.100.1", "mtu": 9000},
         "interfaces": {
             "enp1s0f0": {"role": "pxe"},
             "enp2s0f0": {
@@ -667,7 +667,7 @@ def test_metal_interface_overrides_name_and_tag_the_vlan_child(
                 "vlan": 1600,
             },
         },
-        "servers": {"rp001": {"interfaces": {"enp2s0f0": {"ip": "172.29.21.5/24"}}}},
+        "servers": {"srv01": {"interfaces": {"enp2s0f0": {"ip": "198.51.100.5/24"}}}},
     }
     stack, _ = _build(make_config, monkeypatch, tmp_path, metal=metal)
 
@@ -701,17 +701,17 @@ def test_metal_cluster_link_only_carries_no_vlan(make_config):
         "role": "worker",
         "disk": "/dev/sda",
         "interfaces": {"enp1s0f0": {"role": "cluster"}},
-        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "172.29.21.5"}}}},
+        "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "198.51.100.5"}}}},
     }, external=None)
 
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     docs, entries = metal_talos._cabling(server, cfg)
     assert docs == [
         {
             "apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "enp1s0f0",
             "mtu": 9000,
-            "addresses": [{"address": "172.29.21.5/24"}],
-            "routes": [{"gateway": "172.29.21.1", "mtu": 1500}],
+            "addresses": [{"address": "198.51.100.5/24"}],
+            "routes": [{"gateway": "198.51.100.1", "mtu": 1500}],
         },
         {
             "apiVersion": "v1alpha1", "kind": "ResolverConfig",
@@ -729,12 +729,12 @@ def test_metal_bare_address_takes_the_l2_prefix(make_config):
         "role": "worker",
         "disk": "/dev/sda",
         "interfaces": {"enp1s0f0": {"role": "cluster"}},
-        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "172.29.21.5"}}}},
+        "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "198.51.100.5"}}}},
     }, external=None)
 
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     assert metal_talos._cabling(server, cfg)[0][0]["addresses"] == [
-        {"address": "172.29.21.5/24"}
+        {"address": "198.51.100.5/24"}
     ]
 
 
@@ -746,7 +746,7 @@ def test_metal_control_plane_states_the_vip_on_its_link(
         "role": "controlplane",
         "disk": "/dev/sda",
         "interfaces": {"enp1s0f0": {"role": "cluster"}},
-        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "172.29.21.5"}}}},
+        "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "198.51.100.5"}}}},
     }
     stack, _ = _build(make_config, monkeypatch, tmp_path, metal=metal, external=None)
 
@@ -778,8 +778,8 @@ def test_metal_control_plane_with_external_vip_needs_an_external_link(
                 "role": "controlplane",
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": "cluster"}},
-                "servers": {"rp001": {"interfaces": {
-                    "enp1s0f0": {"ip": "172.29.21.5"},
+                "servers": {"srv01": {"interfaces": {
+                    "enp1s0f0": {"ip": "198.51.100.5"},
                 }}},
             },
             external={**EXTERNAL, "kubeapi_vip": "203.0.113.79"},
@@ -800,11 +800,11 @@ def _openstack_cfg(make_config, role="worker"):
     return make_config({
         "network": {"cluster": {"gateway": "192.168.0.1"}},
         "metal": {
-            "phoenix": {
+            "rack1": {
                 "role": role,
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": "cluster"}},
-                "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5"}}}},
+                "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5"}}}},
             },
         },
     })
@@ -817,7 +817,7 @@ def test_metal_control_plane_without_a_vip_is_refused(make_config, monkeypatch, 
     rendered = _render(monkeypatch, _GEN_OUTPUT)
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     with pytest.raises(ConfigError, match="resolved no kubeapi VIP"):
         metal_talos.build_config(
             server, cfg, secrets_path, INSTALLER,
@@ -846,7 +846,7 @@ def test_metal_on_openstack_uses_the_provider_endpoint(
     monkeypatch.setattr(metal_talos.talosctl, "gen_config", fake_gen_config)
     secrets_path = tmp_path / "talossecrets.yaml"
     secrets_path.write_text("dummy")
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     metal_talos.build_config(
         server, cfg, secrets_path, INSTALLER,
         Endpoint(vip=OPENSTACK_TENANT_VIP, advertised_address=OPENSTACK_FLOATING_IP),
@@ -857,7 +857,7 @@ def test_metal_on_openstack_uses_the_provider_endpoint(
     assert seen["endpoint"] == f"https://{OPENSTACK_FLOATING_IP}:6443"
     assert seen["patches"][0] == [{
         "machine": {
-            "nodeLabels": {"ncsa/role": "controlplane", "ncsa/pool": "phoenix"},
+            "nodeLabels": {"ncsa/role": "controlplane", "ncsa/pool": "rack1"},
             "kubelet": {
                 "extraArgs": {"rotate-server-certificates": True},
                 "nodeIP": {"validSubnets": ["192.168.0.0/21"]},
@@ -918,7 +918,7 @@ def test_metal_cabling_plan_is_checked(make_config, interfaces, external, messag
             "role": "worker",
             "disk": "/dev/sda",
             "interfaces": interfaces,
-            "servers": {"rp001": {}},
+            "servers": {"srv01": {}},
         }, external=external)
 
 
@@ -928,13 +928,13 @@ def test_metal_external_interface_needs_a_vlan(make_config):
         "role": "worker",
         "disk": "/dev/sda",
         "interfaces": {"enp1s0f0": {"role": ["cluster", "external"]}},
-        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "172.29.21.5"}}}},
+        "servers": {"srv01": {"interfaces": {"enp1s0f0": {"ip": "198.51.100.5"}}}},
     }, external={
         "cidr": "203.0.113.0/24",
         "gateway": "203.0.113.1",
         "anchor_cidr": "169.254.32.0/20",
     })
-    server = cfg.metal.groups["phoenix"].servers["rp001"]
+    server = cfg.metal.groups["rack1"].servers["srv01"]
     with pytest.raises(Exception, match="needs a VLAN id"):
         metal_talos._cabling(server, cfg)
 
@@ -975,7 +975,7 @@ def test_metal_group_extensions_reach_the_metal_installer(make_config, monkeypat
             "disk": "/dev/sda",
             "extensions": ["siderolabs/nvidia"],
             "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
-            "servers": {"rp001": {}},
+            "servers": {"srv01": {}},
         }},
     })
     seen: list[tuple[str, ...]] = []

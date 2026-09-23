@@ -330,7 +330,7 @@ def test_new_metal_configs_carry_the_target_version(make_config, monkeypatch, tm
                 "role": "worker",
                 "disk": "/dev/sda",
                 "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
-                "servers": {"rp001": {}},
+                "servers": {"srv01": {}},
             },
         },
     })
@@ -354,7 +354,7 @@ def test_new_metal_configs_carry_the_target_version(make_config, monkeypatch, tm
         refs, default_tags,
     )
 
-    assert set(fresh) == {"rp001"}
+    assert set(fresh) == {"srv01"}
     assert set(seen) == {cfg.kubernetes_version}  # the target, not the running version
     assert tags_seen == [default_tags]
 
@@ -419,7 +419,7 @@ def test_converge_plan_dry_run_reaches_compute_without_secrets(monkeypatch, tmp_
     `contributions` at the scale-up rebuild call site."""
     backend = _DryRunNoFipBackend()
     cfg = SimpleNamespace(
-        name="phoenix", talos_version="v1.13.0",
+        name="rack1", talos_version="v1.13.0",
         extension_sets=lambda: [()], machines={},
         kubernetes_version="v1.31.0", tailscale_enabled=True,
         tailscale_auth_key=None,
@@ -725,7 +725,7 @@ def test_converge_joins_metal_at_the_upgraded_version(make_config, monkeypatch, 
                 "disk": "/dev/sda",
                 "auto_join": True,
                 "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
-                "servers": {"rp001": {}},
+                "servers": {"srv01": {}},
             },
         },
     })
@@ -776,7 +776,7 @@ def test_converge_joins_metal_at_the_upgraded_version(make_config, monkeypatch, 
     # no talosctl binary on CI: discovery only decides the layout, which the
     # stubbed build_configs absorb
     monkeypatch.setattr(converge.talosctl, "members", lambda *_a, **_k: {})
-    # rp001 has no kube Node, so the compute phase joins it from maintenance mode,
+    # srv01 has no kube Node, so the compute phase joins it from maintenance mode,
     # which needs no BMC and is what `redfish: false` expects
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.168.0.5")
@@ -811,14 +811,14 @@ def test_converge_joins_metal_at_the_upgraded_version(make_config, monkeypatch, 
     # the metal config was baked twice: beside the VMs' at the running version,
     # then regenerated for the unjoined machine at the target version
     assert metal_calls == [
-        ("rp001", running),
-        ("rp001", cfg.kubernetes_version),
+        ("srv01", running),
+        ("srv01", cfg.kubernetes_version),
     ]
     # the VM configs were baked once at the running version: no VM node is new
     # in this run, so the VM regeneration has nothing to rebuild
     assert vm_calls == [running]
     # and the machine joined with the regenerated target-version config
-    assert applied == [("192.168.0.5", f"metal-config/rp001@{cfg.kubernetes_version}")]
+    assert applied == [("192.168.0.5", f"metal-config/srv01@{cfg.kubernetes_version}")]
 
 
 def test_converge_aborts_when_reachable_cluster_version_cannot_be_read(

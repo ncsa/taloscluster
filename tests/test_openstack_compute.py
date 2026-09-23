@@ -342,22 +342,22 @@ def _subnet_inv(sub):
 
 
 def test_existing_subnet_dns_is_updated_in_place(make_config, capsys):
-    cfg = make_config({"network": {"dns": ["1.1.1.1", "8.8.8.8"]}})
+    cfg = make_config({"network": {"dns": ["192.0.2.53", "8.8.8.8"]}})
     conn = FakeNetConn()
-    sub = _subnet("testcluster-subnet", dns=["1.1.1.1"])
+    sub = _subnet("testcluster-subnet", dns=["192.0.2.53"])
     net = types.SimpleNamespace(id="net-1")
 
     network._ensure_subnet(conn, cfg, net, _subnet_inv(sub), ["tag"])
 
-    assert conn.updated == [("testcluster-subnet", {"dns_nameservers": ["1.1.1.1", "8.8.8.8"]})]
-    msg = "update subnet testcluster-subnet dns (1.1.1.1 -> 1.1.1.1, 8.8.8.8)"
+    assert conn.updated == [("testcluster-subnet", {"dns_nameservers": ["192.0.2.53", "8.8.8.8"]})]
+    msg = "update subnet testcluster-subnet dns (192.0.2.53 -> 192.0.2.53, 8.8.8.8)"
     assert msg in capsys.readouterr().out
 
 
 def test_existing_subnet_dns_matching_is_left_alone(make_config):
-    cfg = make_config({"network": {"dns": ["1.1.1.1"]}})
+    cfg = make_config({"network": {"dns": ["192.0.2.53"]}})
     conn = FakeNetConn()
-    sub = _subnet("testcluster-subnet", dns=["1.1.1.1"])
+    sub = _subnet("testcluster-subnet", dns=["192.0.2.53"])
 
     network._ensure_subnet(conn, cfg, types.SimpleNamespace(id="net-1"), _subnet_inv(sub), ["tag"])
 
@@ -365,9 +365,9 @@ def test_existing_subnet_dns_matching_is_left_alone(make_config):
 
 
 def test_existing_subnet_dns_update_is_reported_by_plan(make_config, capsys):
-    cfg = make_config({"network": {"dns": ["1.1.1.1", "8.8.8.8"]}})
+    cfg = make_config({"network": {"dns": ["192.0.2.53", "8.8.8.8"]}})
     conn = FakeNetConn()
-    sub = _subnet("testcluster-subnet", dns=["1.1.1.1"])
+    sub = _subnet("testcluster-subnet", dns=["192.0.2.53"])
     set_dry_run(True)
 
     network._ensure_subnet(conn, cfg, types.SimpleNamespace(id="net-1"), _subnet_inv(sub), ["tag"])

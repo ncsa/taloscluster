@@ -13,9 +13,9 @@ tests so the drift they caught cannot come back silently:
   real credential strings.
 - The ``metal:`` example on the metal configuration page must load the same
   way -- its cluster.yaml block and the matching ``secrets.yaml`` block for the
-  group's BMC credentials, dropped into a provider-managed cluster -- and the
-  metal pages plus the ``init --metal`` scaffold must name placeholder machines
-  and networks, never the real site's hostnames and addresses.
+  group's BMC credentials, dropped into a provider-managed cluster. (That the
+  docs, scaffold and tests name placeholder machines, networks and hostnames
+  only is enforced by the placeholder allow-list in ``test_repo_hygiene.py``.)
 - Every ``[text](path.md#anchor)`` / ``[text](path.md)`` / ``[text](#anchor)``
   link across ``docs/`` must point at an existing markdown file and, when an
   anchor is given, at a header whose MkDocs slug matches.
@@ -50,7 +50,6 @@ DOCS = ROOT / "docs"
 COMMANDS = DOCS / "commands.md"
 CONFIGURATION = DOCS / "configuration.md"
 METAL = DOCS / "configuration" / "metal.md"
-SCAFFOLD = ROOT / "taloscluster" / "scaffold.py"
 CLI = ROOT / "taloscluster" / "cli.py"
 README = ROOT / "README.md"
 MKDOCS = ROOT / "mkdocs.yml"
@@ -203,28 +202,6 @@ def test_metal_documented_example_loads(tmp_path):
     assert server.bmc.username == "root"
     assert server.bmc.password == "a-real-placeholder-credential"
     assert server_name and group_name
-
-
-def test_metal_examples_use_placeholder_names():
-    # `rp001` and `phoenix` are real site hostnames, 172.29.21.0/24 the real
-    # site's node network and 172.28.50.0/24 its BMC network; the metal examples
-    # across the docs and the `init --metal` scaffold must name placeholder
-    # machines and networks instead (the placeholder rule on the configuration
-    # overview page), exactly as the managed-SDN example was policed before.
-    real = ("rp001", "phoenix", "172.29.21.", "172.28.50.")
-    offenders = [
-        f"{path.relative_to(ROOT)}: {token}"
-        for path in (
-            COMMANDS,
-            DOCS / "providers" / "metal.md",
-            METAL,
-            DOCS / "troubleshooting.md",
-            SCAFFOLD,
-        )
-        for token in real
-        if token in path.read_text()
-    ]
-    assert not offenders, "real site names in the metal examples: " + "; ".join(offenders)
 
 
 # --------------------------------------------------------------------------- #

@@ -929,7 +929,7 @@ def test_scale_down_never_removes_a_joined_metal_node(monkeypatch):
     cfg = SimpleNamespace(
         name="testcluster",
         controlplane={"count": 3},
-        metal_servers={"rp001-worker": "worker", "rp001-cp": "controlplane"},
+        metal_servers={"srv01-worker": "worker", "srv01-cp": "controlplane"},
     )
     machines = {
         f"testcluster-controlplane-{i:02d}": Machine(
@@ -950,8 +950,8 @@ def test_scale_down_never_removes_a_joined_metal_node(monkeypatch):
             "testcluster-controlplane-01",
             "testcluster-controlplane-02",
             "testcluster-controlplane-03",
-            "rp001-worker",
-            "rp001-cp",
+            "srv01-worker",
+            "srv01-cp",
         ],
     )
     monkeypatch.setattr(
@@ -990,13 +990,13 @@ def test_scale_down_resets_a_dropped_metal_node_using_its_kube_node_address(
     mutations: list[str] = []
     talosconfig = tmp_path / "talosconfig"
     talosconfig.write_text("contexts: {}")
-    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["rp002"])
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["srv02"])
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
     monkeypatch.setattr(
         converge.talosctl, "etcd_members",
         lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
     )
-    monkeypatch.setattr(converge.kubectl, "node_addresses", lambda _kc: {"rp002": "172.29.21.6"})
+    monkeypatch.setattr(converge.kubectl, "node_addresses", lambda _kc: {"srv02": "198.51.100.6"})
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(
         converge.talosctl,
@@ -1017,7 +1017,7 @@ def test_scale_down_resets_a_dropped_metal_node_using_its_kube_node_address(
         talosconfig, Path("kubeconfig"), assume_yes=True,
     )
 
-    assert mutations == ["drain", "reset 172.29.21.6 maintenance=True", "delete", "compute"]
+    assert mutations == ["drain", "reset 198.51.100.6 maintenance=True", "delete", "compute"]
 
 
 def test_scale_down_does_not_claim_bare_metal_for_a_vm_absent_from_the_inventory(
@@ -1043,7 +1043,7 @@ def test_scale_down_does_not_claim_bare_metal_for_a_vm_absent_from_the_inventory
     monkeypatch.setattr(
         converge.kubectl,
         "node_addresses",
-        lambda _kc: {"testcluster-worker-01": "172.29.21.6"},
+        lambda _kc: {"testcluster-worker-01": "198.51.100.6"},
     )
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: mutations.append("drain"))
     monkeypatch.setattr(
@@ -1061,7 +1061,7 @@ def test_scale_down_does_not_claim_bare_metal_for_a_vm_absent_from_the_inventory
     )
 
     out = capsys.readouterr().out
-    assert "reset 172.29.21.6 maintenance=True" in mutations
+    assert "reset 198.51.100.6 maintenance=True" in mutations
     assert "not in the provider inventory: reset to maintenance mode, not deleted" in out
     assert "bare metal" not in out
 
@@ -1071,14 +1071,14 @@ def test_scale_down_prefers_discovery_over_the_kube_node_address(monkeypatch):
     InternalIP is the last fallback -- live Talos discovery wins."""
     cfg = SimpleNamespace(name="testcluster", controlplane={"count": 3}, metal_servers={})
     mutations: list[str] = []
-    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["rp002"])
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["srv02"])
     monkeypatch.setattr(
         converge.talosctl, "etcd_members",
         lambda *_a, **_k: {"testcluster-controlplane-01": "9eb1f01d"},
     )
-    monkeypatch.setattr(converge.kubectl, "node_addresses", lambda _kc: {"rp002": "172.29.21.99"})
+    monkeypatch.setattr(converge.kubectl, "node_addresses", lambda _kc: {"srv02": "198.51.100.99"})
     monkeypatch.setattr(
-        converge.talosctl, "member_addresses", lambda *_a, **_k: {"rp002": "172.29.21.6"}
+        converge.talosctl, "member_addresses", lambda *_a, **_k: {"srv02": "198.51.100.6"}
     )
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: None)
     monkeypatch.setattr(
@@ -1094,7 +1094,7 @@ def test_scale_down_prefers_discovery_over_the_kube_node_address(monkeypatch):
         Path(__file__), Path("kubeconfig"), assume_yes=True,
     )
 
-    assert mutations == ["reset 172.29.21.6", "compute"]
+    assert mutations == ["reset 198.51.100.6", "compute"]
 
 
 def test_scale_down_wipes_a_vm_completely_and_leaves_metal_reusable(
@@ -1119,13 +1119,13 @@ def test_scale_down_wipes_a_vm_completely_and_leaves_metal_reusable(
         machines={
             "old-worker": InfrastructureMachine(
                 "old-worker",
-                attachments=(NetworkAttachment("private", "172.29.21.50"),),
+                attachments=(NetworkAttachment("private", "198.51.100.50"),),
             )
         }
     )
     resets: list[tuple[str, bool]] = []
-    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker", "rp002"])
-    monkeypatch.setattr(converge.kubectl, "node_addresses", lambda _kc: {"rp002": "172.29.21.6"})
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["old-worker", "srv02"])
+    monkeypatch.setattr(converge.kubectl, "node_addresses", lambda _kc: {"srv02": "198.51.100.6"})
     monkeypatch.setattr(converge.kubectl, "drain", lambda *_a: None)
     monkeypatch.setattr(converge.kubectl, "delete_node", lambda *_a: None)
     monkeypatch.setattr(
@@ -1139,7 +1139,7 @@ def test_scale_down_wipes_a_vm_completely_and_leaves_metal_reusable(
         talosconfig, Path("kubeconfig"), assume_yes=True,
     )
 
-    assert resets == [("172.29.21.50", False), ("172.29.21.6", True)]
+    assert resets == [("198.51.100.50", False), ("198.51.100.6", True)]
 
 
 def test_scale_down_treats_a_removed_metal_control_plane_as_a_control_plane(
@@ -1173,7 +1173,7 @@ def test_scale_down_treats_a_removed_metal_control_plane_as_a_control_plane(
             "testcluster-controlplane-02",
             "testcluster-controlplane-03",
             "testcluster-controlplane-04",
-            "rp001-cp",
+            "srv01-cp",
         ],
     )
     monkeypatch.setattr(
@@ -1181,7 +1181,7 @@ def test_scale_down_treats_a_removed_metal_control_plane_as_a_control_plane(
         "member_addresses",
         lambda *_a, **_k: {
             "testcluster-controlplane-04": "192.0.2.40",
-            "rp001-cp": "192.0.2.50",
+            "srv01-cp": "192.0.2.50",
         },
     )
     # every removal is still a live etcd member of the surviving control planes
@@ -1193,7 +1193,7 @@ def test_scale_down_treats_a_removed_metal_control_plane_as_a_control_plane(
             "testcluster-controlplane-02": "8c2aa1e0",
             "testcluster-controlplane-03": "7d3b99c4",
             "testcluster-controlplane-04": "6c4e8d33",
-            "rp001-cp": "5af07e12",
+            "srv01-cp": "5af07e12",
         },
     )
 
@@ -1222,9 +1222,9 @@ def test_scale_down_treats_a_removed_metal_control_plane_as_a_control_plane(
         "delete:testcluster-controlplane-04",
         "compute",
         "health",
-        "drain:rp001-cp",
+        "drain:srv01-cp",
         "reset:192.0.2.50:cp=True",
-        "delete:rp001-cp",
+        "delete:srv01-cp",
         "compute",
     ]
 
@@ -1239,9 +1239,9 @@ def test_scale_down_refuses_to_remove_a_metal_control_plane_that_would_break_quo
     talosconfig = tmp_path / "talosconfig"
     talosconfig.write_text("contexts: {}")
     mutations: list[str] = []
-    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["rp001-cp"])
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["srv01-cp"])
     monkeypatch.setattr(
-        converge.talosctl, "etcd_members", lambda *_a, **_k: {"rp001-cp": "5af07e12"}
+        converge.talosctl, "etcd_members", lambda *_a, **_k: {"srv01-cp": "5af07e12"}
     )
     monkeypatch.setattr(
         converge.kubectl,
@@ -1249,7 +1249,7 @@ def test_scale_down_refuses_to_remove_a_metal_control_plane_that_would_break_quo
         lambda *_a: pytest.fail("the quorum guard must fire before any mutation"),
     )
 
-    with pytest.raises(ReconcileError, match="refusing to remove controlplane rp001-cp"):
+    with pytest.raises(ReconcileError, match="refusing to remove controlplane srv01-cp"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
             talosconfig, Path("kubeconfig"), assume_yes=True,
@@ -1270,7 +1270,7 @@ def test_scale_down_refuses_a_metal_removal_it_cannot_classify_when_etcd_is_unre
     mutations: list[str] = []
     talosconfig = tmp_path / "talosconfig"
     talosconfig.write_text("contexts: {}")
-    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["rp001-cp"])
+    monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: ["srv01-cp"])
     monkeypatch.setattr(
         converge.talosctl, "etcd_members",
         lambda *_a, **_k: (_ for _ in ()).throw(
@@ -1296,7 +1296,7 @@ def test_scale_down_refuses_a_metal_removal_it_cannot_classify_when_etcd_is_unre
         "builtins.input", lambda _prompt: pytest.fail("must refuse before prompting")
     )
 
-    with pytest.raises(ReconcileError, match="cannot tell whether rp001-cp"):
+    with pytest.raises(ReconcileError, match="cannot tell whether srv01-cp"):
         converge._scale_down(
             FakeBackend(mutations), cfg, {}, InfrastructureInventory(), NetworkResult(),
             talosconfig, Path("kubeconfig"), assume_yes=False,
@@ -1315,7 +1315,7 @@ def test_scale_down_counts_a_configured_metal_control_plane_toward_quorum(
     cfg = SimpleNamespace(
         name="testcluster",
         controlplane={"count": 2},
-        metal_servers={"rp001-cp": "controlplane"},
+        metal_servers={"srv01-cp": "controlplane"},
     )
     machines = {
         f"testcluster-controlplane-{i:02d}": Machine(
@@ -1392,16 +1392,16 @@ def test_apply_configs_reconfigures_a_joined_metal_node(monkeypatch, make_config
     cfg = _metal_cfg(
         make_config,
         {
-            "rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}},
-            "rp002": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.6/21"}}},
+            "srv01": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}},
+            "srv02": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.6/21"}}},
         },
     )
     machines = {"testcluster-controlplane-01": SimpleNamespace(role="controlplane")}
     inv = _cp_inventory("testcluster-controlplane-01")
     configs = {
         "testcluster-controlplane-01": "config:vm",
-        "rp001": "config:metal",
-        "rp002": "config:metal",
+        "srv01": "config:metal",
+        "srv02": "config:metal",
     }
     _no_op_reachable(monkeypatch)
     monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_k: "ep")
@@ -1411,8 +1411,8 @@ def test_apply_configs_reconfigures_a_joined_metal_node(monkeypatch, make_config
         "apply_config",
         lambda _tc, _e, node, _c: applied.append((node, _c)) or False,
     )
-    # rp001 has joined (a kube Node exists); rp002 never did
-    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, n: n != "rp002")
+    # srv01 has joined (a kube Node exists); srv02 never did
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, n: n != "srv02")
 
     converge._apply_configs(
         cfg, machines, inv, NetworkResult(), configs,
@@ -1420,7 +1420,7 @@ def test_apply_configs_reconfigures_a_joined_metal_node(monkeypatch, make_config
     )
 
     # the VM control plane through its discovered address, the metal worker at
-    # its static cluster address; rp002 never joined and is skipped
+    # its static cluster address; srv02 never joined and is skipped
     assert applied == [("192.0.2.1", "config:vm"), ("192.168.0.5", "config:metal")]
 
 
@@ -1431,7 +1431,7 @@ def test_apply_configs_settles_a_joined_metal_control_plane(monkeypatch, make_co
     cfg = _metal_cfg(
         make_config,
         {
-            "rp001": {
+            "srv01": {
                 "role": "controlplane",
                 "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}},
             },
@@ -1459,7 +1459,7 @@ def test_apply_configs_settles_a_joined_metal_control_plane(monkeypatch, make_co
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
 
     converge._apply_configs(
-        cfg, {}, InfrastructureInventory(), NetworkResult(), {"rp001": "config:metal"},
+        cfg, {}, InfrastructureInventory(), NetworkResult(), {"srv01": "config:metal"},
         Path("talosconfig"), Path("kubeconfig"),
     )
 
@@ -1478,7 +1478,7 @@ def test_destroy_warns_that_joined_metal_machines_keep_running(
     keeps running the destroyed cluster under the identity this removes, so the
     summary must name every metal server and the reset its hardware needs."""
     cfg = SimpleNamespace(
-        name="testcluster", metal_servers={"rp001": "worker", "rp002": "controlplane"}
+        name="testcluster", metal_servers={"srv01": "worker", "srv02": "controlplane"}
     )
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
     backend = FakeBackend()
@@ -1491,7 +1491,7 @@ def test_destroy_warns_that_joined_metal_machines_keep_running(
     assert converge.destroy(tmp_path, assume_yes=True) == 0
 
     err = capsys.readouterr().err
-    assert "rp001" in err and "rp002" in err
+    assert "srv01" in err and "srv02" in err
     assert "talosctl --talosconfig talosconfig -e <node> -n <node> reset" in err
     assert "before the next converge" in err
     assert backend.mutations == ["destroy"]
@@ -1503,7 +1503,7 @@ def test_destroy_with_metal_machines_keeps_the_talosconfig_for_their_reset(
     """`destroy --yes` wipes the state in the same run that names the metal
     reset, so the talosconfig that reset needs must survive the wipe: when
     bare-metal machines remain, only talossecrets.yaml and kubeconfig go."""
-    cfg = SimpleNamespace(name="testcluster", metal_servers={"rp001": "worker"})
+    cfg = SimpleNamespace(name="testcluster", metal_servers={"srv01": "worker"})
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
     monkeypatch.setattr(converge, "backend_for", lambda *_a: FakeBackend())
     monkeypatch.setattr(converge, "_run_plugins", lambda *_a, **_kw: 0)
@@ -1700,7 +1700,7 @@ def test_kube_up_warns_and_reports_down_when_infra_exists_but_api_never_answers(
     warns: list[str] = []
     monkeypatch.setattr(converge, "warn", warns.append)
 
-    assert converge._kube_up(kubeconfig, _cp_inventory("phoenix-controlplane-01")) is False
+    assert converge._kube_up(kubeconfig, _cp_inventory("rack1-controlplane-01")) is False
 
     joined = " ".join(warns)
     assert "machine(s) already exist" in joined
@@ -1722,7 +1722,7 @@ def test_kube_up_skips_retry_when_there_is_no_prior_kubeconfig(monkeypatch, tmp_
     warns: list[str] = []
     monkeypatch.setattr(converge, "warn", warns.append)
 
-    assert converge._kube_up(kubeconfig, _cp_inventory("phoenix-controlplane-01")) is False
+    assert converge._kube_up(kubeconfig, _cp_inventory("rack1-controlplane-01")) is False
     assert warns == []
 
 
@@ -1763,9 +1763,9 @@ def test_kube_up_recovers_a_missing_kubeconfig_from_the_restored_identity(
     monkeypatch.setattr(converge, "warn", warns.append)
 
     assert converge._kube_up(
-        kubeconfig, _cp_inventory("phoenix-controlplane-01"),
+        kubeconfig, _cp_inventory("rack1-controlplane-01"),
         recover=True, talosconfig=Path("talosconfig"),
-        endpoint="phoenix-controlplane-01", node="phoenix-controlplane-01",
+        endpoint="rack1-controlplane-01", node="rack1-controlplane-01",
     ) is True
     assert kubeconfig.is_file()
     assert warns == []
@@ -1789,9 +1789,9 @@ def test_kube_up_plan_reports_a_recovered_cluster_up_in_dry_run(monkeypatch, tmp
     monkeypatch.setattr(converge, "warn", warns.append)
 
     assert converge._kube_up(
-        kubeconfig, _cp_inventory("phoenix-controlplane-01"),
+        kubeconfig, _cp_inventory("rack1-controlplane-01"),
         recover=True, talosconfig=Path("talosconfig"),
-        endpoint="phoenix-controlplane-01", node="phoenix-controlplane-01",
+        endpoint="rack1-controlplane-01", node="rack1-controlplane-01",
     ) is True
     assert not kubeconfig.exists()
     assert warns == []
@@ -1816,9 +1816,9 @@ def test_kube_up_recovered_then_api_never_answers_is_existing_but_down(
     monkeypatch.setattr(converge, "warn", warns.append)
 
     assert converge._kube_up(
-        kubeconfig, _cp_inventory("phoenix-controlplane-01"),
+        kubeconfig, _cp_inventory("rack1-controlplane-01"),
         recover=True, talosconfig=Path("talosconfig"),
-        endpoint="phoenix-controlplane-01", node="phoenix-controlplane-01",
+        endpoint="rack1-controlplane-01", node="rack1-controlplane-01",
     ) is False
     joined = " ".join(warns)
     assert "machine(s) already exist" in joined
@@ -1842,9 +1842,9 @@ def test_kube_up_recovery_producing_no_kubeconfig_stays_fresh(monkeypatch, tmp_p
     monkeypatch.setattr(converge, "warn", warns.append)
 
     assert converge._kube_up(
-        kubeconfig, _cp_inventory("phoenix-controlplane-01"),
+        kubeconfig, _cp_inventory("rack1-controlplane-01"),
         recover=True, talosconfig=Path("talosconfig"),
-        endpoint="phoenix-controlplane-01", node="phoenix-controlplane-01",
+        endpoint="rack1-controlplane-01", node="rack1-controlplane-01",
     ) is False
     assert warns == []
 
@@ -1860,8 +1860,8 @@ def test_recover_missing_kubeconfig_fetches_from_the_control_plane(monkeypatch, 
     )
 
     assert converge._recover_missing_kubeconfig(
-        Path("talosconfig"), "phoenix-controlplane-01",
-        "phoenix-controlplane-01", kubeconfig,
+        Path("talosconfig"), "rack1-controlplane-01",
+        "rack1-controlplane-01", kubeconfig,
     ) is True
     assert kubeconfig.is_file() and kubeconfig.stat().st_size > 0
 
@@ -1884,8 +1884,8 @@ def test_recover_missing_kubeconfig_clears_a_partial_file_on_failure(
     monkeypatch.setattr(converge, "warn", warns.append)
 
     assert converge._recover_missing_kubeconfig(
-        Path("talosconfig"), "phoenix-controlplane-01",
-        "phoenix-controlplane-01", kubeconfig,
+        Path("talosconfig"), "rack1-controlplane-01",
+        "rack1-controlplane-01", kubeconfig,
     ) is False
     assert not kubeconfig.exists()
     assert "could not recover the kubeconfig" in " ".join(warns)
@@ -1911,8 +1911,8 @@ def test_recover_missing_kubeconfig_reports_but_does_not_write_in_dry_run(
     monkeypatch.setattr(converge, "action", actions.append)
 
     assert converge._recover_missing_kubeconfig(
-        Path("talosconfig"), "phoenix-controlplane-01",
-        "phoenix-controlplane-01", kubeconfig,
+        Path("talosconfig"), "rack1-controlplane-01",
+        "rack1-controlplane-01", kubeconfig,
     ) is True
     assert "recover kubeconfig" in " ".join(actions)
     assert not kubeconfig.exists()
@@ -1928,7 +1928,7 @@ def test_recover_missing_kubeconfig_timeout_is_not_read_as_fresh(monkeypatch, tm
 
     def timeout(*_a, **_k):
         raise TimeoutError(
-            "phoenix-controlplane-01 -> phoenix-controlplane-01 did not become "
+            "rack1-controlplane-01 -> rack1-controlplane-01 did not become "
             "reachable within 15m."
         )
 
@@ -1942,16 +1942,16 @@ def test_recover_missing_kubeconfig_timeout_is_not_read_as_fresh(monkeypatch, tm
 
     with pytest.raises(TimeoutError):
         converge._recover_missing_kubeconfig(
-            Path("talosconfig"), "phoenix-controlplane-01",
-            "phoenix-controlplane-01", kubeconfig,
+            Path("talosconfig"), "rack1-controlplane-01",
+            "rack1-controlplane-01", kubeconfig,
         )
     assert not kubeconfig.exists()
     assert "will not bootstrap" in " ".join(warns)
 
 
 def test_resolve_cp1_address_prefers_network_result_then_inventory():
-    cfg = SimpleNamespace(name="phoenix")
-    host = "phoenix-controlplane-01"
+    cfg = SimpleNamespace(name="rack1")
+    host = "rack1-controlplane-01"
     static = NetworkResult(
         machine_attachments={host: (NetworkAttachment(name="cluster", address="192.168.100.11"),)}
     )
@@ -1973,7 +1973,7 @@ def test_resolve_cp1_address_prefers_network_result_then_inventory():
 
 def test_resolve_cp1_address_gives_up_after_timeout(monkeypatch):
     monkeypatch.setattr(converge.time, "sleep", lambda s: None)
-    cfg = SimpleNamespace(name="phoenix")
+    cfg = SimpleNamespace(name="rack1")
     backend = SimpleNamespace(load_inventory=lambda: InfrastructureInventory())
     assert converge._resolve_cp1_address(backend, cfg, NetworkResult(), timeout_s=0) == ""
 
@@ -1983,41 +1983,41 @@ def _kubeconfig(tmp_path, server):
     path.write_text(
         "clusters:\n"
         "- name: other\n  cluster:\n    server: https://10.0.0.1:6443\n"
-        f"- name: phoenix\n  cluster:\n    server: {server}\n"
+        f"- name: rack1\n  cluster:\n    server: {server}\n"
     )
     return path
 
 
 def test_recorded_endpoint_reads_the_cluster_entry_of_the_kubeconfig(tmp_path):
     path = _kubeconfig(tmp_path, "https://203.0.113.79:6443")
-    assert converge._recorded_endpoint(path, "phoenix") == "203.0.113.79"
+    assert converge._recorded_endpoint(path, "rack1") == "203.0.113.79"
     assert converge._recorded_endpoint(path, "unknown") == ""
-    assert converge._recorded_endpoint(tmp_path / "missing", "phoenix") == ""
+    assert converge._recorded_endpoint(tmp_path / "missing", "rack1") == ""
 
 
 def test_recorded_endpoint_treats_a_non_mapping_kubeconfig_as_unknown(tmp_path):
     path = tmp_path / "kubeconfig"
     path.write_text("truncated")  # a hand-edited file that parses to a scalar
-    assert converge._recorded_endpoint(path, "phoenix") == ""
+    assert converge._recorded_endpoint(path, "rack1") == ""
     path.write_text("- just\n- a\n- list\n")
-    assert converge._recorded_endpoint(path, "phoenix") == ""
+    assert converge._recorded_endpoint(path, "rack1") == ""
 
 
 def test_kubeapi_endpoint_move_is_reported_with_the_old_address(tmp_path, capsys):
     path = _kubeconfig(tmp_path, "https://203.0.113.79:6443")
-    assert converge._endpoint_move(path, "phoenix", "203.0.113.77") == "203.0.113.79"
+    assert converge._endpoint_move(path, "rack1", "203.0.113.77") == "203.0.113.79"
     assert "move kube-api endpoint 203.0.113.79 -> 203.0.113.77" in capsys.readouterr().out
 
 
 def test_unchanged_or_unknown_kubeapi_endpoint_is_not_a_move(tmp_path):
     path = _kubeconfig(tmp_path, "https://203.0.113.79:6443")
-    assert converge._endpoint_move(path, "phoenix", "203.0.113.79") == ""
-    assert converge._endpoint_move(path, "phoenix", "") == ""  # endpoint still pending
-    assert converge._endpoint_move(tmp_path / "missing", "phoenix", "203.0.113.77") == ""
+    assert converge._endpoint_move(path, "rack1", "203.0.113.79") == ""
+    assert converge._endpoint_move(path, "rack1", "") == ""  # endpoint still pending
+    assert converge._endpoint_move(tmp_path / "missing", "rack1", "203.0.113.77") == ""
 
 
 def _endpoint_move_refs():
-    host = "phoenix-controlplane-01"
+    host = "rack1-controlplane-01"
     return host, NetworkResult(
         kubernetes=Endpoint(advertised_address="203.0.113.77"),
         machine_attachments={host: (NetworkAttachment(name="cluster", address="192.168.100.11"),)},
@@ -2091,7 +2091,7 @@ def test_apply_existing_configs_serializes_an_endpoint_move(monkeypatch):
     )
 
     converge._apply_existing_configs(
-        SimpleNamespace(name="phoenix", tailscale_enabled=True),
+        SimpleNamespace(name="rack1", tailscale_enabled=True),
         machines, inv, NetworkResult(), configs,
         Path("talosconfig"), Path("kubeconfig"), moving_from="203.0.113.5",
     )
@@ -2120,7 +2120,7 @@ def test_apply_existing_configs_without_a_move_applies_all_roles(monkeypatch):
     )
 
     converge._apply_existing_configs(
-        SimpleNamespace(name="phoenix", tailscale_enabled=True),
+        SimpleNamespace(name="rack1", tailscale_enabled=True),
         machines, inv, NetworkResult(), configs,
         Path("talosconfig"), Path("kubeconfig"), moving_from="",
     )
@@ -2131,11 +2131,11 @@ def test_apply_existing_configs_without_a_move_applies_all_roles(monkeypatch):
 # ---- talosctl endpoint: a real control plane, never the VIP -----------------
 
 def _no_tailscale_cfg():
-    return SimpleNamespace(name="phoenix", tailscale_enabled=False)
+    return SimpleNamespace(name="rack1", tailscale_enabled=False)
 
 
 def test_talos_endpoint_prefers_static_then_inventory_never_the_vip(tmp_path):
-    host = "phoenix-controlplane-01"
+    host = "rack1-controlplane-01"
     refs = NetworkResult(
         machine_attachments={host: (NetworkAttachment(name="cluster", address="192.168.100.11"),)}
     )
@@ -2153,7 +2153,7 @@ def test_talos_endpoint_prefers_static_then_inventory_never_the_vip(tmp_path):
 def test_talos_endpoint_falls_back_to_the_recorded_talosconfig(tmp_path):
     path = tmp_path / "talosconfig"
     path.write_text(
-        "context: phoenix\ncontexts:\n  phoenix:\n    endpoints:\n    - 10.0.0.248\n"
+        "context: rack1\ncontexts:\n  rack1:\n    endpoints:\n    - 10.0.0.248\n"
     )
     assert converge._talos_endpoint(_no_tailscale_cfg(), talosconfig=path) == "10.0.0.248"
 
@@ -2161,13 +2161,13 @@ def test_talos_endpoint_falls_back_to_the_recorded_talosconfig(tmp_path):
 def test_talosconfig_endpoint_treats_a_non_mapping_file_as_unknown(tmp_path):
     path = tmp_path / "talosconfig"
     path.write_text("truncated")  # a hand-edited file that parses to a scalar
-    assert converge._talosconfig_endpoint(path, "phoenix") == ""
+    assert converge._talosconfig_endpoint(path, "rack1") == ""
     path.write_text("- just\n- a\n- list\n")
-    assert converge._talosconfig_endpoint(path, "phoenix") == ""
+    assert converge._talosconfig_endpoint(path, "rack1") == ""
 
 
 def test_talos_endpoint_without_any_address_is_an_error(tmp_path):
-    with pytest.raises(ReconcileError, match="no address known for phoenix-controlplane-01"):
+    with pytest.raises(ReconcileError, match="no address known for rack1-controlplane-01"):
         converge._talos_endpoint(_no_tailscale_cfg(), NetworkResult(), InfrastructureInventory())
 
 
@@ -2182,8 +2182,8 @@ def test_talos_endpoint_optional_without_any_address_is_empty(tmp_path):
 
 
 def test_talos_endpoint_with_tailscale_is_the_magicdns_name():
-    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=True)
-    assert converge._talos_endpoint(cfg) == "phoenix-controlplane-01"
+    cfg = SimpleNamespace(name="rack1", tailscale_enabled=True)
+    assert converge._talos_endpoint(cfg) == "rack1-controlplane-01"
 
 
 def test_talos_endpoint_with_a_keyed_tailscale_section_is_the_magicdns_name(make_config):
@@ -2215,8 +2215,8 @@ def test_talos_endpoint_with_a_keyless_tailscale_section_uses_the_real_address(
 def test_talos_endpoint_duck_typed_section_without_active_attr_still_registers():
     # a duck-typed config (test fixture, older plugin) without a
     # tailscale_active attribute keeps the section-presence behaviour
-    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=True, tailscale_auth_key=None)
-    assert converge._talos_endpoint(cfg) == "phoenix-controlplane-01"
+    cfg = SimpleNamespace(name="rack1", tailscale_enabled=True, tailscale_auth_key=None)
+    assert converge._talos_endpoint(cfg) == "rack1-controlplane-01"
 
 
 # ---- validate phase: a live tailscale toggle is refused ---------------------
@@ -2509,16 +2509,16 @@ def test_the_downgrade_check_skips_without_a_recorded_endpoint(
 
 def test_reboot_nodes_is_serial_controlplanes_first_and_health_checked(monkeypatch, tmp_path):
     events = []
-    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=False)
+    cfg = SimpleNamespace(name="rack1", tailscale_enabled=False)
     machines = {
-        "phoenix-worker-01": SimpleNamespace(role="worker"),
-        "phoenix-controlplane-01": SimpleNamespace(role="controlplane"),
-        "phoenix-worker-02": SimpleNamespace(role="worker"),
+        "rack1-worker-01": SimpleNamespace(role="worker"),
+        "rack1-controlplane-01": SimpleNamespace(role="controlplane"),
+        "rack1-worker-02": SimpleNamespace(role="worker"),
     }
     addresses = {
-        "phoenix-controlplane-01": "10.0.0.1",
-        "phoenix-worker-01": "10.0.0.11",
-        "phoenix-worker-02": "10.0.0.12",
+        "rack1-controlplane-01": "10.0.0.1",
+        "rack1-worker-01": "10.0.0.11",
+        "rack1-worker-02": "10.0.0.12",
     }
     inv = InfrastructureInventory(
         machines={
@@ -2538,13 +2538,13 @@ def test_reboot_nodes_is_serial_controlplanes_first_and_health_checked(monkeypat
 
     converge._reboot_nodes(
         backend, cfg, machines, inv, NetworkResult(),
-        {"phoenix-worker-02", "phoenix-controlplane-01"},  # worker-01 unchanged
+        {"rack1-worker-02", "rack1-controlplane-01"},  # worker-01 unchanged
         tmp_path / "talosconfig", tmp_path / "kubeconfig",
     )
 
     assert events == [
-        ("restart", "phoenix-controlplane-01"), ("up", "10.0.0.1"), ("health",),
-        ("restart", "phoenix-worker-02"), ("up", "10.0.0.12"), ("health",),
+        ("restart", "rack1-controlplane-01"), ("up", "10.0.0.1"), ("health",),
+        ("restart", "rack1-worker-02"), ("up", "10.0.0.12"), ("health",),
     ]
 
 
@@ -2553,17 +2553,17 @@ def test_reboot_wait_dials_through_the_endpoint(monkeypatch, tmp_path):
     restarted node's address with -n, like every other talosctl call: the node
     address may be a private address this host cannot route, and dialing it
     directly would read the node as never having come back."""
-    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=True)
+    cfg = SimpleNamespace(name="rack1", tailscale_enabled=True)
     machines = {
-        "phoenix-controlplane-01": SimpleNamespace(role="controlplane"),
-        "phoenix-worker-01": SimpleNamespace(role="worker"),
+        "rack1-controlplane-01": SimpleNamespace(role="controlplane"),
+        "rack1-worker-01": SimpleNamespace(role="worker"),
     }
     inv = InfrastructureInventory(
         machines={
             h: InfrastructureMachine(name=h, attachments=(NetworkAttachment("cluster", a),))
             for h, a in {
-                "phoenix-controlplane-01": "10.0.0.1",
-                "phoenix-worker-01": "10.0.0.11",
+                "rack1-controlplane-01": "10.0.0.1",
+                "rack1-worker-01": "10.0.0.11",
             }.items()
         }
     )
@@ -2577,20 +2577,20 @@ def test_reboot_wait_dials_through_the_endpoint(monkeypatch, tmp_path):
 
     converge._reboot_nodes(
         backend, cfg, machines, inv, NetworkResult(),
-        {"phoenix-worker-01"}, tmp_path / "talosconfig", tmp_path / "kubeconfig",
+        {"rack1-worker-01"}, tmp_path / "talosconfig", tmp_path / "kubeconfig",
     )
 
     # the endpoint is cp-01's tailnet name; the node is the restarted address
-    assert waited == [("phoenix-controlplane-01", "10.0.0.11")]
+    assert waited == [("rack1-controlplane-01", "10.0.0.11")]
 
 
 def test_reboot_rollout_stops_when_the_cluster_is_unhealthy(monkeypatch, tmp_path):
-    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=False)
+    cfg = SimpleNamespace(name="rack1", tailscale_enabled=False)
     machines = {
-        "phoenix-controlplane-01": SimpleNamespace(role="controlplane"),
-        "phoenix-controlplane-02": SimpleNamespace(role="controlplane"),
+        "rack1-controlplane-01": SimpleNamespace(role="controlplane"),
+        "rack1-controlplane-02": SimpleNamespace(role="controlplane"),
     }
-    addresses = {"phoenix-controlplane-01": "10.0.0.1", "phoenix-controlplane-02": "10.0.0.2"}
+    addresses = {"rack1-controlplane-01": "10.0.0.1", "rack1-controlplane-02": "10.0.0.2"}
     inv = InfrastructureInventory(
         machines={
             h: InfrastructureMachine(name=h, attachments=(NetworkAttachment("cluster", a),))
@@ -2603,12 +2603,12 @@ def test_reboot_rollout_stops_when_the_cluster_is_unhealthy(monkeypatch, tmp_pat
     monkeypatch.setattr(converge, "_wait_reachable", lambda tc, e, n: None)
     monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *a, **k: False)
 
-    with pytest.raises(ReconcileError, match="unhealthy after rebooting phoenix-controlplane-01"):
+    with pytest.raises(ReconcileError, match="unhealthy after rebooting rack1-controlplane-01"):
         converge._reboot_nodes(
             backend, cfg, machines, inv, NetworkResult(), set(machines),
             tmp_path / "talosconfig", tmp_path / "kubeconfig",
         )
-    assert restarted == ["phoenix-controlplane-01"]
+    assert restarted == ["rack1-controlplane-01"]
 
 
 def test_reboot_rollout_aborts_on_control_plane_when_health_fails_and_vip_responds(
@@ -2618,12 +2618,12 @@ def test_reboot_rollout_aborts_on_control_plane_when_health_fails_and_vip_respon
     rollout even when the kube-api VIP answers -- the surviving control planes
     answer the VIP whether or not the rebooted node rejoined etcd, and the call
     site passes `fallback=role != "controlplane"` so the fallback is refused."""
-    cfg = SimpleNamespace(name="phoenix", tailscale_enabled=False)
+    cfg = SimpleNamespace(name="rack1", tailscale_enabled=False)
     machines = {
-        "phoenix-controlplane-01": SimpleNamespace(role="controlplane"),
-        "phoenix-controlplane-02": SimpleNamespace(role="controlplane"),
+        "rack1-controlplane-01": SimpleNamespace(role="controlplane"),
+        "rack1-controlplane-02": SimpleNamespace(role="controlplane"),
     }
-    addresses = {"phoenix-controlplane-01": "10.0.0.1", "phoenix-controlplane-02": "10.0.0.2"}
+    addresses = {"rack1-controlplane-01": "10.0.0.1", "rack1-controlplane-02": "10.0.0.2"}
     inv = InfrastructureInventory(
         machines={
             h: InfrastructureMachine(name=h, attachments=(NetworkAttachment("cluster", a),))
@@ -2644,21 +2644,21 @@ def test_reboot_rollout_aborts_on_control_plane_when_health_fails_and_vip_respon
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
 
     with pytest.raises(
-        ReconcileError, match="unhealthy after rebooting phoenix-controlplane-01"
+        ReconcileError, match="unhealthy after rebooting rack1-controlplane-01"
     ):
         converge._reboot_nodes(
             backend, cfg, machines, inv, NetworkResult(), set(machines),
             tmp_path / "talosconfig", tmp_path / "kubeconfig",
         )
-    assert restarted == ["phoenix-controlplane-01"]
+    assert restarted == ["rack1-controlplane-01"]
 
 # ---- _apply_configs: control planes settle by default, waiting out reboots --
 
 def _apply_configs_fixtures():
     machines = {
-        "phoenix-controlplane-01": SimpleNamespace(role="controlplane"),
-        "phoenix-controlplane-02": SimpleNamespace(role="controlplane"),
-        "phoenix-worker-01": SimpleNamespace(role="worker"),
+        "rack1-controlplane-01": SimpleNamespace(role="controlplane"),
+        "rack1-controlplane-02": SimpleNamespace(role="controlplane"),
+        "rack1-worker-01": SimpleNamespace(role="worker"),
     }
     inv = _cp_inventory(*machines)
     configs = {h: f"config:{h}" for h in machines}
@@ -2670,7 +2670,7 @@ def _no_op_reachable(monkeypatch):
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
 
 
-_APPLY_MACHINES = ["phoenix-controlplane-01", "phoenix-controlplane-02", "phoenix-worker-01"]
+_APPLY_MACHINES = ["rack1-controlplane-01", "rack1-controlplane-02", "rack1-worker-01"]
 # _cp_inventory numbers these 192.0.2.1, .2, .3 in name order
 _APPLY_ADDR = {h: f"192.0.2.{i + 1}" for i, h in enumerate(_APPLY_MACHINES)}
 
@@ -2704,7 +2704,7 @@ def test_apply_configs_settles_control_planes_by_default(monkeypatch):
     # note: settle is left at its default -- the caller at the normal-path call
     # site (converge, endpoint unchanged) passes no settle argument
     converge._apply_configs(
-        SimpleNamespace(name="phoenix", tailscale_enabled=True),
+        SimpleNamespace(name="rack1", tailscale_enabled=True),
         machines, inv, NetworkResult(), configs,
         Path("talosconfig"), Path("kubeconfig"),
     )
@@ -2737,7 +2737,7 @@ def test_apply_configs_settle_waits_dial_through_the_endpoint(monkeypatch):
     monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_k: True)
 
     converge._apply_configs(
-        SimpleNamespace(name="phoenix", tailscale_enabled=True),
+        SimpleNamespace(name="rack1", tailscale_enabled=True),
         machines, inv, NetworkResult(), configs,
         Path("talosconfig"), Path("kubeconfig"),
     )
@@ -2746,10 +2746,10 @@ def test_apply_configs_settle_waits_dial_through_the_endpoint(monkeypatch):
     # the endpoint is cp-01's tailnet name for both control planes; the node
     # is each applied node's own address
     assert waited == [
-        ("down", "phoenix-controlplane-01", cp1),
-        ("up", "phoenix-controlplane-01", cp1),
-        ("down", "phoenix-controlplane-01", cp2),
-        ("up", "phoenix-controlplane-01", cp2),
+        ("down", "rack1-controlplane-01", cp1),
+        ("up", "rack1-controlplane-01", cp1),
+        ("down", "rack1-controlplane-01", cp2),
+        ("up", "rack1-controlplane-01", cp2),
     ]
 
 
@@ -2773,7 +2773,7 @@ def test_apply_configs_live_apply_skips_settle(monkeypatch):
     )
 
     converge._apply_configs(
-        SimpleNamespace(name="phoenix", tailscale_enabled=True),
+        SimpleNamespace(name="rack1", tailscale_enabled=True),
         machines, inv, NetworkResult(), configs,
         Path("talosconfig"), Path("kubeconfig"),
     )
@@ -2803,14 +2803,14 @@ def test_apply_configs_refuses_unresolved_reboot(monkeypatch):
 
     with pytest.raises(ReconcileError, match="settle grace window"):
         converge._apply_configs(
-            SimpleNamespace(name="phoenix", tailscale_enabled=True),
+            SimpleNamespace(name="rack1", tailscale_enabled=True),
             machines, inv, NetworkResult(), configs,
             Path("talosconfig"), Path("kubeconfig"),
         )
 
     # control plane 1 is applied and its grace window expires unresolved; no
     # second control plane is ever touched
-    cp1 = _APPLY_ADDR["phoenix-controlplane-01"]
+    cp1 = _APPLY_ADDR["rack1-controlplane-01"]
     assert events == [("apply", cp1), ("down", cp1)]
 
 
@@ -2843,12 +2843,12 @@ def test_apply_configs_aborts_when_cluster_unhealthy_after_reboot(monkeypatch):
 
     with pytest.raises(ReconcileError, match="cluster unhealthy"):
         converge._apply_configs(
-            SimpleNamespace(name="phoenix", tailscale_enabled=True),
+            SimpleNamespace(name="rack1", tailscale_enabled=True),
             machines, inv, NetworkResult(), configs,
             Path("talosconfig"), Path("kubeconfig"),
         )
 
-    cp1 = _APPLY_ADDR["phoenix-controlplane-01"]
+    cp1 = _APPLY_ADDR["rack1-controlplane-01"]
     assert events == [("apply", cp1), ("down", cp1), ("up", cp1), ("health", None)]
 
 
@@ -2866,9 +2866,9 @@ def test_apply_configs_refuses_a_failed_node_query(monkeypatch):
         lambda *_a, **_k: pytest.fail("a node of unknown presence must not be configured"),
     )
 
-    with pytest.raises(ReconcileError, match="phoenix-controlplane-01"):
+    with pytest.raises(ReconcileError, match="rack1-controlplane-01"):
         converge._apply_configs(
-            SimpleNamespace(name="phoenix", tailscale_enabled=True),
+            SimpleNamespace(name="rack1", tailscale_enabled=True),
             machines, inv, NetworkResult(), configs,
             Path("talosconfig"), Path("kubeconfig"),
         )
@@ -2880,7 +2880,7 @@ def test_apply_configs_refuses_a_failed_metal_node_query(monkeypatch, make_confi
     never-joined and skipped -- converge fails instead."""
     cfg = _metal_cfg(
         make_config,
-        {"rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}}},
+        {"srv01": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}}},
     )
     _no_op_reachable(monkeypatch)
     monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_k: "ep")
@@ -2891,9 +2891,9 @@ def test_apply_configs_refuses_a_failed_metal_node_query(monkeypatch, make_confi
         lambda *_a, **_k: pytest.fail("a machine of unknown presence must not be configured"),
     )
 
-    with pytest.raises(ReconcileError, match="rp001"):
+    with pytest.raises(ReconcileError, match="srv01"):
         converge._apply_configs(
-            cfg, {}, InfrastructureInventory(), NetworkResult(), {"rp001": "config:metal"},
+            cfg, {}, InfrastructureInventory(), NetworkResult(), {"srv01": "config:metal"},
             Path("talosconfig"), Path("kubeconfig"),
         )
 
@@ -2988,10 +2988,10 @@ def test_controlplane_upgrade_rollout_aborts_when_health_fails_and_vip_responds(
     when the previous one never rejoined etcd, even if the kube-api VIP answers.
     Callers pass `fallback=role != "controlplane"`, so a control-plane upgrade
     aborts while a worker upgrade would still fall back to kube-api readiness."""
-    cfg = SimpleNamespace(name="phoenix", talos_version="v1.13.9")
+    cfg = SimpleNamespace(name="rack1", talos_version="v1.13.9")
     machines = {
-        "phoenix-controlplane-01": SimpleNamespace(role="controlplane", extensions=("base",)),
-        "phoenix-controlplane-02": SimpleNamespace(role="controlplane", extensions=("base",)),
+        "rack1-controlplane-01": SimpleNamespace(role="controlplane", extensions=("base",)),
+        "rack1-controlplane-02": SimpleNamespace(role="controlplane", extensions=("base",)),
     }
     inventory = InfrastructureInventory(
         machines={h: InfrastructureMachine(h) for h in machines}
@@ -3022,7 +3022,7 @@ def test_controlplane_upgrade_rollout_aborts_when_health_fails_and_vip_responds(
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
 
     with pytest.raises(
-        ReconcileError, match="unhealthy after upgrading phoenix-controlplane-01"
+        ReconcileError, match="unhealthy after upgrading rack1-controlplane-01"
     ):
         converge._reconcile_talos(
             cfg, machines, inventory, NetworkResult(),
@@ -3038,16 +3038,16 @@ def test_reconcile_talos_refuses_a_failed_node_query(monkeypatch):
     must not read as absent and silently drop the node's Talos upgrade while
     the run exits clean. Converge fails instead, and a re-run once the api
     answers again upgrades whatever was missed."""
-    cfg = SimpleNamespace(name="phoenix", talos_version="v1.13.9")
+    cfg = SimpleNamespace(name="rack1", talos_version="v1.13.9")
     machines = {
-        "phoenix-controlplane-01": SimpleNamespace(role="controlplane", extensions=("base",)),
+        "rack1-controlplane-01": SimpleNamespace(role="controlplane", extensions=("base",)),
     }
     inventory = InfrastructureInventory(
         machines={h: InfrastructureMachine(h) for h in machines}
     )
     monkeypatch.setattr(
         converge.talosctl, "member_addresses",
-        lambda *_a, **_kw: {"phoenix-controlplane-01": "192.0.2.1"},
+        lambda *_a, **_kw: {"rack1-controlplane-01": "192.0.2.1"},
     )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: None)
     monkeypatch.setattr(
@@ -3056,7 +3056,7 @@ def test_reconcile_talos_refuses_a_failed_node_query(monkeypatch):
         lambda *_a, **_k: pytest.fail("a node of unknown presence must not be upgraded"),
     )
 
-    with pytest.raises(ReconcileError, match="phoenix-controlplane-01"):
+    with pytest.raises(ReconcileError, match="rack1-controlplane-01"):
         converge._reconcile_talos(
             cfg, machines, inventory, NetworkResult(),
             {("base",): "installer:v1.13.9"}, {("base",): "want-sch"},
@@ -3070,7 +3070,7 @@ def test_reconcile_talos_refuses_a_failed_metal_node_query(monkeypatch, make_con
     never-joined and skipped -- converge fails instead."""
     cfg = _metal_cfg(
         make_config,
-        {"rp001": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}}},
+        {"srv01": {"interfaces": {"enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}}}},
     )
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
     monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_k: "ep")
@@ -3081,7 +3081,7 @@ def test_reconcile_talos_refuses_a_failed_metal_node_query(monkeypatch, make_con
         lambda *_a, **_k: pytest.fail("a machine of unknown presence must not be upgraded"),
     )
 
-    with pytest.raises(ReconcileError, match="rp001"):
+    with pytest.raises(ReconcileError, match="srv01"):
         converge._reconcile_talos(
             cfg, {}, InfrastructureInventory(), NetworkResult(), {}, {},
             Path("talosconfig"), Path("kubeconfig"),
@@ -3185,9 +3185,9 @@ def _stub_converge_full(monkeypatch, tmp_path, state, backend, machine_cfg,
     """
     if cfg is None:
         cfg = SimpleNamespace(
-            name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+            name="rack1", talos_version="v1.13.0", kubernetes_version="v1.31.0",
             extension_sets=lambda: [()],
-            machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+            machines={"rack1-controlplane-01": SimpleNamespace(role="controlplane")},
             tailscale_enabled=True,
             tailscale_auth_key=None,
         )
@@ -3223,7 +3223,7 @@ def test_converge_does_not_recreate_existing_nodes_when_api_is_down(monkeypatch,
     act against a cluster we cannot reach), skips the health phase (meaningless
     on a cluster known unreachable), and reports an incomplete converge with a
     nonzero exit instead of returning clean."""
-    inventory = _cp_inventory("phoenix-controlplane-01")
+    inventory = _cp_inventory("rack1-controlplane-01")
     state = _FakeState(True, tmp_path / "talossecrets.yaml")
     backend = _ExistingDownBackend(inventory)
     (tmp_path / "kubeconfig").write_text("clusters: []\n")  # bootstrapped earlier
@@ -3249,7 +3249,7 @@ def test_converge_does_not_recreate_existing_nodes_when_api_is_down(monkeypatch,
 
     assert _stub_converge_full(
         monkeypatch, tmp_path, state, backend,
-        {"phoenix-controlplane-01": "config"},
+        {"rack1-controlplane-01": "config"},
     ) == 1  # an unreachable cluster is an incomplete converge, reported as failed
 
     assert backend.mutations == []  # reconcile_machines never ran -> no recreate
@@ -3266,7 +3266,7 @@ def test_converge_rebootstraps_an_interrupted_first_run(monkeypatch, tmp_path):
     bootstrapped. Such a cluster is still fresh, so converge must attempt
     bootstrap (and write the kubeconfig) rather than refuse it as an
     'existing but down' cluster that can never come back."""
-    inventory = _cp_inventory("phoenix-controlplane-01")
+    inventory = _cp_inventory("rack1-controlplane-01")
     state = _FakeState(True, tmp_path / "talossecrets.yaml")
     backend = _ExistingDownBackend(inventory)
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
@@ -3281,7 +3281,7 @@ def test_converge_rebootstraps_an_interrupted_first_run(monkeypatch, tmp_path):
 
     assert _stub_converge_full(
         monkeypatch, tmp_path, state, backend,
-        {"phoenix-controlplane-01": "config"}, stub_health=True,
+        {"rack1-controlplane-01": "config"}, stub_health=True,
     ) == 0
 
     # bootstrap and the phase-9 kubeconfig both ran despite machines existing,
@@ -3300,7 +3300,7 @@ def test_converge_refuses_a_first_run_whose_control_plane_never_answers(
     creation, no bootstrap -- defer the plugin hooks and exit nonzero, and it
     must not wait out bootstrap's reachability budget a second time after the
     recovery wait already spent the one shared budget."""
-    inventory = _cp_inventory("phoenix-controlplane-01")
+    inventory = _cp_inventory("rack1-controlplane-01")
     state = _FakeState(True, tmp_path / "talossecrets.yaml")
     backend = _ExistingDownBackend(inventory)
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
@@ -3324,7 +3324,7 @@ def test_converge_refuses_a_first_run_whose_control_plane_never_answers(
 
     assert _stub_converge_full(
         monkeypatch, tmp_path, state, backend,
-        {"phoenix-controlplane-01": "config"},
+        {"rack1-controlplane-01": "config"},
     ) == 1  # a maybe-live unreachable cluster is an incomplete converge
 
     assert backend.mutations == []  # reconcile_machines never ran -> no recreate
@@ -3343,14 +3343,14 @@ def test_converge_bootstraps_a_keyless_tailscale_cluster_on_the_real_address(
     real address and dial that instead."""
     cfg = make_config(
         {
-            "name": "phoenix",
+            "name": "rack1",
             "controlplane": {"count": 1},
             "tailscale": {"login_server": "https://headscale.example.edu"},
         },
     )
     assert cfg.tailscale_enabled and not cfg.tailscale_active
     state = _FakeState(True, tmp_path / "talossecrets.yaml")
-    backend = _ExistingDownBackend(_cp_inventory("phoenix-controlplane-01"))
+    backend = _ExistingDownBackend(_cp_inventory("rack1-controlplane-01"))
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
     waits: list[tuple[str, str]] = []
     monkeypatch.setattr(
@@ -3365,7 +3365,7 @@ def test_converge_bootstraps_a_keyless_tailscale_cluster_on_the_real_address(
 
     assert _stub_converge_full(
         monkeypatch, tmp_path, state, backend,
-        {"phoenix-controlplane-01": "config"}, stub_health=True, cfg=cfg,
+        {"rack1-controlplane-01": "config"}, stub_health=True, cfg=cfg,
     ) == 0
 
     assert "bootstrap" in events and "kubeconfig" in events
@@ -3394,7 +3394,7 @@ def test_converge_does_not_replace_the_prebootstrap_identity_through_bootstrap(
             secrets_path.write_text(contents)
 
     state = _PersistingState(True, secrets_path)
-    backend = _ExistingDownBackend(_cp_inventory("phoenix-controlplane-01"))
+    backend = _ExistingDownBackend(_cp_inventory("rack1-controlplane-01"))
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: False)
     events: list[str] = []
     monkeypatch.setattr(converge, "_wait_reachable", lambda *a, **k: events.append("reachable"))
@@ -3405,7 +3405,7 @@ def test_converge_does_not_replace_the_prebootstrap_identity_through_bootstrap(
 
     assert _stub_converge_full(
         monkeypatch, tmp_path, state, backend,
-        {"phoenix-controlplane-01": "config"}, stub_health=True,
+        {"rack1-controlplane-01": "config"}, stub_health=True,
     ) == 0
 
     assert "bootstrap" in events  # the re-run bootstraps the unfinished cluster
@@ -3416,7 +3416,7 @@ def test_converge_does_not_replace_the_prebootstrap_identity_through_bootstrap(
 def _stub_converge(monkeypatch, tmp_path, state, backend, machines=None):
     """Wire converge() so the state phase runs against fakes."""
     cfg = SimpleNamespace(
-        name="phoenix", talos_version="v1.13.0",
+        name="rack1", talos_version="v1.13.0",
         extension_sets=lambda: [()], machines=machines or {},
         kubernetes_version="v1.31.0", tailscale_enabled=True,
         tailscale_auth_key=None,
@@ -3436,8 +3436,8 @@ def _stub_converge(monkeypatch, tmp_path, state, backend, machines=None):
 def test_converge_refuses_to_generate_secrets_when_machines_exist(monkeypatch, tmp_path):
     inventory = InfrastructureInventory(
         machines={
-            "phoenix-controlplane-01": InfrastructureMachine(
-                "phoenix-controlplane-01",
+            "rack1-controlplane-01": InfrastructureMachine(
+                "rack1-controlplane-01",
                 attachments=(NetworkAttachment("cluster", "10.0.0.1"),),
             )
         }
@@ -3488,13 +3488,13 @@ def _kept_talosconfig(tmp_path):
     the destroyed cluster's cp-01, which the machines left behind still answer
     until they are reset."""
     (tmp_path / "talosconfig").write_text(
-        "context: phoenix\ncontexts:\n  phoenix:\n    endpoints:\n    - 192.0.2.10\n"
+        "context: rack1\ncontexts:\n  rack1:\n    endpoints:\n    - 192.0.2.10\n"
     )
 
 
 def _cp_machines():
     return {
-        "phoenix-controlplane-01": SimpleNamespace(role="controlplane", extensions=())
+        "rack1-controlplane-01": SimpleNamespace(role="controlplane", extensions=())
     }
 
 
@@ -3647,25 +3647,25 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     phases carry the metal installer ref and schematic -- so a talos.version,
     extension or patch edit reaches metal nodes too instead of stopping at the
     VM pools and leaving them in permanent drift."""
-    inventory = _cp_inventory("phoenix-controlplane-01")
+    inventory = _cp_inventory("rack1-controlplane-01")
     state = _FakeState(True, tmp_path / "talossecrets.yaml")
     backend = _MetalConfigBackend(inventory)
     (tmp_path / "kubeconfig").write_text("clusters: []\n")
     metal = SimpleNamespace(
         groups={"site": SimpleNamespace(
-            servers={"rp001": SimpleNamespace(
-                name="rp001", role="worker", redfish=False, disk="/dev/sda",
+            servers={"srv01": SimpleNamespace(
+                name="srv01", role="worker", redfish=False, disk="/dev/sda",
                 auto_join=True,
             )}
         )}
     )
     cfg = SimpleNamespace(
-        name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+        name="rack1", talos_version="v1.13.0", kubernetes_version="v1.31.0",
         extension_sets=lambda: [()],
-        machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+        machines={"rack1-controlplane-01": SimpleNamespace(role="controlplane")},
         tailscale_enabled=True,
         tailscale_auth_key=None,
-        metal_servers={"rp001": "worker"},
+        metal_servers={"srv01": "worker"},
         metal=metal,
     )
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
@@ -3679,7 +3679,7 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     monkeypatch.setattr(converge.talosctl, "gen_talosconfig", lambda *a, **k: "talosconfig")
     monkeypatch.setattr(
         converge.machineconfig, "build_configs",
-        lambda *a, **k: {"phoenix-controlplane-01": "vm-config"},
+        lambda *a, **k: {"rack1-controlplane-01": "vm-config"},
     )
     monkeypatch.setattr(
         converge.metal_talos, "installer",
@@ -3730,7 +3730,7 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
 
     monkeypatch.setattr(converge, "_reconcile_joined", fake_joined)
     monkeypatch.setattr(converge, "_run_plugins", lambda *a, **kw: 0)
-    # rp001 has no kube Node, so the compute phase joins it: it waits in
+    # srv01 has no kube Node, so the compute phase joins it: it waits in
     # maintenance mode, which needs no BMC and is what `redfish: false` expects
     applied: list[tuple[str, str]] = []
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
@@ -3747,26 +3747,26 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     assert len(iso_cfgs) == 1
 
     # the compute phase joined it with the config this run generated
-    assert applied == [("192.0.2.61", "metal-config:rp001")]
+    assert applied == [("192.0.2.61", "metal-config:srv01")]
 
     # and the health phase waits on it beside the VMs, so a join that never
     # registers a Node fails the run instead of passing unnoticed
-    assert waited == [{"phoenix-controlplane-01", "rp001"}]
+    assert waited == [{"rack1-controlplane-01", "srv01"}]
 
     # the metal config was generated beside the VMs', from the metal installer
     # at the cluster's running kubernetes version and against the endpoint the
     # network phase resolved (the same one the VM configs carry), and reached
     # the compute phase
     assert built == [{
-        "server": "rp001",
+        "server": "srv01",
         "installer": "factory.talos.dev/metal-installer/m-sch:v1.13.0",
         "endpoint": SimpleNamespace(advertised_address="192.0.2.5", vip="192.0.2.5"),
         "kubernetes_version": "v1.31.0",
         "talos_version": None,  # discovery reports no members: the target layout
     }]
     assert backend.seen_configs == {
-        "phoenix-controlplane-01": "vm-config",
-        "rp001": "metal-config:rp001",
+        "rack1-controlplane-01": "vm-config",
+        "srv01": "metal-config:srv01",
     }
     # the post-join reconcile carries the metal installer ref and schematic
     assert joined == [{
@@ -3781,25 +3781,25 @@ def test_converge_reports_a_failed_metal_join_as_incomplete(monkeypatch, tmp_pat
     still run -- but the run exits nonzero like an unreachable cluster instead
     of reading as a clean no-op, and the health phase leaves the machine out of
     the Ready wait it can never pass while waiting on the machines that joined."""
-    inventory = _cp_inventory("phoenix-controlplane-01")
+    inventory = _cp_inventory("rack1-controlplane-01")
     state = _FakeState(True, tmp_path / "talossecrets.yaml")
     backend = _MetalConfigBackend(inventory)
     (tmp_path / "kubeconfig").write_text("clusters: []\n")
     metal = SimpleNamespace(
         groups={"site": SimpleNamespace(
-            servers={"rp001": SimpleNamespace(
-                name="rp001", role="worker", redfish=True, disk="/dev/sda",
+            servers={"srv01": SimpleNamespace(
+                name="srv01", role="worker", redfish=True, disk="/dev/sda",
                 auto_join=True, boot_timeout=600, bmc=SimpleNamespace(ip="192.0.2.61"),
             )}
         )}
     )
     cfg = SimpleNamespace(
-        name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+        name="rack1", talos_version="v1.13.0", kubernetes_version="v1.31.0",
         extension_sets=lambda: [()],
-        machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+        machines={"rack1-controlplane-01": SimpleNamespace(role="controlplane")},
         tailscale_enabled=True,
         tailscale_auth_key=None,
-        metal_servers={"rp001": "worker"},
+        metal_servers={"srv01": "worker"},
         metal=metal,
     )
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
@@ -3813,7 +3813,7 @@ def test_converge_reports_a_failed_metal_join_as_incomplete(monkeypatch, tmp_pat
     monkeypatch.setattr(converge.talosctl, "gen_talosconfig", lambda *a, **k: "talosconfig")
     monkeypatch.setattr(
         converge.machineconfig, "build_configs",
-        lambda *a, **k: {"phoenix-controlplane-01": "vm-config"},
+        lambda *a, **k: {"rack1-controlplane-01": "vm-config"},
     )
     monkeypatch.setattr(
         converge.metal_talos, "installer",
@@ -3821,7 +3821,7 @@ def test_converge_reports_a_failed_metal_join_as_incomplete(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(
         converge.metal_talos, "build_config",
-        lambda _s, *_a, **_k: "metal-config:rp001",
+        lambda _s, *_a, **_k: "metal-config:srv01",
     )
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.31.0")
@@ -3841,7 +3841,7 @@ def test_converge_reports_a_failed_metal_join_as_incomplete(monkeypatch, tmp_pat
         converge, "_reconcile_joined", lambda *a, **k: inventory
     )
     monkeypatch.setattr(converge, "_run_plugins", lambda *a, **kw: 0)
-    # rp001 never comes up: booted through its BMC (the BMC reports it powered
+    # srv01 never comes up: booted through its BMC (the BMC reports it powered
     # off, so the gate clears the boot), waited out, never answers
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
@@ -3857,7 +3857,7 @@ def test_converge_reports_a_failed_metal_join_as_incomplete(monkeypatch, tmp_pat
 
     assert converge.converge(tmp_path) == 1
     # the failed machine is out of the Ready wait; the control plane stays in
-    assert waited == [{"phoenix-controlplane-01"}]
+    assert waited == [{"rack1-controlplane-01"}]
 
 
 def test_converge_leaves_a_machine_without_auto_join_to_metal_join(monkeypatch, tmp_path):
@@ -3865,25 +3865,25 @@ def test_converge_leaves_a_machine_without_auto_join_to_metal_join(monkeypatch, 
     join: it is neither probed nor applied to -- even waiting in maintenance
     mode -- and its BMC is never touched. Its absence is expected, so it stays
     out of the Ready wait and the run exits clean instead of incomplete."""
-    inventory = _cp_inventory("phoenix-controlplane-01")
+    inventory = _cp_inventory("rack1-controlplane-01")
     state = _FakeState(True, tmp_path / "talossecrets.yaml")
     backend = _MetalConfigBackend(inventory)
     (tmp_path / "kubeconfig").write_text("clusters: []\n")
     metal = SimpleNamespace(
         groups={"site": SimpleNamespace(
-            servers={"rp001": SimpleNamespace(
-                name="rp001", role="worker", redfish=True, disk="/dev/sda",
+            servers={"srv01": SimpleNamespace(
+                name="srv01", role="worker", redfish=True, disk="/dev/sda",
                 auto_join=False, boot_timeout=600, bmc=SimpleNamespace(ip="192.0.2.61"),
             )}
         )}
     )
     cfg = SimpleNamespace(
-        name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+        name="rack1", talos_version="v1.13.0", kubernetes_version="v1.31.0",
         extension_sets=lambda: [()],
-        machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+        machines={"rack1-controlplane-01": SimpleNamespace(role="controlplane")},
         tailscale_enabled=True,
         tailscale_auth_key=None,
-        metal_servers={"rp001": "worker"},
+        metal_servers={"srv01": "worker"},
         metal=metal,
     )
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
@@ -3897,7 +3897,7 @@ def test_converge_leaves_a_machine_without_auto_join_to_metal_join(monkeypatch, 
     monkeypatch.setattr(converge.talosctl, "gen_talosconfig", lambda *a, **k: "talosconfig")
     monkeypatch.setattr(
         converge.machineconfig, "build_configs",
-        lambda *a, **k: {"phoenix-controlplane-01": "vm-config"},
+        lambda *a, **k: {"rack1-controlplane-01": "vm-config"},
     )
     monkeypatch.setattr(
         converge.metal_talos, "installer",
@@ -3905,7 +3905,7 @@ def test_converge_leaves_a_machine_without_auto_join_to_metal_join(monkeypatch, 
     )
     monkeypatch.setattr(
         converge.metal_talos, "build_config",
-        lambda _s, *_a, **_k: "metal-config:rp001",
+        lambda _s, *_a, **_k: "metal-config:srv01",
     )
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda _kc: True)
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.31.0")
@@ -3939,7 +3939,7 @@ def test_converge_leaves_a_machine_without_auto_join_to_metal_join(monkeypatch, 
 
     assert converge.converge(tmp_path) == 0
     # the deferred machine is out of the Ready wait; the control plane stays in
-    assert waited == [{"phoenix-controlplane-01"}]
+    assert waited == [{"rack1-controlplane-01"}]
 
 
 def test_converge_leaves_a_plan_clean_when_no_metal_config_exists(monkeypatch, tmp_path):
@@ -3949,19 +3949,19 @@ def test_converge_leaves_a_plan_clean_when_no_metal_config_exists(monkeypatch, t
     backend = _ExistingDownBackend(InfrastructureInventory())
     metal = SimpleNamespace(
         groups={"site": SimpleNamespace(
-            servers={"rp001": SimpleNamespace(
-                name="rp001", role="worker", redfish=False, disk="/dev/sda",
+            servers={"srv01": SimpleNamespace(
+                name="srv01", role="worker", redfish=False, disk="/dev/sda",
                 auto_join=True,
             )}
         )}
     )
     cfg = SimpleNamespace(
-        name="phoenix", talos_version="v1.13.0", kubernetes_version="v1.31.0",
+        name="rack1", talos_version="v1.13.0", kubernetes_version="v1.31.0",
         extension_sets=lambda: [()],
-        machines={"phoenix-controlplane-01": SimpleNamespace(role="controlplane")},
+        machines={"rack1-controlplane-01": SimpleNamespace(role="controlplane")},
         tailscale_enabled=True,
         tailscale_auth_key=None,
-        metal_servers={"rp001": "worker"},
+        metal_servers={"srv01": "worker"},
         metal=metal,
     )
     monkeypatch.setattr(converge, "load_config", lambda _root: cfg)
@@ -3991,15 +3991,15 @@ def test_converge_leaves_a_plan_clean_when_no_metal_config_exists(monkeypatch, t
 def _pending_metal_cfg(**server_kw):
     """A cfg whose one metal server is configured but not in the cluster."""
     fields = {
-        "name": "rp001", "role": "worker", "disk": "/dev/sda", "redfish": False,
-        "auto_join": True, "boot_timeout": 600, "bmc": SimpleNamespace(ip="172.28.50.5"),
+        "name": "srv01", "role": "worker", "disk": "/dev/sda", "redfish": False,
+        "auto_join": True, "boot_timeout": 600, "bmc": SimpleNamespace(ip="203.0.113.5"),
     }
     server = SimpleNamespace(**{**fields, **server_kw})
     return SimpleNamespace(
         name="testcluster",
         talos_version="v1.13.10",
-        metal=SimpleNamespace(groups={"phoenix": SimpleNamespace(servers={"rp001": server})}),
-        metal_servers={"rp001": "worker"},
+        metal=SimpleNamespace(groups={"rack1": SimpleNamespace(servers={"srv01": server})}),
+        metal_servers={"srv01": "worker"},
     )
 
 
@@ -4017,7 +4017,7 @@ def test_validate_refuses_a_metal_machine_converge_can_neither_reach_nor_boot(
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
     monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
 
-    with pytest.raises(ReconcileError, match="not joinable: rp001"):
+    with pytest.raises(ReconcileError, match="not joinable: srv01"):
         converge._validate_metal_joinable(
             _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
         )
@@ -4139,7 +4139,7 @@ def test_validate_refuses_a_joined_metal_machine_address_change(
     kubeconfig.write_text("clusters: []\n")
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
     monkeypatch.setattr(
-        converge.kubectl, "node_addresses", lambda _kc: {"rp001": "192.0.2.61"}
+        converge.kubectl, "node_addresses", lambda _kc: {"srv01": "192.0.2.61"}
     )
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.99")
     monkeypatch.setattr(
@@ -4163,7 +4163,7 @@ def test_validate_refuses_a_joined_metal_machine_disk_change(monkeypatch, tmp_pa
     kubeconfig.write_text("clusters: []\n")
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
     monkeypatch.setattr(
-        converge.kubectl, "node_addresses", lambda _kc: {"rp001": "192.0.2.61"}
+        converge.kubectl, "node_addresses", lambda _kc: {"srv01": "192.0.2.61"}
     )
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(
@@ -4186,7 +4186,7 @@ def test_validate_allows_a_joined_metal_machine_whose_drift_matches(
     kubeconfig.write_text("clusters: []\n")
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
     monkeypatch.setattr(
-        converge.kubectl, "node_addresses", lambda _kc: {"rp001": "192.0.2.61"}
+        converge.kubectl, "node_addresses", lambda _kc: {"srv01": "192.0.2.61"}
     )
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(
@@ -4243,7 +4243,7 @@ def test_validate_metal_machine_check_stays_silent_when_the_node_does_not_answer
     kubeconfig.write_text("clusters: []\n")
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
     monkeypatch.setattr(
-        converge.kubectl, "node_addresses", lambda _kc: {"rp001": "192.0.2.61"}
+        converge.kubectl, "node_addresses", lambda _kc: {"srv01": "192.0.2.61"}
     )
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
 
@@ -4268,7 +4268,7 @@ def test_validate_metal_machine_check_stays_silent_when_the_disk_probe_times_out
     kubeconfig.write_text("clusters: []\n")
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
     monkeypatch.setattr(
-        converge.kubectl, "node_addresses", lambda _kc: {"rp001": "192.0.2.61"}
+        converge.kubectl, "node_addresses", lambda _kc: {"srv01": "192.0.2.61"}
     )
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
 
@@ -4301,13 +4301,13 @@ def test_join_metal_applies_the_config_to_a_machine_in_maintenance(monkeypatch):
 
     assert (
         converge._join_metal(
-            _pending_metal_cfg(), {"rp001": "rp001-config"},
+            _pending_metal_cfg(), {"srv01": "srv01-config"},
             ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
         )
         == (set(), set())
     )
 
-    assert applied == [("192.0.2.61", "rp001-config")]
+    assert applied == [("192.0.2.61", "srv01-config")]
 
 
 def test_join_metal_boots_a_redfish_machine_then_applies(monkeypatch):
@@ -4358,7 +4358,7 @@ def test_join_metal_boots_a_redfish_machine_then_applies(monkeypatch):
     )
 
     converge._join_metal(
-        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        _pending_metal_cfg(redfish=True), {"srv01": "srv01-config"},
         ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
     )
 
@@ -4376,7 +4376,7 @@ def test_join_metal_honours_the_machines_own_boot_timeout(monkeypatch):
     monkeypatch.setattr(converge.time, "monotonic", lambda: next(now))
     monkeypatch.setattr(converge.time, "sleep", lambda s: slept.append(s))
 
-    server = _pending_metal_cfg(boot_timeout=1800).metal.groups["phoenix"].servers["rp001"]
+    server = _pending_metal_cfg(boot_timeout=1800).metal.groups["rack1"].servers["srv01"]
     assert converge._wait_maintenance(server, "192.0.2.61") is False
     # polled across the full 1800s budget, not the 600s default
     assert len(slept) * converge._METAL_MAINTENANCE_INTERVAL_S >= 1700
@@ -4401,9 +4401,9 @@ def test_join_metal_skips_a_machine_that_never_reaches_maintenance(monkeypatch):
     )
 
     assert converge._join_metal(
-        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        _pending_metal_cfg(redfish=True), {"srv01": "srv01-config"},
         ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
-    ) == ({"rp001"}, set())
+    ) == ({"srv01"}, set())
 
 
 def test_join_metal_touches_nothing_in_a_dry_run(monkeypatch):
@@ -4423,7 +4423,7 @@ def test_join_metal_touches_nothing_in_a_dry_run(monkeypatch):
     )
 
     converge._join_metal(
-        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        _pending_metal_cfg(redfish=True), {"srv01": "srv01-config"},
         ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
     )
 
@@ -4452,7 +4452,7 @@ def test_join_metal_lists_the_join_in_a_plan_without_configs(monkeypatch, capsys
     ) == (set(), set())
 
     out = capsys.readouterr()
-    assert "join metal rp001 (192.0.2.61)" in out.out
+    assert "join metal srv01 (192.0.2.61)" in out.out
     assert "no machine config this run" not in out.err
 
 
@@ -4486,14 +4486,14 @@ def test_join_metal_skips_a_joined_machine_whose_kube_node_is_missing(
     )
 
     unjoined, _deferred = converge._join_metal(
-        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        _pending_metal_cfg(redfish=True), {"srv01": "srv01-config"},
         talosconfig, kubeconfig, "http://iso",
     )
 
     assert "not reinstalling" in capsys.readouterr().err
     # the machine is named back so it stays out of the Ready wait and the run
     # reports incomplete instead of a clean exit
-    assert unjoined == {"rp001"}
+    assert unjoined == {"srv01"}
 
 
 def test_join_metal_probes_the_cluster_apid_through_the_control_plane(monkeypatch):
@@ -4526,7 +4526,7 @@ def test_join_metal_probes_the_cluster_apid_through_the_control_plane(monkeypatc
     monkeypatch.setattr(converge, "_wait_maintenance", lambda *_a: False)
 
     converge._join_metal(
-        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        _pending_metal_cfg(redfish=True), {"srv01": "srv01-config"},
         talosconfig, Path("/nonexistent/kubeconfig"), "http://iso",
     )
 
@@ -4567,14 +4567,14 @@ def test_join_metal_refuses_to_boot_a_machine_no_probe_could_decide(
     )
 
     unjoined, _deferred = converge._join_metal(
-        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        _pending_metal_cfg(redfish=True), {"srv01": "srv01-config"},
         talosconfig, kubeconfig, "http://iso",
     )
 
     err = capsys.readouterr().err
     assert "not force-restarting" in err
     assert "`metal join --force`" in err
-    assert unjoined == {"rp001"}
+    assert unjoined == {"srv01"}
 
 
 def test_join_metal_boots_a_machine_the_bmc_reports_off_without_a_kubeconfig(
@@ -4599,7 +4599,7 @@ def test_join_metal_boots_a_machine_the_bmc_reports_off_without_a_kubeconfig(
     )
 
     unjoined, _deferred = converge._join_metal(
-        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        _pending_metal_cfg(redfish=True), {"srv01": "srv01-config"},
         ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
     )
 
@@ -4637,18 +4637,18 @@ def test_join_metal_leaves_a_machine_the_kube_api_still_lists(
     )
 
     unjoined, _deferred = converge._join_metal(
-        _pending_metal_cfg(redfish=True), {"rp001": "rp001-config"},
+        _pending_metal_cfg(redfish=True), {"srv01": "srv01-config"},
         talosconfig, kubeconfig, "http://iso",
     )
 
     assert "answered no join probe" in capsys.readouterr().err
-    assert unjoined == {"rp001"}
+    assert unjoined == {"srv01"}
 
 
 def test_bmc_reports_powered_off_only_on_an_off_answer(monkeypatch):
     """Only the BMC's own "Off" clears a boot: an unreachable or silent
     controller must never read as a machine safe to force-restart."""
-    server = _pending_metal_cfg(redfish=True).metal.groups["phoenix"].servers["rp001"]
+    server = _pending_metal_cfg(redfish=True).metal.groups["rack1"].servers["srv01"]
 
     class Unreachable:
         def __init__(self, _bmc):
@@ -4702,12 +4702,12 @@ def test_join_metal_leaves_a_machine_without_auto_join_alone(monkeypatch):
     )
 
     unjoined, deferred = converge._join_metal(
-        _pending_metal_cfg(auto_join=False), {"rp001": "rp001-config"},
+        _pending_metal_cfg(auto_join=False), {"srv01": "srv01-config"},
         ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig"), "http://iso",
     )
 
     assert unjoined == set()
-    assert deferred == {"rp001"}
+    assert deferred == {"srv01"}
 
 
 def test_metal_unjoined_ignores_a_failed_node_query(monkeypatch, tmp_path):
@@ -4726,7 +4726,7 @@ def test_write_talosconfig_creates_the_file_private(monkeypatch, tmp_path):
     born 0600: opened with the mode up front, never written under the umask
     first and tightened by a chmod afterwards."""
     monkeypatch.setattr(
-        converge.talosctl, "gen_talosconfig", lambda *a, **k: "context: phoenix\n"
+        converge.talosctl, "gen_talosconfig", lambda *a, **k: "context: rack1\n"
     )
     opened: list[tuple[str, int]] = []
     real_open = os.open
@@ -4739,12 +4739,12 @@ def test_write_talosconfig_creates_the_file_private(monkeypatch, tmp_path):
     path = tmp_path / "talosconfig"
     converge._write_talosconfig(
         path,
-        SimpleNamespace(name="phoenix"),
+        SimpleNamespace(name="rack1"),
         SimpleNamespace(kubernetes=SimpleNamespace(advertised_address="192.0.2.5")),
         tmp_path / "talossecrets.yaml",
-        "phoenix-controlplane-01",
+        "rack1-controlplane-01",
     )
 
     assert opened == [(str(path), 0o600)]
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
-    assert path.read_text() == "context: phoenix\n"
+    assert path.read_text() == "context: rack1\n"
