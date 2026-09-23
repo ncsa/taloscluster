@@ -88,14 +88,12 @@ def downstream_rancher_id(root: Path) -> str | None:
     """The Rancher cluster id (c-xxxxx) the downstream cluster is registered as.
 
     Read from the cattle-cluster-agent credentials secret in cattle-system
-    (`cattle-credentials-*` secret, `namespace` key). Returns None when Rancher is
-    not installed (no agent), meaning the cluster is unrelated to any existing
-    Rancher cluster and can't be a re-run.
+    (`cattle-credentials-*` secret, `namespace` key) via the shared
+    `taloscluster.k8s.rancher` helper. Returns None only when the cluster has no
+    Rancher identity to act on (no agent, or an agent still installing); a read
+    that fails while cattle-system exists raises, so a transient kube-api error
+    is never mistaken for "no agent" and never re-registers the cluster.
     """
-    # The namespace pre-check keeps the "no agent" distinction explicit before
-    # the shared helper parses the id from the credentials secret.
-    if _kubectl(root, "get", "ns", "cattle-system") is None:
-        return None
     return rancher.cluster_id(root / "kubeconfig")
 
 
@@ -265,14 +263,33 @@ def converge(ctx: Context, assume_yes: bool = False) -> dict:
 
 
 def _remove_agent(root: Path) -> None:
-    """Remove the Rancher agent (cattle-system) from the downstream cluster."""
+    """Remove the Rancher agent (cattle-system) from the downstream cluster.
+
+    The delete runs with `--wait=false`: namespace deletion is asynchronous and
+    can outrun any sane subprocess timeout while its finalizers drain, so the
+    command only has to be accepted by the kube-api. The exit status is checked,
+    so a rejected delete fails the destroy instead of reporting success.
+    """
     if _kubectl(root, "get", "ns", "cattle-system") is None:
         return
     if dry_run():
         action("delete cattle-system namespace (uninstall Rancher agent) via kubectl")
         return
     action("uninstalling Rancher agent: delete cattle-system via kubectl")
-    _kubectl(root, "delete", "ns", "cattle-system")
+    args = [kubectl.BIN, "--kubeconfig", str(root / "kubeconfig"),
+            "delete", "ns", "cattle-system", "--wait=false"]
+    try:
+        proc = kubectl._run(args, capture=True, check=False)
+    except subprocess.TimeoutExpired as e:
+        raise RancherError(
+            f"{kubectl.display(args)} timed out ({kubectl.RUN_TIMEOUT:.0f}s); "
+            "investigate the cluster's kube-api and retry destroy"
+        ) from e
+    if proc.returncode != 0:
+        raise RancherError(
+            f"uninstalling the Rancher agent failed: {kubectl.display(args)}: "
+            f"{(proc.stderr or '').strip()}"
+        )
 
 
 def destroy(ctx: Context, assume_yes: bool = False) -> None:

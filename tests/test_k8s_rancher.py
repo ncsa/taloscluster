@@ -13,14 +13,16 @@ from pathlib import Path
 
 import pytest
 
+from taloscluster.errors import ReconcileError
 from taloscluster.k8s import rancher
 
 
-def _proc(returncode, stdout=""):
+def _proc(returncode, stdout="", stderr=""):
     class Proc:
         def __init__(self):
             self.returncode = returncode
             self.stdout = stdout
+            self.stderr = stderr
 
     return Proc()
 
@@ -32,7 +34,14 @@ def _secret(name, namespace):
     }
 
 
-def test_cluster_id_reads_the_credentials_namespace(monkeypatch):
+def _kubeconfig(tmp_path):
+    """A (non-empty) kubeconfig path; cluster_id probes it only when it exists."""
+    path = tmp_path / "kubeconfig"
+    path.write_text("apiVersion: v1\nkind: Config\n")
+    return path
+
+
+def test_cluster_id_reads_the_credentials_namespace(monkeypatch, tmp_path):
     payload = json.dumps({
         "items": [_secret("cattle-credentials-abc", "c-abc12")],
     })
@@ -41,35 +50,73 @@ def test_cluster_id_reads_the_credentials_namespace(monkeypatch):
         rancher.kubectl, "_run",
         lambda args, **kw: calls.append(args) or _proc(0, payload),
     )
-    assert rancher.cluster_id(Path("/root/kubeconfig")) == "c-abc12"
+    assert rancher.cluster_id(_kubeconfig(tmp_path)) == "c-abc12"
     assert "--kubeconfig" in calls[0]
-    assert "/root/kubeconfig" in calls[0]
+    # the namespace pre-check runs before the credentials secret is read
+    assert calls[0][-3:] == ["get", "ns", "cattle-system"]
+    assert calls[1][-6:] == ["get", "secret", "-n", "cattle-system", "-o", "json"]
 
 
-def test_cluster_id_is_none_when_kubectl_fails(monkeypatch):
-    # A failed kubectl call means no agent (cattle-system absent, cluster down);
-    # there is no Rancher identity to act on.
-    monkeypatch.setattr(rancher.kubectl, "_run", lambda *a, **k: _proc(1))
-    assert rancher.cluster_id(Path("kubeconfig")) is None
+def test_cluster_id_is_none_when_cattle_system_is_absent(monkeypatch, tmp_path):
+    """A `NotFound` on the cattle-system namespace is a definitive "no agent"."""
+    monkeypatch.setattr(
+        rancher.kubectl, "_run",
+        lambda *a, **k: _proc(1, stderr='Error from server (NotFound): namespaces '
+                                   '"cattle-system" not found'),
+    )
+    assert rancher.cluster_id(_kubeconfig(tmp_path)) is None
 
 
-def test_cluster_id_reports_a_hung_kubectl_as_an_error(monkeypatch):
+def test_cluster_id_raises_when_cattle_system_cannot_be_checked(monkeypatch, tmp_path):
+    """A namespace probe that fails for any other reason (api down, bad
+    kubeconfig) must not read as "no agent": the reader cannot tell, so it
+    raises instead of letting a caller re-register the cluster."""
+    monkeypatch.setattr(
+        rancher.kubectl, "_run",
+        lambda *a, **k: _proc(1, stderr="The connection to the server was refused"),
+    )
+    with pytest.raises(ReconcileError, match="could not tell whether"):
+        rancher.cluster_id(_kubeconfig(tmp_path))
+
+
+def test_cluster_id_is_none_without_a_kubeconfig(tmp_path, monkeypatch):
+    """No kubeconfig means the cluster was never converged: there is no
+    downstream cluster to carry an agent, and nothing is shelled out to."""
+    calls = []
+    monkeypatch.setattr(
+        rancher.kubectl, "_run", lambda args, **kw: calls.append(args)
+    )
+    assert rancher.cluster_id(tmp_path / "kubeconfig") is None
+    assert calls == []
+
+
+def test_cluster_id_reports_a_hung_kubectl_as_an_error(monkeypatch, tmp_path):
     """A timeout is not a "no agent" negative answer: the api accepted TCP but
     never answered, so the reader must raise a clear error instead of letting a
     raw TimeoutExpired leak or silently reporting the cluster as unregistered."""
     import subprocess
 
-    from taloscluster.errors import ReconcileError
-
     def hung(*_a, **_k):
-        raise subprocess.TimeoutExpired(["kubectl", "get", "secret"], 30)
+        raise subprocess.TimeoutExpired(["kubectl", "get", "ns"], 30)
 
     monkeypatch.setattr(rancher.kubectl, "_run", hung)
     with pytest.raises(ReconcileError, match="Rancher identity timed out"):
-        rancher.cluster_id(Path("kubeconfig"))
+        rancher.cluster_id(_kubeconfig(tmp_path))
 
 
-def test_cluster_id_is_none_without_a_credentials_secret(monkeypatch):
+def test_cluster_id_raises_when_the_secret_read_fails(monkeypatch, tmp_path):
+    """With cattle-system present, a failed credentials-secret read is a failed
+    read, not an absent agent: the agent may well be registered, and reading
+    None here would strip the Rancher annotation or re-register the cluster."""
+    procs = [_proc(0), _proc(1, stderr="Error from server (Forbidden)")]
+    monkeypatch.setattr(
+        rancher.kubectl, "_run", lambda args, **kw: procs.pop(0),
+    )
+    with pytest.raises(ReconcileError, match="could not read the downstream"):
+        rancher.cluster_id(_kubeconfig(tmp_path))
+
+
+def test_cluster_id_is_none_without_a_credentials_secret(monkeypatch, tmp_path):
     monkeypatch.setattr(
         rancher.kubectl, "_run",
         lambda *a, **k: _proc(0, json.dumps({"items": [
@@ -77,17 +124,20 @@ def test_cluster_id_is_none_without_a_credentials_secret(monkeypatch):
             {"metadata": {"name": "cattle-credentials-x"}, "data": {}},
         ]})),
     )
-    assert rancher.cluster_id(Path("kubeconfig")) is None
+    assert rancher.cluster_id(_kubeconfig(tmp_path)) is None
 
 
-def test_cluster_id_is_none_on_unparseable_output(monkeypatch):
+def test_cluster_id_raises_on_unparseable_output(monkeypatch, tmp_path):
+    """Unparseable output while cattle-system exists is a failed read: reporting
+    it as "no agent" would let converge re-register the cluster."""
     monkeypatch.setattr(
         rancher.kubectl, "_run", lambda *a, **k: _proc(0, "not json"),
     )
-    assert rancher.cluster_id(Path("kubeconfig")) is None
+    with pytest.raises(ReconcileError, match="could not read the downstream"):
+        rancher.cluster_id(_kubeconfig(tmp_path))
 
 
-def test_cluster_id_is_none_on_unbase64able_namespace(monkeypatch):
+def test_cluster_id_is_none_on_unbase64able_namespace(monkeypatch, tmp_path):
     monkeypatch.setattr(
         rancher.kubectl, "_run",
         lambda *a, **k: _proc(0, json.dumps({"items": [
@@ -95,32 +145,30 @@ def test_cluster_id_is_none_on_unbase64able_namespace(monkeypatch):
              "data": {"namespace": "not-base64!!"}},
         ]})),
     )
-    assert rancher.cluster_id(Path("kubeconfig")) is None
+    assert rancher.cluster_id(_kubeconfig(tmp_path)) is None
 
 
-def test_rancher_plugin_delegates_to_the_shared_helper(monkeypatch):
+def test_rancher_plugin_delegates_to_the_shared_helper(monkeypatch, tmp_path):
     """`downstream_rancher_id` must call the shared helper, so the rancher
     plugin no longer carries its own copy of the secret parsing."""
     from taloscluster_rancher import reconcile as _converge
 
     called = []
-    monkeypatch.setattr(_converge, "_kubectl", lambda root, *a: "cattle-system")
     monkeypatch.setattr(
         rancher, "cluster_id", lambda kc: called.append(kc) or "c-abc12",
     )
-    assert _converge.downstream_rancher_id(Path("/root")) == "c-abc12"
-    assert called == [Path("/root") / "kubeconfig"]
+    assert _converge.downstream_rancher_id(tmp_path) == "c-abc12"
+    assert called == [tmp_path / "kubeconfig"]
 
 
-def test_rancher_plugin_keeps_the_namespace_pre_check(monkeypatch):
-    """When cattle-system is absent the plugin returns None without consulting
-    the shared helper."""
+def test_rancher_plugin_surfaces_the_shared_helpers_no_agent_none(monkeypatch, tmp_path):
+    """Absence ("no agent") is decided by the shared helper alone, so both
+    plugins read the same distinction between an absent agent and a failed
+    read that must raise instead."""
     from taloscluster_rancher import reconcile as _converge
 
-    monkeypatch.setattr(_converge, "_kubectl", lambda root, *a: None)
-    monkeypatch.setattr(rancher, "cluster_id",
-                        lambda kc: pytest.fail("helper must not run"))
-    assert _converge.downstream_rancher_id(Path("/root")) is None
+    monkeypatch.setattr(rancher, "cluster_id", lambda kc: None)
+    assert _converge.downstream_rancher_id(tmp_path) is None
 
 
 def test_argocd_plugin_delegates_to_the_shared_helper(monkeypatch):
@@ -134,7 +182,7 @@ def test_argocd_plugin_delegates_to_the_shared_helper(monkeypatch):
     assert called == [Path("/root") / "kubeconfig"]
 
 
-def test_cluster_id_is_bounded(monkeypatch):
+def test_cluster_id_is_bounded(monkeypatch, tmp_path):
     """The shared reader routes through the kubectl wrapper's wall-clock bound, so
     a kube-api that accepts TCP but never answers cannot hang converge's check."""
     captured = {}
@@ -144,7 +192,7 @@ def test_cluster_id_is_bounded(monkeypatch):
         return _proc(0, json.dumps({"items": [_secret("cattle-credentials-a", "c-1")]}))
 
     monkeypatch.setattr(rancher.kubectl.subprocess, "run", run)
-    assert rancher.cluster_id(Path("/root/kubeconfig")) == "c-1"
+    assert rancher.cluster_id(_kubeconfig(tmp_path)) == "c-1"
     assert captured["timeout"] == rancher.kubectl.RUN_TIMEOUT
 
 

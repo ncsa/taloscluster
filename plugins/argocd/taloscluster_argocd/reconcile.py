@@ -14,6 +14,12 @@ cluster itself (its own kubeconfig, the `cinder-csi` namespace, whose Namespace
 it ensures first), so the provider credential never flows through ArgoCD. When
 cinder is disabled it removes any previously delivered Secret.
 
+Converge is drift-driven: it compares each rendered manifest against the live
+object (`kubectl diff`, like `check`) and applies only the ones that are missing
+or drifted, so a converged cluster plans no work. The read-only comparisons run
+in `plan` too, so a plan against an unreachable ArgoCD cluster fails rather than
+pretending to know what it would apply.
+
 `destroy` removes them (apps, project, then secret, repo, cluster-apps).
 """
 
@@ -39,14 +45,6 @@ def _load(root: Path):
     cfg = Config.load(root)
     target = Config.load_secrets(root)
     return cfg, target
-
-
-def _validate(target: ApplyTarget) -> None:
-    if not target.uses_kubectl:
-        raise RuntimeError(
-            "argocd uses url+token mode, but kubectl mode is required; set "
-            "argocd.kubeconfig or argocd.context in secrets.yaml"
-        )
 
 
 def _resolve_rancher(ctx: Context) -> None:
@@ -107,51 +105,65 @@ def _ost(target: ApplyTarget) -> tuple[str, str] | None:
     return (target.openstack_credential_id or "", target.openstack_credential_secret or "")
 
 
+#: The manifests applied to the ArgoCD cluster, in apply order, with the log
+#: line converge reports for each. The cinder Secret is delivered to this
+#: cluster itself, not through this table.
+_ARGOCD_APPLY_ORDER = (
+    ("secret", "apply cluster secret to ArgoCD"),
+    ("project", "apply app project to ArgoCD"),
+    ("repo", "apply git repository secret to ArgoCD"),
+    ("apps", "apply root application to ArgoCD"),
+    ("cluster-apps", "apply cluster apps application to ArgoCD"),
+)
+
+
 def converge(ctx: Context, assume_yes: bool = False) -> dict:
     cfg, target = _load(ctx.root)
-    _validate(target)
-    _resolve_rancher(ctx)
 
+    # the deferral is decided first: a plan before bootstrap has neither the
+    # kubeconfig nor the endpoints the registration is built from, so there is
+    # nothing to resolve or render yet.
     reason = _deferred(ctx)
     if reason:
         info(f"argocd registration deferred ({reason}); nothing would be applied yet")
         return {"deferred": True, "reason": reason, "server": cfg.name}
 
+    _resolve_rancher(ctx)
+
     log("render manifests")
     m = render(cfg, ctx, git=_git(target), ost=_ost(target))
 
+    # kubectl apply is idempotent, but applying every rendered manifest on every
+    # run would report work in each plan and rewrite live objects (and their
+    # annotations) needlessly; only the missing or drifted ones are applied,
+    # against the same comparison `check` reports.
+    matching = {
+        name: _probe(kube.matches, kube.matches_downstream, target, ctx.root, doc, name)
+        for name, doc in m.items()
+    }
+
     if "cinder-secret" in m:
-        log("apply cinder namespace and cloud-config secret to the cluster")
-        kube.apply_downstream(ctx.root, cinder_namespace())
-        kube.apply_downstream(ctx.root, m["cinder-secret"])
+        if not matching["cinder-secret"]:
+            log("apply cinder namespace and cloud-config secret to the cluster")
+            kube.apply_downstream(ctx.root, cinder_namespace())
+            kube.apply_downstream(ctx.root, m["cinder-secret"])
     elif cfg.openstack is not None and not enabled(cfg.cinder):
-        log("remove orphaned cinder cloud-config secret (cinder disabled)")
-        kube.delete_secret_downstream(ctx.root, CINDER_NAMESPACE, CINDER_SECRET_NAME)
+        if kube.secret_exists_downstream(ctx.root, CINDER_NAMESPACE, CINDER_SECRET_NAME):
+            log("remove orphaned cinder cloud-config secret (cinder disabled)")
+            kube.delete_secret_downstream(ctx.root, CINDER_NAMESPACE, CINDER_SECRET_NAME)
 
-    log("apply cluster secret to ArgoCD")
-    kube.apply(target, ctx.root, m["secret"])
-
-    log("apply app project to ArgoCD")
-    kube.apply(target, ctx.root, m["project"])
-
-    if "repo" in m:
-        log("apply git repository secret to ArgoCD")
-        kube.apply(target, ctx.root, m["repo"])
-
-    if "apps" in m:
-        log("apply root application to ArgoCD")
-        kube.apply(target, ctx.root, m["apps"])
-
-    if "cluster-apps" in m:
-        log("apply cluster apps application to ArgoCD")
-        kube.apply(target, ctx.root, m["cluster-apps"])
+    applied = []
+    for name, message in _ARGOCD_APPLY_ORDER:
+        if name in m and not matching[name]:
+            log(message)
+            kube.apply(target, ctx.root, m[name])
+            applied.append(name)
     info("done")
-    return {"applied": sorted(m), "server": cfg.name}
+    return {"applied": applied, "server": cfg.name}
 
 
 def destroy(ctx: Context, assume_yes: bool = False) -> None:
     cfg, target = _load(ctx.root)
-    _validate(target)
 
     log("render manifests")
     m = render(cfg, ctx, git=_git(target), ost=_ost(target))
@@ -187,7 +199,6 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
 def _present(ctx: Context) -> dict[str, bool]:
     """Which of the rendered manifests already exist on the ArgoCD cluster."""
     cfg, target = _load(ctx.root)
-    _validate(target)
     m = render(cfg, ctx, git=_git(target), ost=_ost(target))
     return {
         name: _probe(kube.exists, kube.exists_downstream, target, ctx.root, doc, name)
@@ -198,7 +209,6 @@ def _present(ctx: Context) -> dict[str, bool]:
 def _matching(ctx: Context) -> dict[str, bool]:
     """Which rendered resources exactly match their live ArgoCD objects."""
     cfg, target = _load(ctx.root)
-    _validate(target)
     m = render(cfg, ctx, git=_git(target), ost=_ost(target))
     return {
         name: _probe(kube.matches, kube.matches_downstream, target, ctx.root, doc, name)

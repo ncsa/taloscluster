@@ -115,7 +115,6 @@ def test_converge_applies_cinder_secret_to_cluster_not_argocd(monkeypatch):
     monkeypatch.setattr(
         reconcile, "_load", lambda root: (cfg, ApplyTarget(context="argocd"))
     )
-    monkeypatch.setattr(reconcile, "_validate", lambda _target: None)
 
     def mk(name, fn):
         monkeypatch.setattr(reconcile.kube, name, fn)
@@ -136,6 +135,51 @@ def test_converge_applies_cinder_secret_to_cluster_not_argocd(monkeypatch):
     assert "cr" not in argocd
 
 
+def test_converge_skips_the_cinder_secret_when_it_matches(monkeypatch):
+    """A delivered cinder Secret that already matches is not applied again."""
+    downstream = []
+    cfg = SimpleNamespace(name="test")
+    monkeypatch.setattr(
+        reconcile, "_load", lambda root: (cfg, ApplyTarget(context="argocd"))
+    )
+    monkeypatch.setattr(reconcile.kube, "apply_downstream",
+                        lambda root, doc: downstream.append(doc))
+    monkeypatch.setattr(reconcile.kube, "matches", lambda _t, _r, _doc: True)
+    monkeypatch.setattr(reconcile.kube, "matches_downstream", lambda _r, _doc: True)
+    monkeypatch.setattr(reconcile, "render", lambda *a, **k: {
+        "secret": "s", "project": "p", "cinder-secret": "cr"})
+
+    result = reconcile.converge(SimpleNamespace(root=None))
+
+    assert downstream == []
+    assert result["applied"] == []
+
+
+def test_converge_applies_only_drifted_manifests(monkeypatch):
+    """Converge compares each rendered manifest against the live object and
+    applies only the missing or drifted ones, so a converged cluster plans no
+    work instead of re-applying all five manifests on every run."""
+    applied = []
+    cfg = SimpleNamespace(name="test", openstack=None, cinder={})
+    monkeypatch.setattr(
+        reconcile, "_load", lambda root: (cfg, ApplyTarget(context="argocd"))
+    )
+    monkeypatch.setattr(reconcile.kube, "apply",
+                        lambda _t, _r, doc: applied.append(doc))
+    # every manifest matches except the cluster Secret and the repo credential
+    monkeypatch.setattr(
+        reconcile.kube, "matches",
+        lambda _t, _r, doc: doc not in ("s", "r"),
+    )
+    monkeypatch.setattr(reconcile, "render", lambda *a, **k: {
+        "secret": "s", "project": "p", "repo": "r", "apps": "a", "cluster-apps": "c"})
+
+    result = reconcile.converge(SimpleNamespace(root=None))
+
+    assert applied == ["s", "r"]
+    assert result["applied"] == ["secret", "repo"]
+
+
 def test_converge_deletes_orphaned_cinder_secret_when_disabled(monkeypatch):
     """Disabling cinder on an OpenStack cluster removes the delivered credential Secret."""
     cfg = SimpleNamespace(name="test", openstack=object(), cinder={"enabled": False})
@@ -143,17 +187,39 @@ def test_converge_deletes_orphaned_cinder_secret_when_disabled(monkeypatch):
     monkeypatch.setattr(
         reconcile, "_load", lambda root: (cfg, ApplyTarget(context="argocd"))
     )
-    monkeypatch.setattr(reconcile, "_validate", lambda _target: None)
     monkeypatch.setattr(reconcile, "render", lambda *a, **k: {
         "secret": "s", "project": "p"})
     monkeypatch.setattr(reconcile, "cinder_namespace", lambda: "ns")
     monkeypatch.setattr(reconcile.kube, "apply",
                         lambda _t, _r, doc: None)
+    monkeypatch.setattr(reconcile.kube, "matches", lambda _t, _r, _doc: True)
+    monkeypatch.setattr(reconcile.kube, "secret_exists_downstream",
+                        lambda root, ns, name: True)
     monkeypatch.setattr(reconcile.kube, "delete_secret_downstream",
                         lambda root, ns, name: deleted.append((ns, name)))
 
     reconcile.converge(SimpleNamespace(root=None))
     assert deleted == [("cinder-csi", "cinder-csi-cloud-config")]
+
+
+def test_converge_leaves_an_absent_orphaned_cinder_secret_alone(monkeypatch):
+    """No delivered Secret, nothing to clean up: the delete (and its plan line)
+    is skipped instead of issuing a doomed `--ignore-not-found` every run."""
+    cfg = SimpleNamespace(name="test", openstack=object(), cinder={"enabled": False})
+    deleted = []
+    monkeypatch.setattr(
+        reconcile, "_load", lambda root: (cfg, ApplyTarget(context="argocd"))
+    )
+    monkeypatch.setattr(reconcile, "render", lambda *a, **k: {
+        "secret": "s", "project": "p"})
+    monkeypatch.setattr(reconcile.kube, "matches", lambda _t, _r, _doc: True)
+    monkeypatch.setattr(reconcile.kube, "secret_exists_downstream",
+                        lambda root, ns, name: False)
+    monkeypatch.setattr(reconcile.kube, "delete_secret_downstream",
+                        lambda root, ns, name: deleted.append((ns, name)))
+
+    reconcile.converge(SimpleNamespace(root=None))
+    assert deleted == []
 
 
 def test_converge_does_not_cleanup_orphan_on_non_openstack(monkeypatch):
@@ -163,11 +229,13 @@ def test_converge_does_not_cleanup_orphan_on_non_openstack(monkeypatch):
     monkeypatch.setattr(
         reconcile, "_load", lambda root: (cfg, ApplyTarget(context="argocd"))
     )
-    monkeypatch.setattr(reconcile, "_validate", lambda _target: None)
     monkeypatch.setattr(reconcile, "render", lambda *a, **k: {
         "secret": "s", "project": "p"})
     monkeypatch.setattr(reconcile.kube, "apply",
                         lambda _t, _r, doc: None)
+    monkeypatch.setattr(reconcile.kube, "matches", lambda _t, _r, _doc: True)
+    monkeypatch.setattr(reconcile.kube, "secret_exists_downstream",
+                        lambda root, ns, name: pytest.fail("must not probe"))
     monkeypatch.setattr(reconcile.kube, "delete_secret_downstream",
                         lambda root, ns, name: deleted.append((ns, name)))
 
@@ -179,7 +247,6 @@ def test_destroy_deletes_cinder_secret_from_cluster(monkeypatch):
     deleted = []
     named = []
     monkeypatch.setattr(reconcile, "_load", lambda root: (object(), ApplyTarget(context="argocd")))
-    monkeypatch.setattr(reconcile, "_validate", lambda _target: None)
 
     def mk(name, fn):
         monkeypatch.setattr(reconcile.kube, name, fn)
@@ -240,12 +307,12 @@ def test_standalone_converge_resolves_the_downstream_rancher_id(monkeypatch):
     monkeypatch.setattr(reconcile, "_load",
                         lambda root: (SimpleNamespace(name="t", openstack=None),
                                       ApplyTarget(context="argocd")))
-    monkeypatch.setattr(reconcile, "_validate", lambda _target: None)
     monkeypatch.setattr(reconcile, "render",
                         lambda *a, **k: {"secret": "s", "project": "p"})
+    monkeypatch.setattr(reconcile.kube, "matches", lambda _t, _r, _d: False)
     monkeypatch.setattr(reconcile.kube, "apply", lambda _t, _r, _d: None)
 
-    assert reconcile.converge(ctx)["applied"] == ["project", "secret"]
+    assert reconcile.converge(ctx)["applied"] == ["secret", "project"]
     assert ctx.results["rancher"]["cluster_id"] == "c-abc12"
 
 
@@ -275,9 +342,9 @@ def test_no_rancher_id_when_the_agent_is_absent(monkeypatch):
     monkeypatch.setattr(reconcile, "_load",
                         lambda root: (SimpleNamespace(name="t", openstack=None),
                                       ApplyTarget(context="argocd")))
-    monkeypatch.setattr(reconcile, "_validate", lambda _target: None)
     monkeypatch.setattr(reconcile, "render",
                         lambda *a, **k: {"secret": "s", "project": "p"})
+    monkeypatch.setattr(reconcile.kube, "matches", lambda _t, _r, _d: False)
     monkeypatch.setattr(reconcile.kube, "apply", lambda _t, _r, _d: None)
 
     reconcile.converge(ctx)

@@ -43,7 +43,6 @@ def _stub_load(monkeypatch):
         lambda root: (SimpleNamespace(name="test", openstack=None, cinder={}),
                       ApplyTarget(context="argocd")),
     )
-    monkeypatch.setattr(reconcile, "_validate", lambda _target: None)
 
 
 @pytest.fixture(autouse=True)
@@ -93,8 +92,11 @@ def test_plan_with_kubeconfig_and_endpoint_renders(tmp_path, monkeypatch):
     _stub_load(monkeypatch)
     calls = []
 
+    # the kubeconfig is a stub, so the downstream identity probe must not run
+    monkeypatch.setattr(reconcile.kube, "downstream_rancher_id", lambda root: None)
     monkeypatch.setattr(reconcile, "render", lambda *a, **k: calls.append("render") or {
         "secret": "s", "project": "p"})
+    monkeypatch.setattr(reconcile.kube, "matches", lambda _t, _r, _doc: False)
     monkeypatch.setattr(reconcile.kube, "apply", lambda _t, _r, doc: calls.append("apply"))
 
     output.set_dry_run(True)
@@ -111,6 +113,7 @@ def test_real_converge_is_never_deferred(tmp_path, monkeypatch):
     _stub_load(monkeypatch)
 
     monkeypatch.setattr(reconcile, "render", lambda *a, **k: {"secret": "s", "project": "p"})
+    monkeypatch.setattr(reconcile.kube, "matches", lambda _t, _r, _doc: False)
     monkeypatch.setattr(reconcile.kube, "apply", lambda _t, _r, doc: None)
 
     result = reconcile.converge(ctx)

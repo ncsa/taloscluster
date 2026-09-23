@@ -77,10 +77,6 @@ class ApplyTarget:
     openstack_credential_id: str | None = None
     openstack_credential_secret: str | None = None
 
-    @property
-    def uses_kubectl(self) -> bool:
-        return self.kubeconfig is not None or self.context is not None
-
 
 @dataclass(frozen=True)
 class Openstack:
@@ -236,6 +232,16 @@ _PER_APP_KEYS = {
 #: Keys each `argocd.git` / `argocd.infra` repository block accepts; the git
 #: block also carries the repository credentials, wherever they live.
 _REPO_KEYS = {"git": {"url", "username", "token"}, "infra": {"url"}}
+#: argocd per-app sections that deploy the same component as a `charts:` entry.
+#: Enabling both makes ArgoCD's self-healing fight helm over one release, so the
+#: combination is refused.
+_OVERLAPPING_CHARTS = {
+    "metallb": "metallb",
+    "ingress": "traefik",
+    "certmanager": "cert-manager",
+    "sealedsecrets": "sealed-secrets",
+    "nfs": "nfs",
+}
 #: Apps whose `version:` is forwarded to the rendered chart. Setting `version`
 #: on any other app (`ingress`, `nfs`, `monitoring`) is silently ignored by the
 #: renderer today, so it is refused here instead; Traefik's pin lives at
@@ -259,7 +265,11 @@ def validate_argocd(root: Path) -> None:
       - only one of `git.url` / `infra.url` set (missing paired repository URLs),
       - git credentials without `git.url` (credentials without a Git URL),
       - a `url`/`token` apply target without a `kubeconfig`/`context` (an
-        unsupported mode the plugin would otherwise silently discard).
+        unsupported mode the plugin would otherwise silently discard),
+      - `cinder.enabled` without the OpenStack application credential its
+        delivered Secret is built from,
+      - a component enabled under both `argocd:` and `charts:` (ArgoCD's
+        self-healing would fight helm over one release).
     Raises ConfigError on the first problem. A missing config file is treated as
     absent configuration (the plugin has nothing supplied to validate), matching
     how activation already tolerates a missing file; core enforces that the files
@@ -445,6 +455,42 @@ def validate_argocd(root: Path) -> None:
             if key in s_openstack and not isinstance(s_openstack[key], str):
                 raise ConfigError(
                     f"{where} (openstack.{key}) must be a string"
+                )
+
+    # cinder's delivered cloud.conf Secret is built from the OpenStack
+    # application credential; enabling the app without it can only fail late,
+    # at render time, so it is refused here with the same message converge
+    # would have raised.
+    cinder = sec.get("cinder")
+    if isinstance(cinder, dict) and cinder.get("enabled") is True:
+        credentials = s_openstack if isinstance(s_openstack, dict) else {}
+        if not (credentials.get("credential_id") and credentials.get("credential_secret")):
+            raise ConfigError(
+                f"{where} (argocd.cinder): enabled requires an OpenStack application "
+                "credential; set openstack.credential_id and "
+                "openstack.credential_secret in secrets.yaml"
+            )
+
+    # one component, one manager: an app ArgoCD deploys through the infra chart
+    # and the same component installed by the charts plugin would each keep
+    # "fixing" the other's release (ArgoCD self-heal vs helm), so the overlap is
+    # refused rather than left to fight on the cluster.
+    charts = raw.get("charts")
+    if isinstance(charts, dict):
+        for app, entry in sorted(_OVERLAPPING_CHARTS.items()):
+            argocd_side = sec.get(app)
+            chart_side = charts.get(entry)
+            if (
+                isinstance(argocd_side, dict)
+                and argocd_side.get("enabled") is True
+                and isinstance(chart_side, dict)
+                and chart_side.get("enabled", True)
+            ):
+                raise ConfigError(
+                    f"{where} (argocd.{app}): {entry} is enabled under charts: too; "
+                    "the same component must be managed by one system, since "
+                    "ArgoCD's self-healing would fight helm over it. Enable it "
+                    "under argocd or under charts, not both"
                 )
 
 

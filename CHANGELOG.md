@@ -86,6 +86,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Make ArgoCD converge apply only missing or drifted manifests, refuse a component enabled under both argocd and charts, and report a failed Rancher agent removal or identity read.
 - Activate the charts plugin only when a chart is enabled, so an untouched scaffold needs no helm.
 - Report pinned-version and values drift in charts `check`, and stop converge re-upgrading chart versions that differ only by a leading `v`.
 - Retry a helm release left `failed` or `pending-*` by an interrupted converge.

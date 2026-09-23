@@ -59,6 +59,24 @@ def exists_downstream(root: Path, manifest: str) -> bool:
     return _run_get(_downstream_args(root), manifest)
 
 
+def secret_exists_downstream(root: Path, namespace: str, name: str) -> bool:
+    """Whether one named Secret exists on this cluster (its own kubeconfig).
+
+    Read-only, so it runs under --dry-run too. Companion to
+    :func:`delete_secret_downstream`, which removes that Secret: the existence
+    probe lets converge skip the delete (and the plan line for it) when there is
+    nothing to remove.
+    """
+    args = _downstream_args(root) + [
+        "get", "secret", name, "--namespace", namespace,
+    ]
+    try:
+        proc = kubectl._run(args, capture=True, check=False)
+    except subprocess.TimeoutExpired as e:
+        raise ApplyError(_timed_out(kubectl.display(args))) from e
+    return proc.returncode == 0
+
+
 def downstream_rancher_id(root: Path) -> str | None:
     """This cluster's own Rancher cluster id (c-xxxxx), or None when the agent is absent.
 

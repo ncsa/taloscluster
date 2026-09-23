@@ -18,15 +18,20 @@ from taloscluster.errors import ConfigError
 from taloscluster_argocd.config import validate_argocd
 
 
-def _write(root, argocd_cluster=None, argocd_secrets=None, name="testcluster"):
+def _write(root, argocd_cluster=None, argocd_secrets=None, openstack_secrets=None,
+           charts=None, name="testcluster"):
     root.mkdir(parents=True, exist_ok=True)
     cluster = {"name": name, "include": ["secrets.yaml"]}
     if argocd_cluster is not None:
         cluster["argocd"] = argocd_cluster
+    if charts is not None:
+        cluster["charts"] = charts
     (root / "cluster.yaml").write_text(yaml.safe_dump(cluster))
     secrets = {}
     if argocd_secrets is not None:
         secrets["argocd"] = argocd_secrets
+    if openstack_secrets is not None:
+        secrets["openstack"] = openstack_secrets
     (root / "secrets.yaml").write_text(yaml.safe_dump(secrets))
 
 
@@ -312,7 +317,14 @@ def test_version_on_an_app_that_does_not_forward_it_is_rejected(tmp_path, app):
 
 @pytest.mark.parametrize("app", ["metallb", "sealedsecrets", "certmanager", "cinder"])
 def test_forwarded_version_is_accepted(tmp_path, app):
-    _write(tmp_path, argocd_cluster={app: {"enabled": True, "version": "34.0.0"}})
+    _write(
+        tmp_path,
+        argocd_cluster={app: {"enabled": True, "version": "34.0.0"}},
+        openstack_secrets=(
+            {"credential_id": "id", "credential_secret": "secret"}
+            if app == "cinder" else None
+        ),
+    )
     _ok(tmp_path)
 
 
@@ -371,6 +383,93 @@ def test_valid_full_config_with_versions_passes(tmp_path):
                         "nfs": {"enabled": True, "servers": {"shared": {"path": "/e"}}}},
         argocd_secrets={"kubeconfig": "../argocd-kubeconfig"},
     )
+    _ok(tmp_path)
+
+
+# ---- cinder without an OpenStack credential --------------------------------
+
+
+def test_cinder_enabled_without_openstack_credential_rejected(tmp_path):
+    """The delivered cloud.conf Secret is built from the application credential,
+    so enabling cinder without one is refused in the validate phase instead of
+    failing render at converge time."""
+    _write(tmp_path, argocd_cluster={"cinder": {"enabled": True}})
+    with pytest.raises(ConfigError, match="argocd.cinder.*requires an OpenStack"):
+        validate_argocd(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "ost", [{"credential_id": "id"}, {"credential_secret": "secret"}, {}]
+)
+def test_cinder_enabled_with_half_a_credential_rejected(tmp_path, ost):
+    _write(tmp_path, argocd_cluster={"cinder": {"enabled": True}},
+           openstack_secrets=ost)
+    with pytest.raises(ConfigError, match="argocd.cinder.*requires an OpenStack"):
+        validate_argocd(tmp_path)
+
+
+def test_cinder_enabled_with_a_credential_passes(tmp_path):
+    _write(tmp_path, argocd_cluster={"cinder": {"enabled": True}},
+           openstack_secrets={"credential_id": "id", "credential_secret": "secret"})
+    _ok(tmp_path)
+
+
+def test_cinder_disabled_without_a_credential_passes(tmp_path):
+    _write(tmp_path, argocd_cluster={"cinder": {"enabled": False}})
+    _ok(tmp_path)
+
+
+# ---- the same component under argocd and charts ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("app", "entry"),
+    [
+        ("metallb", "metallb"),
+        ("ingress", "traefik"),
+        ("certmanager", "cert-manager"),
+        ("sealedsecrets", "sealed-secrets"),
+        ("nfs", "nfs"),
+    ],
+)
+def test_a_component_enabled_under_both_argocd_and_charts_is_refused(
+    tmp_path, app, entry
+):
+    """ArgoCD's self-healing and helm would fight over one release, so enabling
+    the same component under both plugins is refused in the validate phase."""
+    _write(tmp_path,
+           argocd_cluster={app: {"enabled": True}},
+           charts={entry: {"enabled": True}})
+    with pytest.raises(ConfigError, match=f"argocd.{app}.*{entry}.*argocd or under charts"):
+        validate_argocd(tmp_path)
+
+
+def test_a_charts_entry_enabled_by_default_counts_as_enabled(tmp_path):
+    """A charts entry without `enabled` defaults to true, so the overlap fires."""
+    _write(tmp_path, argocd_cluster={"metallb": {"enabled": True}},
+           charts={"metallb": {"version": "latest"}})
+    with pytest.raises(ConfigError, match="argocd.metallb.*metallb"):
+        validate_argocd(tmp_path)
+
+
+def test_a_component_disabled_on_either_side_passes(tmp_path):
+    _write(tmp_path,
+           argocd_cluster={"metallb": {"enabled": True}, "nfs": {"enabled": False}},
+           charts={"metallb": {"enabled": False}, "nfs": {"enabled": True}})
+    _ok(tmp_path)
+
+
+def test_a_component_only_under_charts_passes(tmp_path):
+    _write(tmp_path, argocd_cluster={}, charts={"traefik": {"enabled": True}})
+    _ok(tmp_path)
+
+
+def test_a_charts_entry_argocd_does_not_deploy_passes(tmp_path):
+    """Only the overlapping components are refused; ceph or gateway under charts
+    never collide with an argocd app."""
+    _write(tmp_path,
+           argocd_cluster={"metallb": {"enabled": True}},
+           charts={"ceph": {"enabled": True}, "gateway": {"enabled": True}})
     _ok(tmp_path)
 
 
