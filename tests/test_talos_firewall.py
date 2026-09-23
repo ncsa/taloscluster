@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
+from taloscluster.errors import ConfigError
 from taloscluster.infrastructure import Endpoint, TalosContribution
 from taloscluster.talos import machineconfig
 
@@ -45,20 +47,56 @@ def test_firewall_documents_mirror_the_security_rules(make_config):
     # http stays open because nothing claims 80; https is claimed and restricted
     assert rules["open-tcp-80"]["ingress"] == [{"subnet": "0.0.0.0/0"}]
     assert "open-tcp-443" not in rules
-    assert rules["https"]["portSelector"] == {"ports": [443], "protocol": "tcp"}
-    assert rules["https"]["ingress"] == [{"subnet": "203.0.113.0/24"}]
-    assert rules["kubernetes"]["portSelector"] == {"ports": [6443], "protocol": "tcp"}
-    assert {s["subnet"] for s in rules["kubernetes"]["ingress"]} >= {
+    assert rules["security-https"]["portSelector"] == {"ports": [443], "protocol": "tcp"}
+    assert rules["security-https"]["ingress"] == [{"subnet": "203.0.113.0/24"}]
+    assert rules["security-kubernetes"]["portSelector"] == {"ports": [6443], "protocol": "tcp"}
+    assert {s["subnet"] for s in rules["security-kubernetes"]["ingress"]} >= {
         "100.64.0.0/10", "203.0.113.0/24",
     }
-    assert rules["talos"]["portSelector"] == {"ports": [50000], "protocol": "tcp"}
+    assert rules["security-talos"]["portSelector"] == {"ports": [50000], "protocol": "tcp"}
     # a rule without hosts closes its port: block already does that, no document
-    assert "metrics" not in rules
+    assert "security-metrics" not in rules
 
 
 def test_no_tailscale_rule_without_a_tailscale_section(make_config):
     cfg = make_config(remove=("tailscale",))
     assert "tailscale" not in _rules(machineconfig._firewall_docs(cfg))
+
+
+def test_user_rules_cannot_override_a_builtin_rule(make_config):
+    """talosctl merges NetworkRuleConfig documents by name, so a rule named like
+    a built-in would replace it; the `security-` prefix keeps them apart."""
+    cfg = make_config({
+        "security": {
+            "cluster-tcp": {"port": 2222, "hosts": {"office": "203.0.113.0/24"}},
+            "kubespan": {"port": 2223, "hosts": {"office": "203.0.113.0/24"}},
+            "tailscale": {"port": 2224, "hosts": {"office": "203.0.113.0/24"}},
+        },
+        "tailscale": {"login_server": "https://headscale.example.com"},
+        "talos": {"kubespan": True},
+        "metal": METAL,
+    })
+    rules = _rules(machineconfig._firewall_docs(cfg))
+
+    assert rules["cluster-tcp"]["portSelector"] == {"ports": ["1-65535"], "protocol": "tcp"}
+    assert rules["kubespan"]["portSelector"] == {"ports": [51820], "protocol": "udp"}
+    assert rules["tailscale"]["portSelector"] == {"ports": [41641], "protocol": "udp"}
+    assert rules["security-cluster-tcp"]["portSelector"] == {"ports": [2222], "protocol": "tcp"}
+    assert rules["security-kubespan"]["portSelector"] == {"ports": [2223], "protocol": "tcp"}
+    assert rules["security-tailscale"]["portSelector"] == {"ports": [2224], "protocol": "tcp"}
+
+
+def test_rules_whose_names_normalise_alike_are_refused(make_config):
+    """`SSH` and `ssh` both render as `security-ssh`; talosctl would merge the
+    two documents and silently drop one of the ports."""
+    cfg = make_config({
+        "security": {
+            "SSH": {"port": 22, "hosts": {"office": "203.0.113.0/24"}},
+            "ssh": {"port": 2222, "hosts": {"office": "203.0.113.0/24"}},
+        },
+    })
+    with pytest.raises(ConfigError, match="security-ssh"):
+        machineconfig._firewall_docs(cfg)
 
 
 METAL = {

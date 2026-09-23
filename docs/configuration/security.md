@@ -2,7 +2,7 @@
 
 Back to the [configuration index](../configuration.md).
 
-`security` holds named ingress rules. Each rule is one tcp port plus the source CIDRs allowed to reach it. The same rules become the OpenStack security group, the Proxmox per-VM firewall, and the Talos host firewall on every node. Rule names and the labels under them are free-form; the labels only document where an address comes from. Removing a label removes that allowance on the next converge; another rule for the same port or the always-allowed cluster traffic may still permit the source.
+`security` holds named ingress rules. Each rule is one tcp port plus the source CIDRs allowed to reach it. The same rules become the OpenStack security group, the Proxmox per-VM firewall, and the Talos host firewall on every node. Rule names and the labels under them are free-form; the labels only document where an address comes from. On the Talos host firewall each rule becomes a document named `security-<name>` — the name lowercased, runs of other characters collapsed to hyphens — so no rule can replace one of the firewall's built-in rules; two rules whose names render as the same document are refused, since talosctl merges firewall documents by name and would keep only one of their ports. Removing a label removes that allowance on the next converge; another rule for the same port or the always-allowed cluster traffic may still permit the source.
 
 ```yaml
 security:

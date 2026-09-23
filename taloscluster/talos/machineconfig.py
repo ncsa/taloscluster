@@ -681,11 +681,25 @@ def _firewall_docs(cfg: Config, node_cidr: str | None = None) -> list[dict]:
         docs.append(_network_rule("kubespan", "udp", [KUBESPAN_PORT], peers))
     for port in cfg.open_ports():
         docs.append(_network_rule(f"open-tcp-{port}", "tcp", [port], ["0.0.0.0/0"]))
+    # talosctl merges NetworkRuleConfig documents by name: the `security-`
+    # prefix keeps a user rule off the built-in names above, and two rules
+    # whose names normalise alike would collapse into one document and drop a
+    # port, so they are refused instead.
+    rendered: dict[str, str] = {}
     for rule in cfg.security.values():
         if not rule.hosts:
             continue  # a rule without hosts closes its port; block does that
         name = re.sub(r"[^a-z0-9-]+", "-", rule.name.lower()).strip("-")
-        docs.append(_network_rule(name, "tcp", [rule.port], list(rule.hosts.values())))
+        if name in rendered:
+            raise ConfigError(
+                f"security rules {rendered[name]!r} and {rule.name!r} both render "
+                f"as the Talos firewall rule 'security-{name}'; talosctl merges "
+                "firewall rules by name, so rename one of them"
+            )
+        rendered[name] = rule.name
+        docs.append(
+            _network_rule(f"security-{name}", "tcp", [rule.port], list(rule.hosts.values()))
+        )
     return docs
 
 
