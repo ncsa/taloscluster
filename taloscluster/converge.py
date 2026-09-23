@@ -5,7 +5,8 @@ to the target versions BEFORE new ones are added, so a new node never joins
 newer than the rest:
 
   validate -> image -> secrets -> network/SG -> discover -> scale-down ->
-  upgrade -> compute -> bootstrap -> kubeconfig -> health -> plugins
+  machine-config -> upgrade -> compute -> bootstrap -> kubeconfig -> health ->
+  plugins
 
 `validate` refuses provider changes that cannot be reconciled in place (an
 OpenStack flavor, disk or availability-zone change, a Proxmox placement,
@@ -200,7 +201,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     else:
         info(f"machine secrets: {secrets_path} (CRITICAL -- back this up)")
 
-    # ---- 3. NETWORK + SECURITY -------------------------------------------
+    # ---- 4. NETWORK + SECURITY -------------------------------------------
     log("network + security group")
     refs = backend.reconcile_network(machines, inv)
     info(
@@ -222,7 +223,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         if endpoint:
             _write_talosconfig(talosconfig_path, cfg, refs, secrets_path, endpoint)
 
-    # ---- 4. DISCOVER: is the cluster reachable? --------------------------
+    # ---- 5. DISCOVER: is the cluster reachable? --------------------------
     # The only robust "needs bootstrap" signal is that the kube-api does not
     # answer. We don't trust a persisted marker (survives destroy) or "servers
     # exist" (servers can exist un-bootstrapped: a create that didn't reach
@@ -325,7 +326,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
                 talos_version=config_talos_versions.get(server.name),
             )
 
-    # ---- 5. SCALE-DOWN ---------------------------------------------------
+    # ---- 6. SCALE-DOWN ---------------------------------------------------
     if up:
         _scale_down(
             backend,
@@ -338,7 +339,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             assume_yes=assume_yes,
         )
 
-    # ---- 6. MACHINE CONFIG (existing nodes) ------------------------------
+    # ---- 7. MACHINE CONFIG (existing nodes) ------------------------------
     # Before the upgrade phase on purpose: cluster.extraManifests lives in the
     # machine config, and `talosctl upgrade-k8s` refuses to finish until every
     # bootstrap manifest reconciles -- so a manifest fix has to land first.
@@ -349,7 +350,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     elif up and configs:
         _apply_configs(cfg, machines, inv, refs, configs, talosconfig_path, kubeconfig_path)
 
-    # ---- 7. UPGRADE (before adding new nodes) ----------------------------
+    # ---- 8. UPGRADE (before adding new nodes) ----------------------------
     if up:
         _upgrade(
             cfg,
@@ -365,7 +366,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
             plain_installer_images=plain_installer_images,
         )
 
-    # ---- 7. COMPUTE (create / scale up) ----------------------------------
+    # ---- 9. COMPUTE (create / scale up) ----------------------------------
     log("compute")
     needs_restart: set[str] = set()
     metal_unjoined: set[str] = set()
@@ -422,7 +423,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     else:
         warn("skipping compute: no machine configs (network fip not ready)")
 
-    # ---- 7b. REBOOT (opt-in) for changes the provider applied but the
+    # ---- 9b. REBOOT (opt-in) for changes the provider applied but the
     # running machine has not picked up (cores, memory, a grown disk)
     if needs_restart and reboot and up:
         _reboot_nodes(
@@ -438,11 +439,12 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # talosctl control operations go through cp-01's tailscale name (this host
     # must be on the tailnet anyway), which is always reachable -- unlike the
     # kube-api floating ip, whose routing from this host isn't guaranteed. The
-    # VIP is the talos "node"; the fip stays the kube-api server URL in the
-    # kubeconfig. Without a registered tailscale (no section, or one whose
-    # keyless extension never registers) there is no MagicDNS name that
-    # resolves, so cp-01's real address is used instead (this host must route
-    # to it).
+    # talos endpoint and node are always cp-01 itself -- never the VIP; the VIP
+    # only names the kube-api URL the server-side health check probes below,
+    # and the fip stays the kube-api server URL in the kubeconfig. Without a
+    # registered tailscale (no section, or one whose keyless extension never
+    # registers) there is no MagicDNS name that resolves, so cp-01's real
+    # address is used instead (this host must route to it).
     cp1 = f"{cfg.name}-controlplane-01"
     if not _tailscale_active(cfg) and not dry_run():
         # no MagicDNS name resolves here, so the poll's failure falls back to
@@ -457,7 +459,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         if state.secrets_exist() and refs.kubernetes.advertised_address:
             _write_talosconfig(talosconfig_path, cfg, refs, secrets_path, cp1)
 
-    # ---- 8. BOOTSTRAP (if the cluster isn't up) --------------------------
+    # ---- 10. BOOTSTRAP (if the cluster isn't up) -------------------------
     if not up and not existing_but_down and not dry_run():
         log("bootstrap")
         # a freshly created node must boot, start tailscale, and register with
@@ -466,7 +468,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         # idempotent: on an already-bootstrapped cluster this is a no-op
         talosctl.bootstrap(talosconfig_path, endpoint=cp1, node=cp1)
 
-    # ---- 9. KUBECONFIG ---------------------------------------------------
+    # ---- 11. KUBECONFIG --------------------------------------------------
     if (
         not up
         and not existing_but_down
@@ -481,7 +483,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         _wait_reachable(talosconfig_path, cp1, cp1)
         talosctl.kubeconfig(talosconfig_path, cp1, cp1, kubeconfig_path)
 
-    # ---- 10. HEALTH + STATUS ---------------------------------------------
+    # ---- 12. HEALTH + STATUS ---------------------------------------------
     # Health checks are meaningless on a cluster already known unreachable, and
     # would fail or hang (talosctl retries, node_summary returning [] against a
     # dead API), so skip them for an existing-but-unreachable cluster.
@@ -520,7 +522,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
         print(f"kubectl:    kubectl --kubeconfig {kubeconfig_path} get nodes")
         backend.finalize_machines(inv)
 
-    # ---- 11. PLUGINS -----------------------------------------------------
+    # ---- 13. PLUGINS -----------------------------------------------------
     # built from what this run already computed, so no plugin can trigger a
     # second round-trip to OpenStack for facts we are holding right here.
     advertised = refs.kubernetes.advertised_address
@@ -1435,9 +1437,12 @@ def _wait_reachable(
 ) -> None:
     """Block until talos apid answers (endpoint -> node), or time out.
 
-    Used both to wait for a fresh node to join the tailnet before bootstrap
-    (endpoint=node=cp-01) and to wait for the VIP to be announced after bootstrap
-    (endpoint=cp-01, node=VIP). Requires this machine to be on the tailnet.
+    Every caller dials a real machine: a fresh cp-01 before bootstrap and again
+    before the kubeconfig fetch (endpoint=node=cp-01), a node coming back after
+    a reboot-requiring config apply or a provider restart, and the recovery
+    wait for a missing kubeconfig -- never the VIP. The endpoint is cp-01's
+    MagicDNS name on a tailscale cluster, so there this machine must be on the
+    tailnet; without one it must route to cp-01's real address.
     """
     info(f"waiting for {endpoint} -> {node} to become reachable (up to {timeout_s // 60}m)...")
     deadline = time.monotonic() + timeout_s
@@ -1448,8 +1453,9 @@ def _wait_reachable(
         time.sleep(interval_s)
     raise TimeoutError(
         f"{endpoint} -> {node} did not become reachable within {timeout_s // 60}m. "
-        "Is this machine on the tailnet, and is there a stale headscale entry "
-        f"for {endpoint}? (see docs/troubleshooting.md"
+        "Check that this machine can reach the cluster network -- on a tailscale "
+        "cluster, that it is on the tailnet and there is no stale headscale entry "
+        f"for {endpoint} (see docs/troubleshooting.md"
         "#recreating-a-cluster-reuses-stale-headscale-entries)"
     )
 
@@ -1908,12 +1914,8 @@ def _scale_down(
                 "could not read etcd membership; refusing to remove nodes the "
                 "config does not classify"
             )
-    roles = {host: machine.role for host, machine in machines.items()} | cfg.metal_servers
 
     def is_controlplane(node: str) -> bool:
-        role = roles.get(node)
-        if role is not None:
-            return role == "controlplane"
         if in_etcd is None:
             raise ReconcileError(
                 f"cannot tell whether {node} is a control plane: it is not in the "
@@ -2519,9 +2521,10 @@ def _upgrade(
             cur = step
         # upgrade-k8s cordons each node in turn as it swaps the kubelet; a run
         # that was interrupted leaves that cordon behind on whichever node it
-        # was working on
+        # was working on -- a VM pool node or a joined metal machine alike
+        desired = set(machines) | {s.name for s in _metal_servers(cfg)}
         for node in kubectl.unschedulable(kubeconfig):
-            if node in machines:
+            if node in desired:
                 _uncordon_stale(kubeconfig, node)
 
 

@@ -827,6 +827,57 @@ def test_upgrade_stabilization_retries_a_timed_out_probe(monkeypatch):
     assert upgraded["n"] == 1
 
 
+def test_upgrade_k8s_sweep_uncordons_metal_nodes_too(monkeypatch, make_config):
+    """upgrade-k8s cordons every node whose kubelet it swaps, the metal machines
+    included, so the post-upgrade sweep must lift a cordon left on a metal node
+    as well -- not only on the VM pools' nodes."""
+    cfg = make_config(
+        {
+            "network": {"cluster": {"gateway": "192.168.0.1"}},
+            "metal": {
+                "site": {
+                    "role": "controlplane",
+                    "redfish": False,
+                    "disk": "/dev/sda",
+                    "servers": {
+                        "rp001": {
+                            "interfaces": {
+                                "enp1s0f0": {"role": "cluster", "ip": "192.168.0.5/21"}
+                            }
+                        },
+                    },
+                }
+            },
+        }
+    )
+    machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_kw: "ep")
+    monkeypatch.setattr(
+        converge.talosctl, "member_addresses", lambda *_a, **_kw: {"cp-01": "192.0.2.1"}
+    )
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, _n: True)
+    # a running version older than the pin sends _upgrade through upgrade-k8s
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.30.2")
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda *_a: True)
+    monkeypatch.setattr(converge.kubectl, "unschedulable", lambda _kc: ["cp-01", "rp001"])
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge, "_k8s_upgrade_path", lambda *_a, **_kw: ["v1.31.0"])
+    monkeypatch.setattr(converge.talosctl, "upgrade_k8s", lambda *_a, **_kw: None)
+    uncordoned: list[str] = []
+    monkeypatch.setattr(
+        converge, "_uncordon_stale", lambda _kc, host: uncordoned.append(host)
+    )
+
+    converge._upgrade(
+        cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
+        {("base",): "sch-123"}, Path("talosconfig"), Path("kubeconfig"),
+    )
+
+    assert sorted(uncordoned) == ["cp-01", "rp001"]
+
+
 def test_upgrade_aborts_when_version_unresolved_and_no_control_plane_resolves(monkeypatch):
     """An unresolved version must fail even when no control-plane address
     resolves (which would otherwise let the retry fall through silently)."""

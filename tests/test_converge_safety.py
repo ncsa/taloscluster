@@ -2920,6 +2920,10 @@ def test_reachability_timeout_points_at_troubleshooting(monkeypatch):
     assert ("docs/troubleshooting.md"
             "#recreating-a-cluster-reuses-stale-headscale-entries") in str(exc.value)
     assert "README" not in str(exc.value)
+    # the wait also runs on clusters without a tailscale section, so the
+    # message must not address the operator as if the tailnet were certainly
+    # the thing in the way
+    assert "Is this machine on the tailnet" not in str(exc.value)
 
 
 def test_health_or_kube_fallback_allows_kube_api_for_a_worker(monkeypatch):
