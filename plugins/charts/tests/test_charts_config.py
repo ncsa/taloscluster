@@ -13,6 +13,7 @@ from taloscluster_charts.config import (
     charts_configured,
     is_newer,
     merge_values,
+    same_version,
     validate_charts,
 )
 
@@ -332,6 +333,15 @@ def test_version_key_and_is_newer():
     assert is_newer("v1.3.1", "1.3.0")
     assert not is_newer("0.14.9", "0.14.9")
     assert not is_newer("0.14", "0.14.9")
+
+
+def test_same_version_ignores_a_leading_v():
+    assert same_version("v1.21.2", "1.21.2")
+    assert same_version("1.21.2", "v1.21.2")
+    assert same_version("V1.21.2", "v1.21.2")
+    assert not same_version("v1.21.2", "1.21.3")
+    assert not same_version("v1.21.2", "")
+    assert not same_version("version", "1.21.2")
 
 
 def test_merge_values_deep_dicts_lists_replace():

@@ -530,3 +530,18 @@ def is_newer(candidate: str, installed: str) -> bool:
         return _version_key(candidate) > _version_key(installed)
     except (TypeError, ValueError):  # incomparable shapes: assume no upgrade
         return False
+
+
+def same_version(a: str | None, b: str | None) -> bool:
+    """Version equality ignoring a leading `v` (charts tag v1.21.2, --version takes 1.21.2).
+
+    A missing version (no release to compare) is never equal.
+    """
+    if a is None or b is None:
+        return False
+    return _no_v_prefix(a) == _no_v_prefix(b)
+
+
+def _no_v_prefix(version: str) -> str:
+    version = version.strip()
+    return version[1:] if version[:1] in ("v", "V") and version[1:2].isdigit() else version

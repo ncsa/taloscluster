@@ -6,11 +6,13 @@ chart version upstream (`helm show chart`, read-only, safe under dry-run).
 Resources the plugin applies outside helm (namespaces, Gateway API CRDs, the
 metallb pool) are applied only when missing or drifted. `plan` therefore shows
 exactly what a sync would change, with the values (secrets redacted) a release
-that would install or upgrade gets.
+that would install or upgrade gets, and `check` reports that same drift.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -19,7 +21,7 @@ from taloscluster.errors import ReconcileError, preflight_tools
 from taloscluster.output import action, dry_run, info, log, show_yaml, warn
 
 from . import charts, helm, kube, upstream
-from .config import Config, Entry, Namespace, is_newer, merge_values
+from .config import Config, Entry, Namespace, is_newer, merge_values, same_version
 
 # dependency order: gateway CRDs before traefik's gateway provider, the
 # metallb chart (and its pool) before traefik claims an address from it; the
@@ -67,6 +69,30 @@ def _gateway_enabled(entries: dict[str, Entry]) -> bool:
 
 def _namespace_of(entry: Entry) -> str:
     return entry.namespace.name if entry.namespace else "default"
+
+
+def _merged_values(
+    entry: Entry, ctx: Context, pool: tuple[str, ...], gateway_on: bool
+) -> dict[str, Any]:
+    """The chart values an entry converges to (shared by converge and check)."""
+    common = charts.common_values(
+        entry,
+        ingress_ip=charts.first_pool_address(pool) if entry.name == "traefik" else "",
+        gateway_enabled=entry.name == "traefik" and gateway_on,
+    )
+    merged = merge_values(common, entry.values)
+    if entry.name == "nfs":
+        # the storage classes are chart values, built from the structured
+        # entry schema with the cluster name woven into the subDir pattern
+        merged = merge_values(merged, charts.nfs_storage_class_values(entry, ctx.cfg.name))
+    return merged
+
+
+def _ceph_chart_values(entry: Entry, chart: str) -> dict[str, Any]:
+    """The values one ceph-csi chart converges to: the shared csiConfig and
+    user values, plus the StorageClass that chart's own rbd:/fs: mapping builds."""
+    shared = merge_values(charts.ceph_values(entry), entry.values)
+    return merge_values(shared, charts.ceph_storage_class_values(entry, chart))
 
 
 def _manifest_urls(entry: Entry) -> tuple[str, ...]:
@@ -171,16 +197,7 @@ def _converge_chart(entry: Entry, ctx: Context, pool: tuple[str, ...], gateway_o
     if entry.namespace:
         _converge_namespace(entry.namespace, root)
 
-    common = charts.common_values(
-        entry,
-        ingress_ip=charts.first_pool_address(pool) if entry.name == "traefik" else "",
-        gateway_enabled=entry.name == "traefik" and gateway_on,
-    )
-    merged = merge_values(common, entry.values)
-    if entry.name == "nfs":
-        # the storage classes are chart values, built from the structured
-        # entry schema with the cluster name woven into the subDir pattern
-        merged = merge_values(merged, charts.nfs_storage_class_values(entry, ctx.cfg.name))
+    merged = _merged_values(entry, ctx, pool, gateway_on)
 
     taken, version = _deploy_chart(entry, ctx, entry.name, namespace, merged)
     if entry.name == "metallb":
@@ -188,6 +205,61 @@ def _converge_chart(entry: Entry, ctx: Context, pool: tuple[str, ...], gateway_o
     if entry.name == "cert-manager":
         _converge_issuers(entry, root, namespace)
     return {"action": taken, "kind": "chart", "version": version, "namespace": namespace}
+
+
+@dataclass(frozen=True)
+class _Drift:
+    """What converge would do to one helm release, shared by converge and check.
+
+    kind is "install" for a missing release, "upgrade" for one converge would
+    upgrade, "newer" for a `latest` entry with a newer upstream chart
+    (informational), and None when the release is as desired.
+    """
+
+    kind: str | None
+    detail: str               # the version to install, the upgrade's why, or the newer version
+    record: dict | None       # the release's `helm list` record
+    installed: str | None     # the installed chart version
+    desired: str              # the chart version converge targets ("latest" when unpinned)
+
+
+def _chart_drift(
+    entry: Entry,
+    kubeconfig: Path,
+    release: str,
+    namespace: str,
+    merged: dict[str, Any],
+    chart: str | None = None,
+) -> _Drift:
+    """The one drift decision for a helm release, shared by converge and check.
+
+    Converge acts on it (`_deploy_chart`) and check reports it, so the two can
+    never disagree: a missing release installs, a non-`deployed` status, a
+    pinned version differing from the installed chart -- compared without the
+    leading `v` some charts tag, like cert-manager's v1.21.2 -- or changed
+    values upgrade, and a `latest` entry with a newer upstream chart is only
+    reported as available. `chart` is the chart to look up when it is not the
+    entry's own (the ceph entry deploys ceph-csi-rbd and ceph-csi-cephfs).
+    """
+    chart = chart or entry.chart_name
+    record = helm.release(kubeconfig, release, namespace)
+    latest = helm.latest_version(chart, entry.repo or "") if entry.is_latest else None
+    current_values = helm.get_values(kubeconfig, release, namespace) if record else None
+    status = record.get("status") if record else None
+    installed = helm.chart_version(record) if record else None
+    desired = latest or entry.version or "latest"
+
+    if record is None:
+        return _Drift("install", desired, record, installed, desired)
+    if status != "deployed":
+        return _Drift("upgrade", f"status is {status}", record, installed, desired)
+    if not entry.is_latest and not same_version(installed, entry.version):
+        return _Drift("upgrade", f"{installed} -> {entry.version}", record, installed, desired)
+    if current_values is not None and current_values != merged:
+        return _Drift("upgrade", "chart values changed", record, installed, desired)
+    if latest and installed and is_newer(latest, installed):
+        return _Drift("newer", latest, record, installed, desired)
+    return _Drift(None, "", record, installed, desired)
 
 
 def _deploy_chart(
@@ -200,47 +272,35 @@ def _deploy_chart(
 ) -> tuple[str, str]:
     """Install/upgrade one helm release to the desired chart version and values.
 
-    Drift-driven: a missing release installs, a pinned version or a values
-    change upgrades, a `latest` entry upgrades only when the repo offers a
-    newer chart version, and a release that is not `deployed` is retried:
-    a failed release upgrades in place, while one stuck `pending-*` or
-    `uninstalling` (an interrupted run) is uninstalled first -- helm refuses
-    to upgrade over it -- and installed fresh. `chart` is the chart to
-    pull from the entry's repo when it is not the entry's own (the ceph entry
-    deploys ceph-csi-rbd and ceph-csi-cephfs). Returns (action, version-reported).
+    Drift-driven, on the decision `_chart_drift` shares with check: a missing
+    release installs, a pinned version or a values change upgrades, a `latest`
+    entry upgrades only when the repo offers a newer chart version, and a
+    release that is not `deployed` is retried: a failed release upgrades in
+    place, while one stuck `pending-*` or `uninstalling` (an interrupted run)
+    is uninstalled first -- helm refuses to upgrade over it -- and installed
+    fresh. `chart` is the chart to pull from the entry's repo when it is not
+    the entry's own (the ceph entry deploys ceph-csi-rbd and ceph-csi-cephfs).
+    Returns (action, version-reported).
     """
     chart = chart or entry.chart_name
     kubeconfig = ctx.kubeconfig
-    record = helm.release(kubeconfig, release, namespace)
-    latest = None
-    if entry.is_latest:
-        latest = helm.latest_version(chart, entry.repo or "")
-    desired = latest or entry.version or "latest"
-    installed = helm.chart_version(record) if record else None
-    current_values = helm.get_values(kubeconfig, release, namespace) if record else None
+    drift = _chart_drift(entry, kubeconfig, release, namespace, merged, chart=chart)
 
-    status = record.get("status") if record else None
-
-    what = None
-    if record is None:
-        what = f"install {release} ({desired})"
-    elif status != "deployed":
-        what = f"upgrade {release}: status is {status}"
-    elif not entry.is_latest and installed != entry.version:
-        what = f"upgrade {release}: {installed} -> {entry.version}"
-    elif latest and installed and is_newer(latest, installed):
-        what = f"upgrade {release}: {installed} -> {latest}"
-    elif current_values is not None and current_values != merged:
-        what = f"upgrade {release}: chart values changed"
-
-    if what is None:
-        info(f"{release}: chart {installed} up to date")
+    if drift.kind is None:
+        info(f"{release}: chart {drift.installed} up to date")
         taken = "up_to_date"
     else:
+        if drift.kind == "install":
+            what = f"install {release} ({drift.detail})"
+        elif drift.kind == "newer":
+            what = f"upgrade {release}: {drift.installed} -> {drift.detail}"
+        else:
+            what = f"upgrade {release}: {drift.detail}"
         log(what)
         # helm refuses to upgrade over a pending-* or uninstalling release
         # ("another operation (install/upgrade/rollback) is in progress");
         # the only way out is to clear it and install fresh
+        status = drift.record.get("status") if drift.record else None
         if status and (status.startswith("pending-") or status == "uninstalling"):
             helm.uninstall(kubeconfig, release, namespace)
         helm.upgrade_install(
@@ -250,9 +310,9 @@ def _deploy_chart(
         if dry_run():
             info(f"{release}: values")
             show_yaml(merged)
-        taken = "installed" if record is None else "upgraded"
+        taken = "installed" if drift.record is None else "upgraded"
 
-    return taken, installed or desired
+    return taken, drift.installed or drift.desired
 
 
 def _converge_ceph(entry: Entry, ctx: Context) -> dict:
@@ -297,12 +357,11 @@ def _converge_ceph(entry: Entry, ctx: Context) -> dict:
             "(however you manage them) or the provisioners cannot reach ceph"
         )
 
-    shared = merge_values(charts.ceph_values(entry), entry.values)
     charts_result = {}
     taken = "up_to_date"
     for chart in charts_wanted:
         # each chart's StorageClass comes from its own rbd:/fs: mapping
-        merged = merge_values(shared, charts.ceph_storage_class_values(entry, chart))
+        merged = _ceph_chart_values(entry, chart)
         action, _ = _deploy_chart(entry, ctx, chart, chart, merged, chart=chart)
         charts_result[chart] = action
         if action != "up_to_date":
@@ -430,13 +489,14 @@ def check(ctx: Context) -> dict:
     cfg = Config.load(ctx.root)
     preflight_tools(["helm", "kubectl"])
     pool = _ingress_pool(ctx)
+    gateway_on = _gateway_enabled(cfg.entries)
 
     problems: list[str] = []
     upgrade_available: dict[str, str] = {}
     entries: dict[str, str] = {}
 
     for entry in _ordered(cfg.entries):
-        ok, state = _check_entry(entry, ctx, pool, upgrade_available)
+        ok, state = _check_entry(entry, ctx, pool, gateway_on, upgrade_available)
         entries[entry.name] = state
         if not ok:
             problems.append(entry.name)
@@ -449,25 +509,37 @@ def check(ctx: Context) -> dict:
 
 
 def _check_entry(
-    entry: Entry, ctx: Context, pool: tuple[str, ...], upgrade_available: dict[str, str]
+    entry: Entry,
+    ctx: Context,
+    pool: tuple[str, ...],
+    gateway_on: bool,
+    upgrade_available: dict[str, str],
 ) -> tuple[bool, str]:
     """Whether one entry is as desired, and the state to report for it.
 
     States: "ok"; "not_installed" (enabled but absent -- needs a converge, not
     drift); "drifted" (present but not as desired); "absent" (disabled and
-    gone); "present" (disabled but still there).
+    gone); "present" (disabled but still there). Chart releases are judged by
+    the same drift decision converge acts on (`_chart_drift`), so a state here
+    means a converge would change something.
     """
     root, kubeconfig = ctx.root, ctx.kubeconfig
     if entry.name == "ceph":
         secrets = entry.ceph_secrets
         for chart in charts.ceph_charts(entry):
-            record = helm.release(kubeconfig, chart, chart) if entry.enabled else None
             if not entry.enabled:
-                if record is not None:
+                if helm.release(kubeconfig, chart, chart) is not None:
                     return False, "present"
                 continue
-            if record is None or record.get("status") != "deployed":
+            drift = _chart_drift(
+                entry, kubeconfig, chart, chart, _ceph_chart_values(entry, chart), chart=chart
+            )
+            if drift.kind == "install":
                 return False, "not_installed"
+            if drift.kind == "upgrade":
+                return False, "drifted"
+            if drift.kind == "newer":
+                upgrade_available[chart] = drift.detail
         if entry.enabled and secrets and not kube.matches(
             root, "-", input=charts.ceph_secrets_manifest(secrets, entry)
         ):
@@ -489,20 +561,19 @@ def _check_entry(
         return ok, "ok" if ok else "drifted"
 
     namespace = _namespace_of(entry)
-    record = helm.release(kubeconfig, entry.name, namespace) if entry.enabled else None
     if not entry.enabled:
+        record = helm.release(kubeconfig, entry.name, namespace)
         return record is None, "absent" if record is None else "present"
-    if record is None:
-        return False, "not_installed"
-    if record.get("status") != "deployed":
-        return False, "drifted"
 
-    if entry.is_latest:
-        latest = helm.latest_version(entry.chart_name, entry.repo or "")
-        installed = helm.chart_version(record)
-        if latest and installed and is_newer(latest, installed):
-            # informational: a newer chart exists, but the release is healthy
-            upgrade_available[entry.name] = latest
+    merged = _merged_values(entry, ctx, pool, gateway_on)
+    drift = _chart_drift(entry, kubeconfig, entry.name, namespace, merged)
+    if drift.kind == "install":
+        return False, "not_installed"
+    if drift.kind == "upgrade":
+        return False, "drifted"
+    if drift.kind == "newer":
+        # informational: a newer chart exists, but the release is healthy
+        upgrade_available[entry.name] = drift.detail
 
     if entry.namespace and not kube.matches(
         root, "-", input=charts.namespace_manifest(entry.namespace)

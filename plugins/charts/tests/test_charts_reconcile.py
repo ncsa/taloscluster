@@ -239,6 +239,17 @@ def test_pinned_version_mismatch_upgrades(tmp_path, fake_helm, no_kube):
     assert result["entries"]["metallb"]["action"] == "upgraded"
 
 
+@pytest.mark.parametrize("pinned", ["1.21.2", "v1.21.2"])
+def test_pinned_version_matches_installed_v_tag(tmp_path, fake_helm, no_kube, pinned):
+    # cert-manager tags its charts v1.21.2 while `--version 1.21.2` resolves to
+    # it: the pinned compare must not read that as drift and re-upgrade
+    fake_helm.installed["cert-manager"] = "v1.21.2"
+    fake_helm.values["cert-manager"] = {"crds": {"enabled": True}}
+    result = reconcile.converge(_pool_ctx(tmp_path, {"cert-manager": {"version": pinned}}))
+    assert result["entries"]["cert-manager"]["action"] == "up_to_date"
+    assert not fake_helm.upgrades
+
+
 def test_failed_release_upgrades_in_place(tmp_path, fake_helm, no_kube):
     # helm accepts an upgrade over a failed release; version and values match,
     # so the non-deployed status is the only trigger
@@ -372,6 +383,10 @@ def test_traefik_values_carry_pool_ip(tmp_path, fake_helm, no_kube):
 def test_check_reports_upgrade_available(tmp_path, fake_helm, no_kube):
     fake_helm.installed["metallb"] = "0.14.9"
     fake_helm.latest["metallb"] = "0.15.0"
+    fake_helm.values["metallb"] = {
+        "speaker": {"frr": {"enabled": False}},
+        "frrk8s": {"enabled": False},
+    }
     report = reconcile.check(_pool_ctx(tmp_path, {"metallb": {}}))
     assert report["ok"] is True
     assert report["entries"]["metallb"] == "ok"
@@ -393,8 +408,52 @@ def test_check_fails_on_unhealthy_release(tmp_path, fake_helm, no_kube, status):
     assert report["entries"]["metallb"] == "drifted"
 
 
+def test_check_ok_when_version_and_values_match(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.14.9"
+    fake_helm.values["metallb"] = {
+        "speaker": {"frr": {"enabled": False}},
+        "frrk8s": {"enabled": False},
+    }
+    report = reconcile.check(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert report["ok"] is True
+    assert report["entries"]["metallb"] == "ok"
+
+
+def test_check_fails_on_pinned_version_drift(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.values["metallb"] = {
+        "speaker": {"frr": {"enabled": False}},
+        "frrk8s": {"enabled": False},
+    }
+    report = reconcile.check(_pool_ctx(tmp_path, {"metallb": {"version": "0.13.0"}}))
+    assert report["ok"] is False
+    assert report["entries"]["metallb"] == "drifted"
+
+
+def test_check_ignores_a_leading_v_on_a_pinned_version(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["cert-manager"] = "v1.21.2"
+    fake_helm.values["cert-manager"] = {"crds": {"enabled": True}}
+    report = reconcile.check(_pool_ctx(tmp_path, {"cert-manager": {"version": "1.21.2"}}))
+    assert report["ok"] is True
+    assert report["entries"]["cert-manager"] == "ok"
+
+
+def test_check_fails_on_values_drift(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.14.9"
+    fake_helm.values["metallb"] = {"stale": True}
+    report = reconcile.check(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert report["ok"] is False
+    assert report["entries"]["metallb"] == "drifted"
+
+
 def test_check_fails_when_pool_drifted(tmp_path, fake_helm, no_kube):
     fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.values["metallb"] = {
+        "speaker": {"frr": {"enabled": False}},
+        "frrk8s": {"enabled": False},
+    }
     no_kube["matches"] = False
     report = reconcile.check(_pool_ctx(tmp_path, {"metallb": {}}))
     assert report["ok"] is False
@@ -507,8 +566,19 @@ def test_cert_manager_issuers_deleted_before_uninstall(tmp_path, monkeypatch):
     ]
 
 
+CERT_MANAGER_PROD_VALUES = {  # the plugin's common values for a prod-issuer entry
+    "crds": {"enabled": True},
+    "ingressShim": {
+        "defaultIssuerKind": "ClusterIssuer",
+        "defaultIssuerGroup": "cert-manager.io",
+        "defaultIssuerName": "letsencrypt-prod",
+    },
+}
+
+
 def test_check_fails_when_issuers_drifted(tmp_path, fake_helm, no_kube):
     fake_helm.installed["cert-manager"] = "1.21.2"
+    fake_helm.values["cert-manager"] = CERT_MANAGER_PROD_VALUES
     no_kube["matches"] = False
     charts = {"cert-manager": {"email": "a@b", "prod": True}}
     report = reconcile.check(_pool_ctx(tmp_path, charts))
@@ -517,6 +587,47 @@ def test_check_fails_when_issuers_drifted(tmp_path, fake_helm, no_kube):
 
 def test_check_ignores_issuers_when_none_enabled(tmp_path, fake_helm, no_kube):
     fake_helm.installed["cert-manager"] = "1.21.2"
+    fake_helm.values["cert-manager"] = {"crds": {"enabled": True}}
     charts = {"cert-manager": {"email": "a@b"}}
     report = reconcile.check(_pool_ctx(tmp_path, charts))
     assert report["entries"]["cert-manager"] == "ok"
+
+
+CEPH = {
+    "clusterID": "2f6a1c0e-0000-4000-8000-000000000000",
+    "monitors": ["192.0.2.11:6789"],
+    "rbd": True,
+}
+CEPH_RBD_VALUES = {  # the values converge would hand the ceph-csi-rbd chart
+    "csiConfig": [{"clusterID": CEPH["clusterID"], "monitors": CEPH["monitors"]}],
+}
+
+
+def test_check_ok_when_ceph_matches(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["ceph-csi-rbd"] = "3.0.0"
+    fake_helm.values["ceph-csi-rbd"] = CEPH_RBD_VALUES
+    report = reconcile.check(_pool_ctx(tmp_path, {"ceph": dict(CEPH)}))
+    assert report["ok"] is True
+    assert report["entries"]["ceph"] == "ok"
+
+
+def test_check_fails_when_ceph_version_drifted(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["ceph-csi-rbd"] = "3.0.1"
+    fake_helm.values["ceph-csi-rbd"] = CEPH_RBD_VALUES
+    report = reconcile.check(_pool_ctx(tmp_path, {"ceph": {**CEPH, "version": "3.0.0"}}))
+    assert report["ok"] is False
+    assert report["entries"]["ceph"] == "drifted"
+
+
+def test_check_fails_when_ceph_values_drifted(tmp_path, fake_helm, no_kube):
+    fake_helm.installed["ceph-csi-rbd"] = "3.0.0"
+    fake_helm.values["ceph-csi-rbd"] = {"stale": True}
+    report = reconcile.check(_pool_ctx(tmp_path, {"ceph": dict(CEPH)}))
+    assert report["ok"] is False
+    assert report["entries"]["ceph"] == "drifted"
+
+
+def test_check_reports_ceph_not_installed(tmp_path, fake_helm, no_kube):
+    report = reconcile.check(_pool_ctx(tmp_path, {"ceph": dict(CEPH)}))
+    assert report["ok"] is False
+    assert report["entries"]["ceph"] == "not_installed"
