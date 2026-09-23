@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add `--metal` to `init` to scaffold the bare-metal section and its BMC credentials beside a provider.
 - Add `link_name` and `vlan` overrides to metal interfaces for the generated external VLAN child link and its ingress return-path pod.
 - Add `metal.<group>.extensions`, merged with the cluster-wide set into the installer image the bare-metal machines share.
-- Add `talos.kubespan` (default false) enabling Talos KubeSpan, sized to the L2 MTU, advertising every node address except the external network's, and required for metal machines on another L2.
+- Add `talos.kubespan` (default false) enabling Talos KubeSpan, sized to the routed MTU on multi-L2 clusters, excluding external and tailnet endpoints, and required for metal machines on another L2.
 - Document the KubeSpan reachability contract for clusters spanning layer-2 networks, including the API VIP and proxy requirements.
 - Document the MTU rules for jumbo layer-2 networks, including the jumbo-frame ping recipe.
 - Document the metal provider with a setup guide, join-flow coverage for both the `metal join` command and converge's `auto_join` path, and a boot-media troubleshooting entry.

@@ -514,8 +514,9 @@ def build_config(
             patches.append(
                 machineconfig._write(
                     workdir, f"{host}-kubespan",
-                    # the WireGuard MTU follows the machine's own L2, which a
-                    # group on another network carries with its own mtu
+                    # the WireGuard MTU follows the machine's own L2 -- which
+                    # a group on another network carries with its own mtu, but
+                    # the routed path wins once the peers span more than one
                     machineconfig._kubespan_patch(cfg, mtu=server.network.mtu),
                 )
             )

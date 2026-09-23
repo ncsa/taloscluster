@@ -241,7 +241,8 @@ def _kubespan_golden(kubespan_enabled: bool) -> dict[str, list]:
                 "enabled": True,
                 "mtu": 8920,
                 "filters": {"endpoints": [
-                    "0.0.0.0/0", "!203.0.113.0/24", "!169.254.40.0/24",
+                    "0.0.0.0/0", "!100.64.0.0/10", "!203.0.113.0/24",
+                    "!169.254.40.0/24",
                 ]},
             }}}
         }]]

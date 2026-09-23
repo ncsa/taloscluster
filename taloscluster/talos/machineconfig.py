@@ -36,7 +36,7 @@ from pathlib import Path
 import yaml
 
 from .. import versions
-from ..config import KUBESPAN_PORT, Config, ConfigError, Machine
+from ..config import DEFAULT_MTU, KUBESPAN_PORT, Config, ConfigError, Machine
 from ..infrastructure import Endpoint, TalosContribution
 from . import talosctl
 
@@ -717,32 +717,41 @@ def _tailscale_patch(m: Machine, cfg: Config, auth_key: str) -> dict:
     }
 
 
-# WireGuard overhead KubeSpan subtracts from the layer-2 MTU.
+# WireGuard overhead KubeSpan subtracts from the path MTU.
 KUBESPAN_MTU_OVERHEAD = 80
 
 
 def _kubespan_patch(cfg: Config, mtu: int | None = None) -> dict:
     """machine.network.kubespan when `talos.kubespan` is on (opt-in).
 
-    The WireGuard MTU is the node L2's MTU minus the WireGuard overhead (`mtu`
-    overrides the cluster L2's, for a node sitting on a different one), and a
-    configured `network.external` is excluded from endpoint discovery: Talos
-    applies `filters.endpoints` as an allow-list, where a positive CIDR
-    advertises a match and `!cidr` removes one, so the filter allows every
-    address a node owns (`0.0.0.0/0`) and removes the external network's
-    addresses -- KubeSpan never advertises or picks one as a peer endpoint,
-    while the cluster-L2 address stays advertised.
+    The WireGuard MTU is the path MTU minus the WireGuard overhead: the node
+    L2's MTU (`mtu` overrides the cluster L2's, for a node sitting on a
+    different one) while the cluster shares one L2, and the routed default
+    once the peers span more than one -- cross-L2 packets leave through the
+    gateway route clamped to 1500, and the tunnel follows the smaller path.
+    Endpoint discovery excludes a configured `network.external` and, with the
+    tailscale extension on, the tailscale tailnet range -- a tailnet address
+    as a peer endpoint would tunnel WireGuard in WireGuard: Talos applies
+    `filters.endpoints` as an allow-list, where a positive CIDR advertises a
+    match and `!cidr` removes one, so the filter allows every address a node
+    owns (`0.0.0.0/0`) and removes those -- the cluster-L2 address stays
+    advertised.
     """
+    l2 = mtu if mtu is not None else cfg.network.cluster.mtu
+    base = DEFAULT_MTU if len(cfg.intra_cluster_cidrs()) > 1 else l2
     kubespan: dict = {
         "enabled": True,
-        "mtu": (mtu if mtu is not None else cfg.network.cluster.mtu)
-        - KUBESPAN_MTU_OVERHEAD,
+        "mtu": base - KUBESPAN_MTU_OVERHEAD,
     }
+    excluded: list[str] = []
+    if cfg.tailscale_enabled:
+        excluded.append(f"!{talosctl.TAILSCALE_NET}")
     if cfg.network.external is not None:
         external = cfg.network.external
-        excluded = ["!" + external.cidr]
+        excluded.append("!" + external.cidr)
         if external.anchor_cidr:
             excluded.append("!" + external.anchor_cidr)
+    if excluded:
         kubespan["filters"] = {"endpoints": ["0.0.0.0/0", *excluded]}
     return {"machine": {"network": {"kubespan": kubespan}}}
 

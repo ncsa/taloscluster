@@ -334,6 +334,28 @@ def test_metal_firewall_admits_the_cluster_l2_and_kubespan(
     assert rules["kubespan"]["ingress"] == [{"subnet": "172.29.21.0/24"}]
 
 
+def test_metal_kubespan_mtu_follows_the_routed_path_across_l2s(
+    make_config, monkeypatch, tmp_path
+):
+    """A jumbo group on another L2: cross-L2 packets leave through the gateway
+    route clamped to 1500, so the WireGuard MTU follows the routed path rather
+    than the machine's own jumbo L2."""
+    other_l2 = {
+        "role": "worker",
+        "disk": "/dev/sda",
+        "network": {"cidr": "172.29.31.0/24", "gateway": "172.29.31.1", "mtu": 9000},
+        "interfaces": {"enp1s0f0": {"role": "cluster"}},
+        "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "172.29.31.5/24"}}}},
+    }
+    stack, _ = _build(make_config, monkeypatch, tmp_path, metal=other_l2)
+
+    (kubespan,) = [
+        doc for group in stack for doc in group
+        if doc.get("machine", {}).get("network", {}).get("kubespan")
+    ]
+    assert kubespan["machine"]["network"]["kubespan"]["mtu"] == 1420
+
+
 def test_metal_control_plane_on_another_l2_matches_golden(
     make_config, monkeypatch, tmp_path
 ):

@@ -311,11 +311,56 @@ def test_tailscale_patch_no_login_server(make_config):
 # _kubespan_patch
 # ---------------------------------------------------------------------------
 
-def test_kubespan_patch_defaults_to_the_l2_mtu_minus_overhead(cfg):
-    patch = machineconfig._kubespan_patch(cfg)
+def test_kubespan_patch_defaults_to_the_l2_mtu_minus_overhead(make_config):
+    patch = machineconfig._kubespan_patch(make_config())
     assert patch == {
         "machine": {"network": {"kubespan": {"enabled": True, "mtu": 1420}}}
     }
+
+
+def test_kubespan_patch_excludes_the_tailnet_when_tailscale_is_on(cfg):
+    """A tailscale cluster's nodes own a 100.64/10 address; KubeSpan must never
+    advertise or pick one as a peer endpoint, which would tunnel WireGuard in
+    WireGuard."""
+    patch = machineconfig._kubespan_patch(cfg)
+    assert patch["machine"]["network"]["kubespan"]["filters"]["endpoints"] == [
+        "0.0.0.0/0", "!100.64.0.0/10",
+    ]
+
+
+def test_kubespan_patch_no_tailnet_filter_without_a_tailscale_section(make_config):
+    patch = machineconfig._kubespan_patch(make_config())
+    assert "filters" not in patch["machine"]["network"]["kubespan"]
+
+
+def test_kubespan_patch_uses_the_routed_mtu_when_peers_span_l2s(make_config):
+    """A metal group on another L2: cross-L2 packets leave through the gateway
+    route clamped to 1500, so the WireGuard MTU follows the routed path even on
+    a jumbo cluster L2."""
+    cfg = make_config({
+        "network": {"cluster": {"mtu": 9000}},
+        "talos": {"kubespan": True},
+        "metal": {
+            "rack": {
+                "role": "worker",
+                "disk": "/dev/sda",
+                "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
+                "servers": {
+                    "rp001": {
+                        "interfaces": {
+                            "enp1s0f0": {"role": "cluster", "ip": "172.29.22.5/24"}
+                        },
+                    },
+                },
+            },
+        },
+    })
+    patch = machineconfig._kubespan_patch(cfg)
+    assert patch["machine"]["network"]["kubespan"]["mtu"] == 1420
+    # the same clamp applies to a metal node whose own L2 is jumbo
+    server = cfg.metal.groups["rack"].servers["rp001"]
+    own = machineconfig._kubespan_patch(cfg, mtu=server.network.mtu)
+    assert own["machine"]["network"]["kubespan"]["mtu"] == 1420
 
 
 def test_kubespan_patch_jumbo_mtu_and_external_filters(make_config):
