@@ -26,6 +26,7 @@ from openstack import exceptions
 from .. import naming
 from ..config import Config, Machine
 from ..errors import ReconcileError
+from ..infrastructure import stated_mtu
 from ..output import action, dry_run, info, warn
 from .session import Inventory
 from .tags import create_tagged
@@ -54,7 +55,7 @@ def reconcile(
     if ext is None:
         raise ReconcileError(f"external network '{cfg.external_net}' not found")
 
-    network = _ensure_network(conn, cluster, inv, tags)
+    network = _ensure_network(conn, cfg, inv, tags)
     subnet = _ensure_subnet(conn, cfg, network, inv, tags)
     router = _ensure_router(conn, cluster, ext, inv, tags)
     _ensure_router_interface(conn, router, subnet)
@@ -122,17 +123,42 @@ def _fixed_ip(port: Any) -> str:
     return fixed[0]["ip_address"] if fixed else ""
 
 
-def _ensure_network(conn, cluster, inv, tags):
-    name = naming.network_name(cluster)
+def _ensure_network(conn, cfg, inv, tags):
+    name = naming.network_name(cfg.name)
+    mtu = stated_mtu(cfg.network.cluster.mtu)
     net = inv.get("networks", name)
     if net:
         info(f"network {name} exists")
+        if mtu is not None:
+            _check_network_mtu(net, mtu)
         return net
     action(f"create network {name}")
     if dry_run():
         return None
-    net = create_tagged(conn.network, "network", tags, name=name, admin_state_up=True)
+    kwargs = dict(name=name, admin_state_up=True)
+    if mtu is not None:
+        kwargs["mtu"] = mtu
+    net = create_tagged(conn.network, "network", tags, **kwargs)
     return inv.put("networks", net)
+
+
+def _check_network_mtu(net, mtu: int) -> None:
+    """Warn when an existing network advertises less than the cluster MTU.
+
+    The node links state ``network.cluster.mtu``, so a network still
+    advertising the cloud default silently drops every large frame the nodes
+    send each other inside the subnet. Raising the attribute cannot make the
+    underlying fabric jumbo, so the fix is on the cloud side, named here the
+    way the Proxmox bridge check names it.
+    """
+    current = getattr(net, "mtu", None)
+    if current is None or current >= mtu:
+        return
+    warn(
+        f"network {net.name} MTU is below the cluster MTU {mtu} "
+        f"(advertises {current}); jumbo frames between the nodes are "
+        "dropped, so raise the network's mtu to match"
+    )
 
 
 def _ensure_subnet(conn, cfg, network, inv, tags):

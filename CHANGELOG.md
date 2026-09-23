@@ -34,7 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Refuse OpenStack flavor, disk and availability-zone changes with recreation guidance; update an existing subnet's DNS in place.
 - Block the OpenStack metadata service with security-group egress rules, keeping the bootstrap NetworkPolicy as defence in depth.
 - Warn that `network.dns` is not applied on DHCP-backed Proxmox networks.
-- Warn when a Proxmox cluster or external bridge MTU is below the configured `mtu`.
+- Warn when a Proxmox bridge or OpenStack tenant network MTU is below the configured `mtu`, and create the tenant network with it.
 - Refuse duplicate Proxmox VM names that involve a cluster-managed machine.
 - Refuse Proxmox SDN teardown or converge while the shared controller or the cluster's own zone, VNet or subnet has pending `deleted` or `changed` state, before any VM is deleted.
 - Report the firewall a new Proxmox VM would get during `plan`.

@@ -76,13 +76,13 @@ def test_all_neutron_creates_include_ownership_tags():
     cfg = SimpleNamespace(
         name="testcluster",
         network=SimpleNamespace(
-            cluster=SimpleNamespace(cidr="192.0.2.0/24"), dns=["1.1.1.1"]
+            cluster=SimpleNamespace(cidr="192.0.2.0/24", mtu=1500), dns=["1.1.1.1"]
         ),
         security={},
         open_ports=lambda: (80, 443),
         intra_cluster_cidrs=lambda node_cidr=None: ["192.0.2.0/24"],
     )
-    net = network._ensure_network(conn, cfg.name, inv, tags)
+    net = network._ensure_network(conn, cfg, inv, tags)
     network._ensure_subnet(conn, cfg, net, inv, tags)
     network._ensure_router(conn, cfg.name, SimpleNamespace(id="external"), inv, tags)
     port = network._ensure_port(conn, "testcluster-ingress", net, inv, tags, None)
