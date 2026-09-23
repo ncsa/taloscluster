@@ -3870,9 +3870,12 @@ def test_validate_refuses_a_metal_machine_converge_can_neither_reach_nor_boot(
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
 
     with pytest.raises(ReconcileError, match="not joinable: rp001"):
-        converge._validate_metal_joinable(_pending_metal_cfg(), kubeconfig)
+        converge._validate_metal_joinable(
+            _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
+        )
 
 
 def test_validate_allows_a_redfish_machine_that_is_not_in_maintenance(monkeypatch, tmp_path):
@@ -3883,7 +3886,9 @@ def test_validate_allows_a_redfish_machine_that_is_not_in_maintenance(monkeypatc
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
 
-    converge._validate_metal_joinable(_pending_metal_cfg(redfish=True), kubeconfig)
+    converge._validate_metal_joinable(
+        _pending_metal_cfg(redfish=True), ABSENT_TALOSCONFIG, kubeconfig
+    )
 
 
 def test_validate_ignores_a_machine_auto_join_does_not_cover(monkeypatch, tmp_path):
@@ -3901,7 +3906,9 @@ def test_validate_ignores_a_machine_auto_join_does_not_cover(monkeypatch, tmp_pa
         lambda _ip: pytest.fail("a machine without auto-join must not be probed"),
     )
 
-    converge._validate_metal_joinable(_pending_metal_cfg(auto_join=False), kubeconfig)
+    converge._validate_metal_joinable(
+        _pending_metal_cfg(auto_join=False), ABSENT_TALOSCONFIG, kubeconfig
+    )
 
 
 def test_validate_skips_the_joinable_check_without_a_kubeconfig(monkeypatch):
@@ -3915,7 +3922,9 @@ def test_validate_skips_the_joinable_check_without_a_kubeconfig(monkeypatch):
         lambda _ip: pytest.fail("nothing to decide before the kubeconfig is settled"),
     )
 
-    converge._validate_metal_joinable(_pending_metal_cfg(), Path("/nonexistent/kubeconfig"))
+    converge._validate_metal_joinable(
+        _pending_metal_cfg(), ABSENT_TALOSCONFIG, Path("/nonexistent/kubeconfig")
+    )
 
 
 def test_validate_ignores_a_failed_node_query(monkeypatch, tmp_path):
@@ -3931,7 +3940,9 @@ def test_validate_ignores_a_failed_node_query(monkeypatch, tmp_path):
         lambda _ip: pytest.fail("an unknown presence must not be probed"),
     )
 
-    converge._validate_metal_joinable(_pending_metal_cfg(), kubeconfig)
+    converge._validate_metal_joinable(
+        _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
+    )
 
 
 def test_validate_allows_a_joined_metal_machine(monkeypatch, tmp_path):
@@ -3946,7 +3957,29 @@ def test_validate_allows_a_joined_metal_machine(monkeypatch, tmp_path):
         lambda _ip: pytest.fail("a joined machine must not be probed"),
     )
 
-    converge._validate_metal_joinable(_pending_metal_cfg(), kubeconfig)
+    converge._validate_metal_joinable(
+        _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
+    )
+
+
+def test_validate_leaves_a_joined_metal_machine_without_a_node_to_compute(
+    monkeypatch, tmp_path
+):
+    """A machine that answers apid with the cluster's identity but has no kube
+    Node -- its Node was deleted, or it rebooted into the cluster after the
+    last run's config push and the Node has not registered yet -- is already
+    joined: booting it into maintenance mode would wipe a live node, so it is
+    never refused here. The compute phase skips it with a warning instead."""
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("clusters: []\n")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: False)
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: True)
+
+    converge._validate_metal_joinable(
+        _pending_metal_cfg(), ABSENT_TALOSCONFIG, kubeconfig
+    )
 
 
 def test_validate_refuses_a_joined_metal_machine_address_change(

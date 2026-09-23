@@ -126,7 +126,7 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     # the same contract for hardware: a configured machine converge can neither
     # reach in maintenance mode nor power on through a BMC is refused here,
     # while the cluster is still untouched, not skipped silently mid-run
-    _validate_metal_joinable(cfg, kubeconfig_path)
+    _validate_metal_joinable(cfg, talosconfig_path, kubeconfig_path)
     # and so is an edit a JOINED metal machine cannot take in place: its install
     # disk or cluster address, compared against the machine the cluster records
     _validate_metal_machines(cfg, talosconfig_path, kubeconfig_path)
@@ -614,19 +614,26 @@ def _metal_unjoined(cfg: Config, kubeconfig: Path) -> list[MetalServer]:
     ]
 
 
-def _validate_metal_joinable(cfg: Config, kubeconfig: Path) -> None:
+def _validate_metal_joinable(cfg: Config, talosconfig: Path, kubeconfig: Path) -> None:
     """Refuse a metal machine converge is set to join but could never bring in.
 
     The provider backends refuse a change they cannot reconcile in place during
     the validate phase, before any later phase mutates, so a rejected config
     never leaves a half-applied cluster. A machine the config lists for
     auto-join but that is neither in the cluster, waiting in maintenance mode,
-    nor reachable through a BMC converge may power on is exactly such a change:
-    no phase can bring it in and there is nothing to drive. Hardware is
-    physical, so the fix is a person at the rack -- converge says which machine
-    and stops while the cluster is still untouched. A machine auto-join does
-    not cover is never converge's to bring in -- joining it is `metal join`'s
-    job -- so its absence is the operator's business and is not checked here.
+    answering apid with the cluster's own identity, nor reachable through a BMC
+    converge may power on is exactly such a change: no phase can bring it in
+    and there is nothing to drive. Hardware is physical, so the fix is a person
+    at the rack -- converge says which machine and stops while the cluster is
+    still untouched. A machine auto-join does not cover is never converge's to
+    bring in -- joining it is `metal join`'s job -- so its absence is the
+    operator's business and is not checked here.
+
+    The refusal probes through `answers_as_cluster`, the probe the compute
+    phase joins through, so the two cannot drift apart: a machine that answers
+    apid with the cluster's identity is already joined -- its kube Node went
+    missing or has not registered yet -- and is left to the compute phase,
+    which skips it rather than wipe a live node.
 
     With no kubeconfig the kube phase has not yet recovered a lost one or
     bootstrapped a fresh cluster, so a joined machine cannot be told from a
@@ -635,12 +642,18 @@ def _validate_metal_joinable(cfg: Config, kubeconfig: Path) -> None:
     """
     if not (kubeconfig.is_file() and kubeconfig.stat().st_size > 0):
         return
+    # the cluster probe dials through the control plane like every other
+    # talosctl call: this host may not route the machine's address directly
+    endpoint = _talos_endpoint(cfg, talosconfig=talosconfig, required=False)
     stuck = [
         s
         for s in _metal_unjoined(cfg, kubeconfig)
         if s.auto_join
         and not s.redfish
-        and not talosctl.maintenance_reachable(metal_talos.cluster_ip(s))
+        # a machine that answers apid with the cluster's identity is already
+        # joined -- the compute phase skips it rather than reinstall it -- so
+        # only one that answers neither apid is refused here
+        and metal_talos.answers_as_cluster(talosconfig, s, endpoint) is None
     ]
     if not stuck:
         return
