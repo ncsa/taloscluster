@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from taloscluster import naming, plugins
-from taloscluster.config import ConfigError, load_config
+from taloscluster.config import ConfigError, load_config, validate_warnings
 from taloscluster.output import Die
 from taloscluster.scaffold import CLUSTER_TEMPLATE, GITIGNORE_ENTRIES, init
 
@@ -210,6 +210,55 @@ def test_metal_init_never_duplicates_the_section(tmp_path):
     init(tmp_path, name="demo", metal=True)
     text = (tmp_path / "cluster.yaml").read_text()
     assert text.count("metal:") == 1
+
+
+@pytest.mark.parametrize("provider", ["openstack", "proxmox"])
+def test_metal_init_on_an_existing_cluster_opts_into_kubespan(tmp_path, provider):
+    """Re-running `init --metal` beside an existing cluster.yaml still appends
+    the example group on another L2, which only loads with the KubeSpan opt-in
+    the fresh template writes -- so the existing talos section gets it too."""
+    init(tmp_path, name="demo", provider=provider)
+    init(tmp_path, name="demo", provider=provider, metal=True)
+
+    cluster = yaml.safe_load((tmp_path / "cluster.yaml").read_text())
+    assert cluster["talos"]["kubespan"] is True
+    assert "metal" in yaml.safe_load((tmp_path / "secrets.yaml").read_text())
+    cfg = load_config(tmp_path)
+    assert cfg.metal.groups["rack1"].network.cidr != cfg.network.cluster.cidr
+
+
+def test_metal_reinit_leaves_a_single_kubespan_opt_in(tmp_path):
+    init(tmp_path, name="demo", metal=True)
+    init(tmp_path, name="demo", metal=True)
+    text = (tmp_path / "cluster.yaml").read_text()
+    assert text.count("kubespan: true") == 1
+
+
+def test_metal_init_leaves_an_explicit_kubespan_false_alone(tmp_path):
+    """An explicit false is the user's choice: the scaffold does not flip it,
+    and the load refuses the off-L2 example group under it by name."""
+    init(tmp_path, name="demo")
+    path = tmp_path / "cluster.yaml"
+    path.write_text(path.read_text().replace(
+        "  version: v1.13.8\n", "  version: v1.13.8\n  kubespan: false\n"))
+    init(tmp_path, name="demo", metal=True)
+    assert yaml.safe_load(path.read_text())["talos"]["kubespan"] is False
+    with pytest.raises(ConfigError, match="kubespan must be true"):
+        load_config(tmp_path)
+
+
+def test_proxmox_scaffold_leaves_dns_empty_so_the_first_plan_does_not_warn(tmp_path):
+    """A bridge/vnet serves DNS over DHCP, so resolvers in the scaffold only
+    earn the ignored-`network.dns` warning on the very first plan."""
+    init(tmp_path, name="demo", provider="proxmox")
+    cfg = load_config(tmp_path)
+    assert cfg.network.dns == []
+    assert not any("network.dns" in w for w in validate_warnings(cfg))
+
+
+def test_openstack_scaffold_keeps_dns_resolvers(tmp_path):
+    init(tmp_path, name="demo")
+    assert load_config(tmp_path).network.dns == ["8.8.8.8", "8.8.4.4"]
 
 
 def test_init_never_overwrites_existing_files(tmp_path):

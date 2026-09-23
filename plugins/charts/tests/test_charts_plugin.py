@@ -71,6 +71,16 @@ def test_init_leaves_existing_section_alone(tmp_path):
     assert secrets["charts"]["ceph"] == {"userID": "admin", "userKey": "k"}
 
 
+def test_init_does_not_repeat_the_commented_secrets_example(tmp_path):
+    """The secrets scaffold is comments only, so no parsed `charts:` key ever
+    appears; the commented header is what a re-run must recognise."""
+    _write_cluster(tmp_path, {"name": "test", "include": ["secrets.yaml"]})
+    (tmp_path / "secrets.yaml").write_text(yaml.safe_dump({"openstack": {}}))
+    taloscluster_charts.init(tmp_path)
+    taloscluster_charts.init(tmp_path)
+    assert (tmp_path / "secrets.yaml").read_text().count("# charts:") == 1
+
+
 def test_validate_rejects_bad_section(tmp_path):
     _write_cluster(tmp_path, {"name": "test", "charts": {"metallb": {"bogus": 1}}})
     with pytest.raises(ConfigError):

@@ -17,7 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Accept a `metal` section defining bare-metal machine groups beside one required VM provider, requiring real BMC credentials for `redfish` groups (https-only unless `bmc.scheme` opts into http) and refusing cabling, BMC and network settings that could never join, including a metal network without a gateway and a cluster address that is the L2's network or broadcast address, one of its gateways, or inside a managed SDN's reserved layout.
 - Add `bmc.tls_verify` to verify Redfish TLS against the system trust store or a pinned CA bundle; BMC certificates stay unverified by default.
 - Treat metal machines as cluster nodes throughout: they join at the cluster's running Kubernetes version and the tailnet when tailscale is configured, get the same firewall as VMs with every group's and server-overridden L2 and KubeSpan's UDP port admitted, count as desired nodes in scale-down and `check`, are listed by `status`, are refused a changed `disk` or cluster address during validate, and scale down into maintenance mode keeping the Talos install so the machine can join another cluster; destroy leaves them running the destroyed cluster and keeps the talosconfig their reset needs until the next converge, which starts the fresh cluster without the live-cluster refusals.
-- Add `--metal` to `init` to scaffold the bare-metal section and its BMC credentials beside a provider.
+- Add `--metal` to `init` to scaffold the bare-metal section and its BMC credentials beside a provider, opting an existing cluster into KubeSpan.
 - Add `link_name` and `vlan` overrides to metal interfaces for the generated external VLAN child link and its ingress return-path pod.
 - Add `metal.<group>.extensions`, merged with the cluster-wide set into the installer image the bare-metal machines share.
 - Add `talos.kubespan` (default false) enabling Talos KubeSpan, sized to the routed MTU on multi-L2 clusters, excluding external and tailnet endpoints, and required for metal machines on another L2.
@@ -74,7 +74,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Use the configured OpenStack region instead of a hardcoded `RegionOne`.
 - Include the extension schematic in the boot image and ISO name so changing base extensions builds a fresh image.
 - Normalize a missing `v` prefix on `talos.version` and `kubernetes.version`.
-- Scaffold the Proxmox `kubeapi_vip` outside the managed-SDN static layout.
+- Scaffold the Proxmox `kubeapi_vip` outside the managed-SDN static layout and leave `network.dns` empty on a bridge/vnet.
 - Create `talossecrets.yaml` with mode 0600 from the start.
 - Forward plugin `check`/`status` results to later plugins so ArgoCD renders the same Rancher cluster id as converge.
 - Refuse Rancher converge and destroy on a downstream-agent id mismatch; `check`/`status` report it and `plugin rancher destroy` removes an orphaned agent.
@@ -87,6 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Stop `init` re-runs from appending a commented plugin secrets example again.
 - Prefix `security:` rules in the Talos host firewall and refuse two rules whose names differ only by case or punctuation.
 - Make ArgoCD converge apply only missing or drifted manifests, refuse a component enabled under both argocd and charts, and report a failed Rancher agent removal or identity read.
 - Activate the charts plugin only when a chart is enabled, so an untouched scaffold needs no helm.

@@ -5,12 +5,14 @@ Writes the two files a cluster needs before the first converge — cluster.yaml
 secrets.yaml (credentials, gitignored, 0600) — plus a .gitignore that keeps the
 secret/derived files out of git. Existing cluster.yaml / secrets.yaml keep their
 content and receive only missing sections from installed plugins (and, with
---metal, the bare-metal section); an existing .gitignore is appended to only
-with entries it is missing.
+--metal, the bare-metal section plus the KubeSpan opt-in its off-L2 example
+group needs); an existing .gitignore is appended to only with entries it is
+missing.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from . import plugins as _plugins
@@ -60,7 +62,7 @@ workers:
 network:
   cluster: # the L2 the nodes sit on
     cidr: 192.168.0.0/21{network_cluster}
-  dns: [8.8.8.8, 8.8.4.4]
+{dns}
   ntp: [pool.ntp.org]
 
 # named ingress rules: friendly name -> CIDR allowed to reach that rule's port.
@@ -104,6 +106,7 @@ PROVIDER_TEMPLATES = {
         "controlplane_sizing": "  flavor: gp.medium",
         "worker_sizing": "    flavor: gp.xlarge",
         "network_cluster": "",
+        "dns": "  dns: [8.8.8.8, 8.8.4.4]",
         "cluster": """\
 openstack:
   url: https://openstack.example.edu:5000/v3/
@@ -125,6 +128,13 @@ openstack:
     # layout reserves .1 for the gateway, the controlplane block, and a
     # block per worker pool)
     kubeapi_vip: 192.168.0.2""",
+        # a bridge/vnet serves DNS over DHCP, so resolvers here would only earn
+        # the ignored-network.dns warning on the first plan; a managed SDN has
+        # no DHCP and needs them filled in
+        "dns": """
+  # DNS comes from DHCP on a bridge/vnet; a managed SDN has no DHCP and
+  # needs the resolvers set here
+  dns: []""",
         "cluster": """\
 proxmox:
   url: https://pve.example.edu:8006
@@ -235,6 +245,7 @@ def init(
             controlplane_sizing=template["controlplane_sizing"],
             worker_sizing=template["worker_sizing"],
             network_cluster=template["network_cluster"],
+            dns=template["dns"],
             provider_section=template["cluster"],
             kubespan=METAL_KUBESPAN_SECTION if metal else "",
         ))
@@ -250,6 +261,7 @@ def init(
         info(f"wrote {SECRETS_FILE} (mode 0600)")
 
     if metal:
+        _add_kubespan(cluster)
         add_yaml_section(cluster, "metal", METAL_CLUSTER_SECTION)
         add_yaml_section(secrets, "metal", METAL_SECRETS_SECTION)
 
@@ -274,15 +286,24 @@ def init(
 
 
 def add_yaml_section(path: Path, key: str, section: str) -> None:
-    """Append a plugin section when its top-level key is not already present."""
-    if key in read_yaml(path):
+    """Append a plugin section when its top-level key is not already present.
+
+    A commented top-level `key:` line counts as present too: a secrets
+    scaffold can be comments only (a comment opts nothing in), so its
+    `# key:` header is what a re-run must recognise.
+    """
+    text = path.read_text()
+    if key in read_yaml(path) or any(
+        line.startswith(f"{key}:")
+        or (line.startswith("#") and line.lstrip("#").strip().startswith(f"{key}:"))
+        for line in text.splitlines()
+    ):
         info(f"{path.name}: {key} section already exists")
         return
 
-    current = path.read_text()
-    if current and not current.endswith("\n"):
+    if text and not text.endswith("\n"):
         separator = "\n\n"
-    elif current and not current.endswith("\n\n"):
+    elif text and not text.endswith("\n\n"):
         separator = "\n"
     else:
         separator = ""
@@ -290,6 +311,27 @@ def add_yaml_section(path: Path, key: str, section: str) -> None:
         f.write(separator)
         f.write(section.rstrip() + "\n")
     info(f"{path.name}: added {key} section")
+
+
+def _add_kubespan(path: Path) -> None:
+    """Opt an existing cluster.yaml's talos section into KubeSpan.
+
+    `init --metal` appends its example group on another L2 to an existing
+    directory too, and that group only loads with the overlay on; a fresh
+    scaffold writes the opt-in through its template instead. A key already
+    present is left alone -- an explicit false is the user's choice, and the
+    load refuses an off-L2 group under it by name.
+    """
+    talos = read_yaml(path).get("talos")
+    if isinstance(talos, dict) and talos.get("kubespan") is not None:
+        return
+    lines = path.read_text().splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if re.fullmatch(r"talos:\s*(#.*)?", line.rstrip()):
+            lines.insert(i + 1, METAL_KUBESPAN_SECTION)
+            path.write_text("".join(lines))
+            info(f"{path.name}: enabled talos.kubespan")
+            return
 
 
 def _ensure_gitignore(root: Path) -> None:
