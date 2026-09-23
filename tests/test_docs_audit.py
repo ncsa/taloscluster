@@ -33,6 +33,10 @@ tests so the drift they caught cannot come back silently:
   flags ``uv sync`` actually offers: it has no ``--editable`` (installing
   editable is the default, ``--no-editable`` the opt-out), so a command
   carrying it errors instead of setting the checkout up.
+- The ``CHANGELOG.md`` bullets stay readable: every ``**Breaking:**`` bullet
+  sits under the Unreleased ``### Changed`` heading, no Unreleased bullet runs
+  past a sentence or two, and documentation work collapses into one bullet
+  instead of one per page.
 """
 
 from __future__ import annotations
@@ -391,3 +395,61 @@ def test_uv_sync_commands_use_supported_flags():
         if line.strip().startswith("uv sync") and "--editable" in line
     ]
     assert not offenders, "`uv sync` has no --editable flag: " + "; ".join(offenders)
+
+
+# --------------------------------------------------------------------------- #
+# 6. CHANGELOG hygiene.
+# --------------------------------------------------------------------------- #
+
+
+def _unreleased_bullets() -> list[tuple[str, str]]:
+    """(section, bullet) for every bullet under the ``[Unreleased]`` heading."""
+    section = ""
+    in_unreleased = False
+    bullets: list[tuple[str, str]] = []
+    for line in (ROOT / "CHANGELOG.md").read_text().splitlines():
+        if line.startswith("## "):
+            in_unreleased = "Unreleased" in line
+            continue
+        if not in_unreleased:
+            continue
+        if line.startswith("### "):
+            section = line.removeprefix("### ").strip()
+        elif line.startswith("- "):
+            bullets.append((section, line))
+    return bullets
+
+
+def test_changelog_breaking_bullets_live_in_changed():
+    # A breaking change must be impossible to miss when a release is skimmed:
+    # every `**Breaking:**` bullet sits under the Unreleased `### Changed`
+    # heading, not hidden among the Added and Fixed lists.
+    misplaced = [
+        bullet
+        for section, bullet in _unreleased_bullets()
+        if "**Breaking:**" in bullet and section != "Changed"
+    ]
+    assert not misplaced, "Breaking bullet(s) outside Changed: " + "; ".join(misplaced)
+
+
+def test_changelog_bullets_do_not_run_on():
+    # A bullet that stacks a whole feature into one line reads as a wall of
+    # text; the metal bullets once ran past 600 characters. Keep every
+    # Unreleased bullet to a sentence or two.
+    overlong = [(len(b), b) for _, b in _unreleased_bullets() if len(b) > 450]
+    assert not overlong, "Unreleased bullet(s) over 450 chars: " + "; ".join(
+        f"({n}) {b[:80]}..." for n, b in overlong
+    )
+
+
+def test_changelog_docs_work_is_one_bullet():
+    # Documentation work collapses into a single bullet: a release whose list
+    # is a pile of "Document ..." lines buries the behaviour changes.
+    docs_bullets = [
+        bullet
+        for _, bullet in _unreleased_bullets()
+        if re.match(r"- (Document|Add guides|Expand troubleshooting)\b", bullet)
+    ]
+    assert len(docs_bullets) <= 1, "docs-only bullets should collapse into one: " + "; ".join(
+        docs_bullets
+    )
