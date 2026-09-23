@@ -9,7 +9,19 @@ import yaml
 from taloscluster.errors import ConfigError
 
 import taloscluster_charts
+from taloscluster_charts import reconcile
 from taloscluster_charts.config import charts_configured
+
+
+class _Ctx:
+    """Duck-typed stand-in for taloscluster.context.Context."""
+
+    def __init__(self, root: Path):
+        self.root = root
+
+    @property
+    def kubeconfig(self) -> Path:
+        return self.root / "kubeconfig"
 
 
 def _write_cluster(root: Path, doc: dict) -> Path:
@@ -27,10 +39,25 @@ def test_init_scaffolds_all_charts_disabled(tmp_path):
     assert charts["traefik"]["enabled"] is False
     assert charts["gateway"]["enabled"] is False
     assert charts["ceph"]["enabled"] is False
-    assert charts_configured(tmp_path) is True
+    assert charts_configured(tmp_path) is False
+    assert taloscluster_charts.configured(_Ctx(tmp_path)) is False
     # the secrets scaffold is a commented example, so the section stays absent
     assert "charts" not in yaml.safe_load((tmp_path / "secrets.yaml").read_text())
     assert "userKey" in (tmp_path / "secrets.yaml").read_text()
+
+
+def test_disabled_section_stays_configured_while_something_is_installed(tmp_path, monkeypatch):
+    _write_cluster(tmp_path, {"name": "test", "charts": {"metallb": {"enabled": False}}})
+    (tmp_path / "kubeconfig").write_text("")
+    ctx = _Ctx(tmp_path)
+    assert taloscluster_charts.configured(ctx) is False
+    monkeypatch.setattr(
+        reconcile.helm,
+        "release",
+        lambda kubeconfig, name, namespace: {
+            "name": name, "status": "deployed", "chart": f"{name}-1.0.0"},
+    )
+    assert taloscluster_charts.configured(ctx) is True
 
 
 def test_init_leaves_existing_section_alone(tmp_path):

@@ -242,9 +242,19 @@ class Config:
 
 
 def charts_configured(root: Path) -> bool:
-    """True when the merged configuration carries a `charts:` mapping."""
-    raw, _opted_in = load_raw(root)
-    return isinstance(raw.get(SECTION), dict)
+    """True when the merged configuration enables at least one `charts:` entry.
+
+    A section with every entry disabled -- exactly what `taloscluster init`
+    scaffolds -- does not activate the plugin: activation would demand helm on
+    every cluster that never enabled a chart. A section that cannot be parsed
+    is not configured either; the validate hook is what reports it, the way
+    argocd and rancher do.
+    """
+    try:
+        cfg = Config.load(root)
+    except ConfigError:
+        return False
+    return any(entry.enabled for entry in cfg.entries.values())
 
 
 def _validate_combined(entries: dict[str, Entry]) -> None:

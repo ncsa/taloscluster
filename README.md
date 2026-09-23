@@ -8,7 +8,7 @@ Resources are discovered by name and ownership tags, without a separate infrastr
 
 ## Install
 
-Install [uv](https://docs.astral.sh/uv/) and make `talosctl` and `kubectl` available on PATH, then:
+Install [uv](https://docs.astral.sh/uv/) and make `talosctl` and `kubectl` available on PATH — plus `helm` for the optional charts plugin — then:
 
 ```bash
 uv tool install git+https://github.com/ncsa/taloscluster

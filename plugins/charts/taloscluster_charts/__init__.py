@@ -22,7 +22,7 @@ from taloscluster.context import Context
 from taloscluster.scaffold import add_yaml_section
 
 from .config import charts_configured, validate_charts
-from .reconcile import check, converge, destroy, status
+from .reconcile import check, converge, destroy, status, still_installed
 
 try:
     __version__ = version("taloscluster-charts")
@@ -102,8 +102,16 @@ def init(root: Path) -> None:
 
 
 def configured(ctx: Context) -> bool:
-    """True when cluster.yaml carries a `charts:` mapping."""
-    return charts_configured(ctx.root)
+    """True when an entry is enabled, or something is still installed.
+
+    The init scaffold leaves every entry disabled, so a cluster that never
+    enabled a chart stays inactive and needs no helm; a section whose entries
+    are all disabled keeps the plugin active only while one still has a release
+    or manifest in the cluster for converge to remove.
+    """
+    if charts_configured(ctx.root):
+        return True
+    return still_installed(ctx)
 
 
 def validate(root: Path, ctx: Context) -> None:

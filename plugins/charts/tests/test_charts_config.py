@@ -37,6 +37,23 @@ def test_present_section_is_configured(tmp_path):
     assert charts_configured(tmp_path) is True
 
 
+def test_all_disabled_section_is_not_configured(tmp_path):
+    _write_cluster(tmp_path, {"metallb": {"enabled": False}, "traefik": {"enabled": False}})
+    assert charts_configured(tmp_path) is False
+
+
+def test_section_with_a_default_enabled_entry_is_configured(tmp_path):
+    _write_cluster(tmp_path, {"metallb": {"enabled": False}, "traefik": {}})
+    assert charts_configured(tmp_path) is True
+
+
+def test_malformed_section_is_not_configured(tmp_path):
+    _write_cluster(tmp_path, {"metallb": {"bogus": 1}})
+    assert charts_configured(tmp_path) is False
+    _write_cluster(tmp_path, "not-a-mapping")
+    assert charts_configured(tmp_path) is False
+
+
 def test_known_chart_defaults(tmp_path):
     _write_cluster(tmp_path, {"metallb": {}})
     entry = Config.load(tmp_path).entries["metallb"]

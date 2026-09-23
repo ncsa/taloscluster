@@ -86,6 +86,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Activate the charts plugin only when a chart is enabled, so an untouched scaffold needs no helm.
 - Report pinned-version and values drift in charts `check`, and stop converge re-upgrading chart versions that differ only by a leading `v`.
 - Retry a helm release left `failed` or `pending-*` by an interrupted converge.
 - Continue charts converge, check and destroy when a `latest` manifest version cannot be resolved, failing only that entry.

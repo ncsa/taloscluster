@@ -17,7 +17,7 @@ from typing import Any
 
 import yaml
 from taloscluster.context import Context
-from taloscluster.errors import ReconcileError, preflight_tools
+from taloscluster.errors import ConfigError, ReconcileError, preflight_tools
 from taloscluster.output import action, dry_run, info, log, show_yaml, warn
 
 from . import charts, helm, kube, upstream
@@ -55,6 +55,44 @@ def _deferred(ctx: Context) -> str | None:
     if not ctx.kubeconfig.is_file():
         return "this cluster has no kubeconfig yet (it is written at bootstrap)"
     return None
+
+
+def still_installed(ctx: Context) -> bool:
+    """Whether any disabled entry still has something in the cluster to remove.
+
+    The plugin's activation check calls this so a section whose every entry is
+    disabled -- exactly what `taloscluster init` scaffolds -- keeps the plugin
+    (and its helm requirement) inactive, while a disabled entry with a release
+    or applied manifest left stays configured until converge removes it.
+    Best-effort: only a bootstrapped cluster (a kubeconfig present) can hold
+    anything, and a probe that cannot answer -- helm or kubectl missing, the
+    kube-api unreachable, a `latest` manifest that cannot be named -- reads as
+    nothing left rather than keeping the plugin active.
+    """
+    if not ctx.kubeconfig.is_file():
+        return False
+    try:
+        cfg = Config.load(ctx.root)
+    except ConfigError:
+        return False
+    for entry in cfg.entries.values():
+        if entry.enabled:
+            continue
+        try:
+            if entry.is_manifest:
+                if any(kube.exists(ctx.root, url) for url in entry.urls()):
+                    return True
+            elif entry.name == "ceph":
+                if any(
+                    helm.release(ctx.kubeconfig, chart, chart)
+                    for chart in charts.ceph_charts(entry)
+                ):
+                    return True
+            elif helm.release(ctx.kubeconfig, entry.name, _namespace_of(entry)):
+                return True
+        except (ConfigError, OSError, ReconcileError):
+            continue
+    return False
 
 
 def _ingress_pool(ctx: Context) -> tuple[str, ...]:
@@ -122,12 +160,15 @@ def _manifest_urls(entry: Entry) -> tuple[str, ...]:
 
 def converge(ctx: Context, assume_yes: bool = False) -> dict:
     cfg = Config.load(ctx.root)
-    preflight_tools(["helm", "kubectl"])
 
+    # the deferral comes first, so a plan on a cluster that has not bootstrapped
+    # yet reports the charts as deferred instead of failing on a missing helm
     reason = _deferred(ctx)
     if reason:
         info(f"charts converge deferred ({reason}); nothing would be installed yet")
         return {"deferred": True, "reason": reason}
+
+    preflight_tools(["helm", "kubectl"])
 
     pool = _ingress_pool(ctx)
     gateway_on = _gateway_enabled(cfg.entries)

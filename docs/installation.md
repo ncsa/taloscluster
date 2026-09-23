@@ -1,6 +1,6 @@
 # Installation
 
-Install [uv](https://docs.astral.sh/uv/), and put `talosctl` and `kubectl` on PATH. The package requires Python 3.10 or newer; uv can manage the Python environment. Provider credentials and network access are covered in the [Quickstart](quickstart.md).
+Install [uv](https://docs.astral.sh/uv/), and put `talosctl` and `kubectl` on PATH. The package requires Python 3.10 or newer; uv can manage the Python environment. The optional [charts plugin](configuration/charts.md) needs `helm` on PATH as well, but only once a cluster enables a chart. Provider credentials and network access are covered in the [Quickstart](quickstart.md).
 
 For Proxmox, also provide an ISO-building utility on the management machine: `xorriso`, `genisoimage`, or macOS `hdiutil`. taloscluster uses it to build the temporary cloud-init ISO.
 

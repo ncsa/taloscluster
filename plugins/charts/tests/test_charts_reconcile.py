@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 from taloscluster import output
-from taloscluster.errors import ConfigError, ReconcileError
+from taloscluster.errors import ConfigError, PreflightError, ReconcileError
 
 from taloscluster_charts import reconcile
 from taloscluster_charts.config import Config
@@ -165,6 +165,61 @@ def test_plan_shows_values_when_changing(tmp_path, fake_helm, no_kube, dry, caps
     out = capsys.readouterr().out
     assert "metallb: values" in out
     assert "frrk8s" in out
+
+
+def test_plan_defers_before_preflight(tmp_path, fake_helm, no_kube, dry, monkeypatch):
+    """A plan before bootstrap reports the charts as deferred even without helm."""
+
+    def fail_preflight(tools=None):
+        raise PreflightError("required command(s) not found: helm kubectl")
+
+    monkeypatch.setattr(reconcile, "preflight_tools", fail_preflight)
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert result == {
+        "deferred": True,
+        "reason": "this cluster has no kubeconfig yet (it is written at bootstrap)",
+    }
+
+
+def test_still_installed_needs_a_kubeconfig(tmp_path):
+    ctx = _pool_ctx(tmp_path, {"metallb": {"enabled": False}})
+    assert reconcile.still_installed(ctx) is False
+
+
+def test_still_installed_sees_a_disabled_release(tmp_path, fake_helm):
+    (tmp_path / "kubeconfig").write_text("")
+    ctx = _pool_ctx(tmp_path, {"metallb": {"enabled": False}})
+    assert reconcile.still_installed(ctx) is False
+    fake_helm.installed["metallb"] = "0.14.9"
+    assert reconcile.still_installed(ctx) is True
+
+
+def test_still_installed_sees_a_ceph_chart(tmp_path, fake_helm):
+    (tmp_path / "kubeconfig").write_text("")
+    ctx = _pool_ctx(tmp_path, {"ceph": {"enabled": False, "rbd": True, "fs": True}})
+    fake_helm.installed["ceph-csi-rbd"] = "3.0.0"
+    assert reconcile.still_installed(ctx) is True
+
+
+def test_still_installed_sees_an_applied_manifest(tmp_path, monkeypatch):
+    (tmp_path / "kubeconfig").write_text("")
+    monkeypatch.setattr(reconcile.kube, "exists", lambda root, target, **k: True)
+    # a `latest` gateway cannot be named without upstream, and reads as gone
+    ctx = _pool_ctx(tmp_path, {"gateway": {"enabled": False, "version": "latest"}})
+    assert reconcile.still_installed(ctx) is False
+    pinned = _pool_ctx(tmp_path, {"gateway": {"enabled": False, "version": "v1.6.2"}})
+    assert reconcile.still_installed(pinned) is True
+
+
+def test_still_installed_tolerates_a_missing_helm(tmp_path, monkeypatch):
+    (tmp_path / "kubeconfig").write_text("")
+
+    def no_helm(kubeconfig, name, namespace):
+        raise FileNotFoundError("helm")
+
+    monkeypatch.setattr(reconcile.helm, "release", no_helm)
+    ctx = _pool_ctx(tmp_path, {"metallb": {"enabled": False}})
+    assert reconcile.still_installed(ctx) is False
 
 
 def test_ceph_pulls_the_csi_charts_not_the_entry_name(tmp_path, fake_helm, no_kube):
