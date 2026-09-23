@@ -86,6 +86,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Retry a helm release left `failed` or `pending-*` by an interrupted converge.
 - Keep credentials out of YAML parse errors, which now name the file and the problem's line and column.
 - Push machine configs in the Talos document layout each node's running version accepts.
 - Exit cleanly when a confirmation prompt runs without a terminal, as in CI without `--yes`, instead of tracebacking.

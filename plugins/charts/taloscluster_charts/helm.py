@@ -46,15 +46,32 @@ def _base(kubeconfig: Path) -> list[str]:
 
 
 def release(kubeconfig: Path, name: str, namespace: str) -> dict | None:
-    """The installed release's `helm list` record, or None when not installed."""
+    """The release's `helm list` record, or None when not installed.
+
+    Listed with --all: plain `helm list` hides `pending-*` releases, so a
+    release interrupted by the upgrade timeout looked absent and helm
+    refused every retry with "another operation is in progress" instead of
+    letting converge see the status and clear it first.
+    """
     proc = _run(
         _base(kubeconfig)
-        + ["list", "--namespace", namespace, "--filter", f"^{re.escape(name)}$", "--output", "json"]
+        + [
+            "list",
+            "--all",
+            "--namespace",
+            namespace,
+            "--filter",
+            f"^{re.escape(name)}$",
+            "--output",
+            "json",
+        ]
     )
     if proc.returncode != 0:
         raise ReconcileError(f"helm list failed: {proc.stderr.strip()}")
     for item in json.loads(proc.stdout or "[]"):
-        if item.get("name") == name:
+        # --all also lists history-only `uninstalled` records (a release
+        # uninstalled with --keep-history); helm no longer manages those
+        if item.get("name") == name and item.get("status") != "uninstalled":
             return item
     return None
 

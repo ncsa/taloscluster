@@ -201,10 +201,13 @@ def _deploy_chart(
     """Install/upgrade one helm release to the desired chart version and values.
 
     Drift-driven: a missing release installs, a pinned version or a values
-    change upgrades, and a `latest` entry upgrades only when the repo offers a
-    newer chart version. `chart` is the chart to pull from the entry's repo
-    when it is not the entry's own (the ceph entry deploys ceph-csi-rbd and
-    ceph-csi-cephfs). Returns (action, version-reported).
+    change upgrades, a `latest` entry upgrades only when the repo offers a
+    newer chart version, and a release that is not `deployed` is retried:
+    a failed release upgrades in place, while one stuck `pending-*` or
+    `uninstalling` (an interrupted run) is uninstalled first -- helm refuses
+    to upgrade over it -- and installed fresh. `chart` is the chart to
+    pull from the entry's repo when it is not the entry's own (the ceph entry
+    deploys ceph-csi-rbd and ceph-csi-cephfs). Returns (action, version-reported).
     """
     chart = chart or entry.chart_name
     kubeconfig = ctx.kubeconfig
@@ -216,9 +219,13 @@ def _deploy_chart(
     installed = helm.chart_version(record) if record else None
     current_values = helm.get_values(kubeconfig, release, namespace) if record else None
 
+    status = record.get("status") if record else None
+
     what = None
     if record is None:
         what = f"install {release} ({desired})"
+    elif status != "deployed":
+        what = f"upgrade {release}: status is {status}"
     elif not entry.is_latest and installed != entry.version:
         what = f"upgrade {release}: {installed} -> {entry.version}"
     elif latest and installed and is_newer(latest, installed):
@@ -231,6 +238,11 @@ def _deploy_chart(
         taken = "up_to_date"
     else:
         log(what)
+        # helm refuses to upgrade over a pending-* or uninstalling release
+        # ("another operation (install/upgrade/rollback) is in progress");
+        # the only way out is to clear it and install fresh
+        if status and (status.startswith("pending-") or status == "uninstalling"):
+            helm.uninstall(kubeconfig, release, namespace)
         helm.upgrade_install(
             kubeconfig, release, chart, entry.repo or "", namespace, entry.version,
             yaml.safe_dump(merged),

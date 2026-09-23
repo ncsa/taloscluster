@@ -42,9 +42,11 @@ class FakeHelm:
     """Replaces taloscluster_charts.helm for converge decision tests."""
 
     installed: dict[str, str] = field(default_factory=dict)  # release -> chart version
+    statuses: dict[str, str] = field(default_factory=dict)  # release -> helm status override
     latest: dict[str, str] = field(default_factory=dict)
     values: dict[str, dict] = field(default_factory=dict)  # release -> last applied values
     upgrades: list = field(default_factory=list)
+    events: list[tuple[str, str]] = field(default_factory=list)  # (op, release) in call order
     lookups: list = field(default_factory=list)  # chart names asked for their latest version
     pulled: list = field(default_factory=list)  # (release, chart) pairs installed
     uninstalls: list = field(default_factory=list)
@@ -52,7 +54,11 @@ class FakeHelm:
     def release(self, kubeconfig, name, namespace):
         if name not in self.installed:
             return None
-        return {"name": name, "status": "deployed", "chart": f"{name}-{self.installed[name]}"}
+        return {
+            "name": name,
+            "status": self.statuses.get(name, "deployed"),
+            "chart": f"{name}-{self.installed[name]}",
+        }
 
     def latest_version(self, chart, repo):
         self.lookups.append(chart)
@@ -64,10 +70,12 @@ class FakeHelm:
     def upgrade_install(self, kubeconfig, name, chart, repo, namespace, version, values_yaml):
         self.upgrades.append((name, values_yaml))
         self.pulled.append((name, chart))
+        self.events.append(("upgrade", name))
         self.values[name] = yaml.safe_load(values_yaml)
 
     def uninstall(self, kubeconfig, name, namespace):
         self.uninstalls.append(name)
+        self.events.append(("uninstall", name))
 
 
 @pytest.fixture
@@ -231,6 +239,37 @@ def test_pinned_version_mismatch_upgrades(tmp_path, fake_helm, no_kube):
     assert result["entries"]["metallb"]["action"] == "upgraded"
 
 
+def test_failed_release_upgrades_in_place(tmp_path, fake_helm, no_kube):
+    # helm accepts an upgrade over a failed release; version and values match,
+    # so the non-deployed status is the only trigger
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.14.9"
+    fake_helm.values["metallb"] = {
+        "speaker": {"frr": {"enabled": False}},
+        "frrk8s": {"enabled": False},
+    }
+    fake_helm.statuses["metallb"] = "failed"
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert result["entries"]["metallb"]["action"] == "upgraded"
+    assert fake_helm.upgrades[0][0] == "metallb"
+    assert not fake_helm.uninstalls
+
+
+@pytest.mark.parametrize(
+    "status", ["pending-install", "pending-upgrade", "pending-rollback", "uninstalling"]
+)
+def test_stuck_release_is_cleared_then_installed_fresh(tmp_path, fake_helm, no_kube, status):
+    # helm refuses to upgrade over a pending-*/uninstalling release ("another
+    # operation is in progress"), so it is uninstalled first and the
+    # upgrade --install falls through to a fresh install
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.latest["metallb"] = "0.14.9"
+    fake_helm.statuses["metallb"] = status
+    result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert result["entries"]["metallb"]["action"] == "upgraded"
+    assert fake_helm.events == [("uninstall", "metallb"), ("upgrade", "metallb")]
+
+
 def test_disabled_entry_uninstalls(tmp_path, fake_helm, no_kube):
     fake_helm.installed["metallb"] = "0.14.9"
     result = reconcile.converge(_pool_ctx(tmp_path, {"metallb": {"enabled": False}}))
@@ -343,6 +382,15 @@ def test_check_fails_on_missing_release(tmp_path, fake_helm, no_kube):
     report = reconcile.check(_pool_ctx(tmp_path, {"metallb": {}}))
     assert report["ok"] is False
     assert report["entries"]["metallb"] == "not_installed"
+
+
+@pytest.mark.parametrize("status", ["failed", "pending-upgrade"])
+def test_check_fails_on_unhealthy_release(tmp_path, fake_helm, no_kube, status):
+    fake_helm.installed["metallb"] = "0.14.9"
+    fake_helm.statuses["metallb"] = status
+    report = reconcile.check(_pool_ctx(tmp_path, {"metallb": {}}))
+    assert report["ok"] is False
+    assert report["entries"]["metallb"] == "drifted"
 
 
 def test_check_fails_when_pool_drifted(tmp_path, fake_helm, no_kube):
