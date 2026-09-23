@@ -10,13 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Add the `charts` plugin (`taloscluster[charts]`): install Helm charts and manifests (Gateway API, MetalLB, Traefik, cert-manager, sealed-secrets, NFS and Ceph CSI) into the cluster during converge, drift-driven, with the `charts:` section (including the `charts.ceph` credentials) read from the merged configuration.
 - Add `show_yaml`/`redact` to `taloscluster.output` so plugin dry-run previews mask credential-looking keys and every value of a Kubernetes Secret.
-- Join a bare-metal machine missing from the cluster during converge only when its group sets `auto_join: true`, never reinstalling one that already answers apid with the cluster's identity.
+- Join a bare-metal machine missing from the cluster during converge only when its group sets `auto_join: true`, never reinstalling one that already answers apid with the cluster's identity; `plan` lists the machines it would join and converge exits 1 when one fails to join.
 - Warn during `check` and `converge` when a configured host network overlaps the Kubernetes pod (`10.244.0.0/16`) or service (`10.96.0.0/12`) network, which is what Talos's `address-overlap` diagnostic reports on a node.
 - Add `metal.<group>.boot_timeout` (seconds, default 600) for how long a machine may take to reach maintenance mode, overridable per server, for hardware that is slow from cold.
 - Add `metal` commands that inspect, boot, wait, apply, eject and join bare-metal machines, previewable with `--dry-run`, refusing an already-joined machine and skipping the BMC when redfish is disabled. `metal apply` generates the machine config against the cluster endpoint the provider resolved — refusing until converge has run — writes it to `.metal/` (which `init` git-ignores) at mode 0600 and warns when the directory is not ignored.
-- Accept a `metal` section defining bare-metal machine groups beside one required VM provider, requiring real BMC credentials for `redfish` groups (https-only unless `bmc.scheme` opts into http) and refusing cabling, BMC and network settings that could never join, such as a `/prefix` on a BMC address or a control plane with no external link while the kubeapi VIP rides the external network.
+- Accept a `metal` section defining bare-metal machine groups beside one required VM provider, requiring real BMC credentials for `redfish` groups (https-only unless `bmc.scheme` opts into http) and refusing cabling, BMC and network settings that could never join.
 - Add `bmc.tls_verify` to verify Redfish TLS against the system trust store or a pinned CA bundle; BMC certificates stay unverified by default.
-- Treat metal machines as cluster nodes throughout: they join at the cluster's running Kubernetes version and the tailnet when tailscale is configured, get the same firewall as VMs with every group's L2 and KubeSpan's UDP port admitted, count as desired nodes in scale-down and `check`, are listed by `status`, and scale down into maintenance mode keeping the Talos install so the machine can join another cluster.
+- Treat metal machines as cluster nodes throughout: they join at the cluster's running Kubernetes version and the tailnet when tailscale is configured, get the same firewall as VMs with every group's L2 and KubeSpan's UDP port admitted, count as desired nodes in scale-down and `check`, are listed by `status`, are refused a changed `disk` or cluster address during validate, and scale down into maintenance mode keeping the Talos install so the machine can join another cluster; destroy leaves them running the destroyed cluster and keeps the talosconfig their reset needs.
 - Add `--metal` to `init` to scaffold the bare-metal section and its BMC credentials beside a provider.
 - Add `link_name` and `vlan` overrides to metal interfaces for the generated external VLAN child link and its ingress return-path pod.
 - Add `metal.<group>.extensions`, merged with the cluster-wide set into the installer image the bare-metal machines share.
@@ -34,7 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Refuse OpenStack flavor, disk and availability-zone changes with recreation guidance; update an existing subnet's DNS in place.
 - Deny pods in the default namespace the OpenStack metadata service with a NetworkPolicy shipped in the bootstrap manifests.
 - Warn that `network.dns` is not applied on DHCP-backed Proxmox networks.
-- Create and reconcile Proxmox VM NICs inheriting the bridge MTU (a running VM's NIC is rewritten at its restart, since a live re-plug drops flannel's VXLAN device), and warn when the cluster or external bridge is below it.
+- Warn when a Proxmox cluster or external bridge MTU is below the configured `mtu`.
 - Refuse duplicate Proxmox VM names that involve a cluster-managed machine.
 - Refuse Proxmox SDN teardown or converge while the shared controller or the cluster's own zone, VNet or subnet has pending `deleted` or `changed` state, before any VM is deleted.
 - Report the firewall a new Proxmox VM would get during `plan`.
@@ -53,13 +53,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Fail config applies, bootstraps, upgrades and image removal with the same reconcile error type plugins already catch.
+- Fail config applies, bootstraps, upgrades image removal and truncated image downloads with the same reconcile error type plugins already catch.
+- Restart OpenStack nodes through Nova when a restart is requested, and give plugins the cluster's provider name in their context on every provider.
 - **Breaking:** require Proxmox 9 or newer (refusing `destroy` as well as converge); pin 0.7.x to tear down a Proxmox 8 cluster.
-- Refuse a Proxmox SDN zone MTU below the cluster MTU.
 - **Breaking:** merge `secrets.yaml` into the cluster configuration through the `include` list (the scaffold lists it), so credentials — plugin ones included — can live in any included file; a `cluster.yaml` that does not include it no longer reads it.
 - **Breaking:** the network settings, including a new `mtu` applied to links and the default route, move into `network.cluster` and `network.external`; the old address keys are refused ([old-to-new key table](docs/configuration/network.md#moving-from-the-old-keys)).
 - Delete the legacy `talos-<version>-tailscale` image on `image remove`, refusing while a managed VM still boots it, and converge detaches the boot ISO cdrom once a node boots from disk.
-- Name the timed-out kubectl command in timeout errors and allow manifest apply, diff and delete more time than a probe.
 - Apply machine configs to control planes one at a time, waiting for each restart to finish.
 - Require `talosctl health` after a control-plane upgrade, reboot or config apply before touching the next one; the kube-api VIP no longer counts as healthy.
 - Remove owned machines that never joined Kubernetes, or whose VM delete failed earlier, during scale-down.
@@ -84,21 +83,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Deliver the OpenStack Cinder cloud.conf as a Secret instead of embedding credentials in ArgoCD values.
 - Activate the ArgoCD plugin only with a `kubeconfig` or `context` apply target.
 - Reorganize the documentation around installation, quickstart, usage, commands, configuration, plugins and troubleshooting, and shorten the README.
-- Reinstall metal machines joined with an early 0.8.0 development build once, on the first converge after upgrading taloscluster.
-- Resolve the metal install ISO's schematic in the image phase, before machines are created, booted or joined.
 
 ### Fixed
 
 - Exit cleanly when a confirmation prompt runs without a terminal, as in CI without `--yes`, instead of tracebacking.
-- Refuse to bootstrap or create machines while the first control plane stays unreachable during kubeconfig recovery.
 - Fail converge when the kube-api cannot answer a node query rather than silently skipping that node's config push and Talos upgrade.
 - Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.
-- Parse the `talosctl etcd members` table by column offset so a member with an empty hostname fails closed during scale-down.
 - Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.
-- Refuse to remove a node dropped from the config during scale-down while etcd membership is unreadable.
 - Abort a control-plane scale-down when the graceful reset fails or times out, and health-check between removals.
-- Report a removed node absent from the provider inventory during scale-down instead of calling it bare metal.
-- Boot VM and bare-metal nodes added in the same run as a Kubernetes upgrade at the upgraded version.
 - Detect Tailscale addresses across the whole `100.64.0.0/10` range.
 - Redact registry passwords, `machine.files` and inline-manifest contents, multiline credentials and secret-like environment entries from the `plan` diff.
 - Emit no `--login-server` argument when `tailscale.login_server` is unset.
@@ -115,16 +107,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Fix Rancher API error messages that were joined character by character.
 - Pass the Proxmox `ingress_pool` to ArgoCD so MetalLB address pools render for both providers.
 - Give the ArgoCD AppProject `user` role the read access its name implies.
-- Reconfigure and upgrade joined metal nodes during converge, and warn that destroy leaves them running the destroyed cluster, keeping the talosconfig their reset needs.
-- Advertise etcd on a metal control plane's own L2 instead of the cluster network.
-- Give metal nodes the cluster-wide `tags:` and the provider default node labels the VM nodes get.
 - Refuse a `talos.version` older than the running release and a `kubernetes.version` the pinned Talos does not support.
 - Wait out control-plane reboots through the control-plane endpoint so an unroutable node address no longer stalls the rollout.
-- Generate metal machine configs with the same hostname document as VM nodes on every supported Talos version.
-- Refuse a joined metal machine's changed `disk` or cluster address during validate, before any phase mutates.
-- Document `boot_timeout` among the metal group settings a server overrides wholesale.
-- Bound the maintenance and cluster reachability probes with a timeout so an unroutable address no longer stalls validate.
-- List the metal machines `plan` would join on a first run.
+- Bound the cluster reachability probe with a timeout so an unroutable address no longer stalls validate.
 - Create the `talosconfig` and scaffolded `secrets.yaml` with mode 0600 from the start.
 - Fix the development install command to use only flags `uv sync` supports.
 

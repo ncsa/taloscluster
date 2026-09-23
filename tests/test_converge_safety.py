@@ -3557,7 +3557,12 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
     monkeypatch.setattr(converge.kubectl, "node_names", lambda _kc: [])
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_k: {})
     monkeypatch.setattr(converge, "_require_final_health", lambda *a, **k: None)
-    monkeypatch.setattr(converge, "_wait_nodes_ready", lambda *a, **k: None)
+    waited: list[set[str]] = []
+
+    def fake_wait(_kubeconfig, nodes, *_a, **_k):
+        waited.append(set(nodes))
+
+    monkeypatch.setattr(converge, "_wait_nodes_ready", fake_wait)
     monkeypatch.setattr(converge.kubectl, "get_nodes_wide", lambda _kc: "")
     joined: list[dict] = []
 
@@ -3585,6 +3590,10 @@ def test_converge_reconfigures_and_upgrades_metal_machines_with_the_vms(
 
     # the compute phase joined it with the config this run generated
     assert applied == [("192.0.2.61", "metal-config:rp001")]
+
+    # and the health phase waits on it beside the VMs, so a join that never
+    # registers a Node fails the run instead of passing unnoticed
+    assert waited == [{"phoenix-controlplane-01", "rp001"}]
 
     # the metal config was generated beside the VMs', from the metal installer
     # at the cluster's running kubernetes version and against the endpoint the

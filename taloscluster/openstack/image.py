@@ -21,6 +21,7 @@ from openstack.connection import Connection
 
 from .. import naming
 from ..config import Config
+from ..errors import ReconcileError
 from ..output import action, dry_run, info
 from ..talos import factory
 
@@ -109,8 +110,8 @@ def _download_and_decompress(url: str, dest_raw: Path) -> None:
                     out.write(decomp.decompress(chunk))
         expected = resp.headers.get("Content-Length")
         if expected is not None and n != int(expected):
-            raise RuntimeError(f"truncated download from {url}: got {n} of {expected} bytes")
+            raise ReconcileError(f"truncated download from {url}: got {n} of {expected} bytes")
         if not decomp.eof:
-            raise RuntimeError(
+            raise ReconcileError(
                 f"truncated download from {url} -- refusing to upload a corrupt image"
             )

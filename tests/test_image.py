@@ -175,7 +175,7 @@ def test_download_and_decompress_truncated_with_content_length(monkeypatch, tmp_
     _patch_get(monkeypatch, fake)
 
     dest = tmp_path / "talos.raw"
-    with pytest.raises(RuntimeError, match="truncated"):
+    with pytest.raises(ReconcileError, match="truncated"):
         image._download_and_decompress("http://factory/img.raw.xz", dest)
 
 
@@ -192,7 +192,7 @@ def test_download_and_decompress_truncated_without_content_length(monkeypatch, t
     _patch_get(monkeypatch, fake)
 
     dest = tmp_path / "talos.raw"
-    with pytest.raises(RuntimeError, match="truncated"):
+    with pytest.raises(ReconcileError, match="truncated"):
         image._download_and_decompress("http://factory/img.raw.xz", dest)
 
 
@@ -205,7 +205,7 @@ def test_download_and_decompress_truncated_does_not_produce_full_image(monkeypat
     _patch_get(monkeypatch, fake)
 
     dest = tmp_path / "talos.raw"
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ReconcileError):
         image._download_and_decompress("http://factory/img.raw.xz", dest)
     # whatever landed on disk is not the complete original
     assert dest.read_bytes() != original
