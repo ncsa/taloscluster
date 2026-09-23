@@ -651,7 +651,18 @@ def read_yaml(path: Path) -> dict[str, Any]:
     try:
         data = yaml.safe_load(path.read_text()) or {}
     except yaml.YAMLError as e:
-        raise ConfigError(f"could not parse {path}: {e}") from e
+        # str(e) embeds yaml's source snippet, echoing the offending line -- a
+        # credential, for a secrets.yaml with a syntax error -- and names the
+        # input "<unicode string>" instead of the file. Report the problem and
+        # its 1-based line/column only; errors without a problem mark (a plain
+        # YAMLError, a reader error) carry no snippet, so str(e) is safe there.
+        problem = getattr(e, "problem", None)
+        mark = getattr(e, "problem_mark", None)
+        detail = str(e) if problem is None else (
+            f"{problem} at line {mark.line + 1}, column {mark.column + 1}"
+            if mark is not None else problem
+        )
+        raise ConfigError(f"could not parse {path}: {detail}") from e
     if not isinstance(data, dict):
         raise ConfigError(f"{path} must be a YAML mapping")
     return data

@@ -3,6 +3,7 @@ validation errors, warnings, and cached_property semantics."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -3698,3 +3699,22 @@ def test_secrets_yaml_without_an_include_is_refused(make_config, tmp_path):
 def test_include_may_not_list_cluster_yaml(make_config):
     with pytest.raises(ConfigError, match="cluster.yaml is the cluster file itself"):
         make_config({"include": ["cluster.yaml"]})
+
+
+def test_a_yaml_error_in_secrets_yaml_does_not_echo_the_line(make_config, tmp_path):
+    """yaml's own message embeds the offending source line, which for a
+    secrets.yaml with a syntax error would print the credential it guards, and
+    names the input "<unicode string>" instead of the file."""
+    (tmp_path / SECRETS_FILE).write_text(
+        'openstack:\n  credential_secret: "hunter2secret\ntokens: 1\n'
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        make_config({"include": ["secrets.yaml"]})
+
+    message = str(excinfo.value)
+    assert "could not parse" in message
+    assert str(tmp_path / SECRETS_FILE) in message
+    assert "found unexpected end of stream" in message
+    assert re.search(r"at line \d+, column \d+", message)
+    assert "hunter2secret" not in message
+    assert "<unicode string>" not in message
