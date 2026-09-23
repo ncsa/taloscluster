@@ -2,11 +2,12 @@
 
 The cabling plan (`metal.<group>.interfaces`) drives one machine's network
 configuration: every link gets a classic ``machine.network.interfaces`` device
-entry that keeps DHCP off -- the boot link gets nothing else -- and an
-``external`` link's VLAN child is created there, while new-style link documents
-carry the static addresses, the default route, the MTUs and the external
-network's policy routing. The full config is generated through the same
-``talosctl gen config`` pipeline as every other node's.
+entry that keeps DHCP off -- the boot link gets nothing else -- while new-style
+link documents create an ``external`` link's VLAN child over the parent port
+(the ``VLANConfig`` names it, so a ``link_name`` override names the link Talos
+actually creates) and carry the static addresses, the default route, the MTUs
+and the external network's policy routing. The full config is generated through
+the same ``talosctl gen config`` pipeline as every other node's.
 
 A machine with an ``external`` link also runs the return-path static pod: it
 marks the connections entering the VLAN child so their replies leave through
@@ -182,8 +183,9 @@ def device_entries(server: MetalServer, cfg: Config) -> list[dict]:
     """The classic `machine.network.interfaces` device entries for one machine.
 
     Every link states `dhcp: false` -- static links and the boot link alike
-    must never pick up a lease -- and the `external` link's entry creates its
-    VLAN child on the parent port.
+    must never pick up a lease. The `external` link's VLAN child is created
+    and configured by the link documents, so the entries carry nothing
+    VLAN-specific.
     """
     _, entries = _cabling(server, cfg, "")
     return entries
@@ -237,7 +239,6 @@ def _cabling(server: MetalServer, cfg: Config, vip: str = "") -> tuple[list[dict
         if "external" in iface.role:
             assert ext is not None
             vlan, child_name = _external_child(server, cfg, ifname, iface)
-            entry["vlans"] = [{"vlanId": vlan}]
             if "cluster" not in iface.role:
                 # a dedicated external NIC states its own L2's MTU; a VLAN child
                 # can never exceed the port it rides on
@@ -250,10 +251,15 @@ def _cabling(server: MetalServer, cfg: Config, vip: str = "") -> tuple[list[dict
                 if stated is not None:
                     parent["mtu"] = stated
                 docs.append(parent)
+            # the VLANConfig creates the child named `child_name` -- the classic
+            # `vlans` entry would name it `<parent>.<vlanId>`, so a `link_name`
+            # override would describe a link that never exists
             child: dict = {
                 "apiVersion": "v1alpha1",
-                "kind": "LinkConfig",
+                "kind": "VLANConfig",
                 "name": child_name,
+                "vlanID": vlan,
+                "parent": ifname,
             }
             addresses = []
             if ext.anchor_cidr:

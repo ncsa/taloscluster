@@ -42,8 +42,18 @@ METAL = {
     "role": "worker",
     "disk": "/dev/sda",
     "network": {"cidr": "192.168.0.0/21", "gateway": "192.168.0.1"},
-    "interfaces": {"enp1s0f0": {"role": "cluster"}},
-    "servers": {"rp001": {"interfaces": {"enp1s0f0": {"ip": "192.168.0.5/21"}}}},
+    "interfaces": {
+        "enp1s0f0": {"role": "cluster"},
+        "enp2s0f0": {"role": "external", "vlan": 100, "link_name": "ext0"},
+    },
+    "servers": {
+        "rp001": {
+            "interfaces": {
+                "enp1s0f0": {"ip": "192.168.0.5/21"},
+                "enp2s0f0": {"ip": "203.0.113.5/24"},
+            }
+        }
+    },
 }
 
 
@@ -101,14 +111,33 @@ def test_metal_config_validates_on_every_supported_minor(
     make_config, tmp_path, talos_version, kubernetes_version
 ):
     """The metal stack -- shared patches plus the cabling plan, including the
-    ResolverConfig the static DNS rides -- validates strict on the minor its
-    install media is built for."""
+    external VLAN child the VLANConfig document creates under its `link_name`
+    (with the anchor address, the table-100 routes and the return-path pod)
+    and the ResolverConfig the static DNS rides -- validates strict on the
+    minor its install media is built for. A Proxmox cluster backs the metal
+    section because `network.external` is an OpenStack-refused key."""
     cfg = make_config({
-        "controlplane": {"count": 1, "flavor": "gp.medium", "disk": 40},
+        "controlplane": {"count": 1, "flavor": "gp.medium", "disk": 40,
+                         "cores": 4, "memory": 8},
+        "network": {
+            "cluster": {"gateway": "192.168.0.1", "kubeapi_vip": VIP},
+            "external": {
+                "cidr": "203.0.113.0/24",
+                "gateway": "203.0.113.1",
+                "anchor_cidr": "169.254.32.0/20",
+            },
+        },
+        "proxmox": {
+            "url": "https://pve.example:8006",
+            "storage": "vms",
+            "iso_storage": "isos",
+            "network": {"cluster": {"bridge": "vmbr0"},
+                        "external": {"bridge": "br-ext"}},
+        },
         "talos": {"version": talos_version},
         "kubernetes": {"version": kubernetes_version},
         "metal": {"site": METAL},
-    }, remove=("workers",))
+    }, remove=("openstack",))
     endpoint = Endpoint(vip="", advertised_address=FIP)
     config_yaml = metal_talos.build_config(
         cfg.metal.groups["site"].servers["rp001"],

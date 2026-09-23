@@ -184,13 +184,14 @@ NETWORK_DOCS = [
         "routes": [{"gateway": "172.29.21.1", "mtu": 1500}],
     },
     {
-        "apiVersion": "v1alpha1", "kind": "LinkConfig", "name": "enp2s0f0.1691",
-        "mtu": 1500,
+        "apiVersion": "v1alpha1", "kind": "VLANConfig", "name": "enp2s0f0.1691",
+        "vlanID": 1691, "parent": "enp2s0f0",
         "addresses": [{"address": ANCHOR}],
         "routes": [
             {"destination": "203.0.113.0/24", "table": "100"},
             {"gateway": "203.0.113.1", "table": "100"},
         ],
+        "mtu": 1500,
     },
     {
         "apiVersion": "v1alpha1", "kind": "RoutingRuleConfig",
@@ -205,7 +206,7 @@ NETWORK_DOCS = [
 DEVICES_PATCH = {
     "machine": {"network": {"interfaces": [
         {"interface": "enp1s0f0", "dhcp": False},
-        {"interface": "enp2s0f0", "dhcp": False, "vlans": [{"vlanId": 1691}]},
+        {"interface": "enp2s0f0", "dhcp": False},
     ]}}
 }
 
@@ -608,7 +609,10 @@ def test_metal_config_bakes_the_running_version_when_one_is_passed(
 def test_metal_interface_overrides_name_and_tag_the_vlan_child(
     make_config, monkeypatch, tmp_path
 ):
-    """`link_name` and `vlan` rename and re-tag the external child link."""
+    """`link_name` and `vlan` name and re-tag the external child link, and the
+    config creates the child under that name: the VLANConfig document carries
+    it, the classic device entry creates no child of its own, and every
+    consumer -- the return-path pod included -- names the same link."""
     metal = {
         "role": "worker",
         "disk": "/dev/sda",
@@ -626,10 +630,27 @@ def test_metal_interface_overrides_name_and_tag_the_vlan_child(
     stack, _ = _build(make_config, monkeypatch, tmp_path, metal=metal)
 
     docs, devices = stack[4], stack[5][0]
-    assert [d["name"] for d in docs if d["kind"] == "LinkConfig"] == [
-        "enp2s0f0", "ext0",
-    ]
-    assert devices["machine"]["network"]["interfaces"][1]["vlans"] == [{"vlanId": 1600}]
+    (child,) = [d for d in docs if d["kind"] == "VLANConfig"]
+    assert child == {
+        "apiVersion": "v1alpha1", "kind": "VLANConfig",
+        "name": "ext0", "vlanID": 1600, "parent": "enp2s0f0",
+        "addresses": [{"address": ANCHOR}],
+        "routes": [
+            {"destination": "203.0.113.0/24", "table": "100"},
+            {"gateway": "203.0.113.1", "table": "100"},
+        ],
+        "mtu": 1500,
+    }
+    assert devices["machine"]["network"]["interfaces"][1] == {
+        "interface": "enp2s0f0", "dhcp": False,
+    }
+    # the name Talos would give a classically-created child (parent.vlan)
+    # appears nowhere: nothing may describe that link, it is never created
+    assert all("enp2s0f0.1600" not in yaml.safe_dump(group) for group in stack)
+    (pod_patch,) = stack[6]
+    (pod,) = pod_patch["machine"]["pods"]
+    script = pod["spec"]["containers"][0]["command"][2]
+    assert 'iifname "ext0" ip daddr 203.0.113.0/24' in script
 
 
 def test_metal_cluster_link_only_carries_no_vlan(make_config):
