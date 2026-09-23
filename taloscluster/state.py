@@ -83,7 +83,8 @@ class State:
         Converge rewrites both. A destroy that leaves bare-metal machines behind
         keeps the talosconfig instead (keep_talosconfig=True): no provider
         removes those machines, and the operator resets each one with
-        `talosctl --talosconfig talosconfig -n <node> reset` once this has run.
+        `talosctl --talosconfig talosconfig -e <node> -n <node> reset` before
+        the next converge overwrites the kept talosconfig.
         """
         derived = list(DERIVED_FILES)
         if keep_talosconfig:

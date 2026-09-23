@@ -132,11 +132,21 @@ def converge(root: Path, assume_yes: bool = False, reboot: bool = False) -> int:
     _validate_metal_machines(cfg, talosconfig_path, kubeconfig_path)
     # a tailscale section added or removed after the first converge switches
     # every node's schematic and deadlocks the upgrade rollout; refuse it here,
-    # while the cluster is still untouched
-    _validate_tailscale_toggle(cfg, machines, talosconfig_path)
-    # a talos pin older than what runs would roll a downgrade across the control
-    # planes; refused here like the kubernetes one, while the cluster is untouched
-    _validate_talos_downgrade(cfg, talosconfig_path)
+    # while the cluster is still untouched -- as is a talos pin older than what
+    # runs, which would roll a downgrade across the control planes. Both read
+    # the endpoint the last converge recorded in the talosconfig, so both are
+    # skipped while no kubeconfig and no talossecrets.yaml say a cluster exists:
+    # the talosconfig a metal destroy kept records the destroyed cluster's
+    # endpoint, which the machines left behind still answer, and refusing the
+    # fresh start on it would block the destroy-and-converge-fresh path the
+    # toggle refusal itself recommends
+    has_state = (
+        (kubeconfig_path.is_file() and kubeconfig_path.stat().st_size > 0)
+        or state.secrets_exist()
+    )
+    if has_state:
+        _validate_tailscale_toggle(cfg, machines, talosconfig_path)
+        _validate_talos_downgrade(cfg, talosconfig_path)
     # Validate configured plugin sections ahead of any cluster change, so a
     # malformed or contradictory plugin configuration stops the run here -- not
     # as a late plugin failure once the image, network and machines mutated.
@@ -2923,10 +2933,10 @@ def destroy(root: Path, assume_yes: bool = False) -> int:
             + ", ".join(sorted(metal))
             + " are NOT deleted: no provider manages them, so they keep running "
             "this destroyed cluster under the identity removed here. Reset each "
-            "one with `talosctl --talosconfig talosconfig -n <node> reset` from "
-            "the cluster directory -- this still works after the destroy has "
-            "finished (even with --yes), because the talosconfig is kept -- or "
-            "boot the machine into maintenance mode and reset it there, before "
+            "one with `talosctl --talosconfig talosconfig -e <node> -n <node> "
+            "reset` from the cluster directory -- this must happen before the "
+            "next converge, which overwrites the kept talosconfig -- or boot "
+            "the machine into maintenance mode and reset it there, before "
             "its hardware joins another cluster."
         )
     if not assume_yes and not dry_run():

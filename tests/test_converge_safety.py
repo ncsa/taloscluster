@@ -1492,8 +1492,8 @@ def test_destroy_warns_that_joined_metal_machines_keep_running(
 
     err = capsys.readouterr().err
     assert "rp001" in err and "rp002" in err
-    assert "talosctl --talosconfig talosconfig -n <node> reset" in err
-    assert "talosconfig is kept" in err
+    assert "talosctl --talosconfig talosconfig -e <node> -n <node> reset" in err
+    assert "before the next converge" in err
     assert backend.mutations == ["destroy"]
 
 
@@ -3337,11 +3337,11 @@ def test_converge_does_not_replace_the_prebootstrap_identity_through_bootstrap(
     assert secrets_path.read_text() == backup  # pre-bootstrap backup is current
 
 
-def _stub_converge(monkeypatch, tmp_path, state, backend):
+def _stub_converge(monkeypatch, tmp_path, state, backend, machines=None):
     """Wire converge() so the state phase runs against fakes."""
     cfg = SimpleNamespace(
         name="phoenix", talos_version="v1.13.0",
-        extension_sets=lambda: [()], machines={},
+        extension_sets=lambda: [()], machines=machines or {},
         kubernetes_version="v1.31.0", tailscale_enabled=True,
         tailscale_auth_key=None,
     )
@@ -3405,6 +3405,75 @@ def test_converge_secrets_carry_the_disk_encryption_passphrase(monkeypatch, tmp_
     passphrase = data[machineconfig.DISK_PASSPHRASE_KEY]
     assert isinstance(passphrase, str) and len(passphrase) >= 32
     assert data["secrets"] == "dummy"  # the generated bundle itself
+
+
+def _kept_talosconfig(tmp_path):
+    """The talosconfig a metal destroy leaves behind: the context endpoint is
+    the destroyed cluster's cp-01, which the machines left behind still answer
+    until they are reset."""
+    (tmp_path / "talosconfig").write_text(
+        "context: phoenix\ncontexts:\n  phoenix:\n    endpoints:\n    - 192.0.2.10\n"
+    )
+
+
+def _cp_machines():
+    return {
+        "phoenix-controlplane-01": SimpleNamespace(role="controlplane", extensions=())
+    }
+
+
+def test_converge_after_a_metal_destroy_skips_the_live_cluster_checks(
+    monkeypatch, tmp_path
+):
+    """A metal destroy keeps the talosconfig but wipes kubeconfig and identity,
+    so the next converge is a fresh cluster -- the destroy-and-converge-fresh
+    path the tailscale toggle refusal itself recommends. The kept talosconfig
+    records the destroyed cluster's endpoint, which the machines left behind
+    still answer, so neither live-cluster check may read it: both are skipped
+    while no kubeconfig and no talossecrets.yaml say a cluster exists."""
+    _kept_talosconfig(tmp_path)
+    state = _FakeState(False, tmp_path / "talossecrets.yaml")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(
+        converge.talosctl, "running_extensions",
+        lambda *_a: pytest.fail("the toggle check must not read a destroyed cluster"),
+    )
+    monkeypatch.setattr(
+        converge.talosctl, "server_version",
+        lambda *_a: pytest.fail("the downgrade check must not read a destroyed cluster"),
+    )
+
+    with pytest.raises(_StatePhaseDone):
+        _stub_converge(
+            monkeypatch, tmp_path, state,
+            _SecretsBackend(InfrastructureInventory(), stop_after_state=True),
+            machines=_cp_machines(),
+        )
+
+    assert state.generated is True  # the fresh start the checks must not block
+
+
+def test_converge_keeps_the_live_cluster_checks_when_state_exists(
+    monkeypatch, tmp_path
+):
+    """With a kubeconfig the directory describes a cluster, not a fresh start:
+    the kept talosconfig still speaks for a live identity and the tailscale
+    toggle refusal fires as before, not skipped by the fresh-start exemption."""
+    _kept_talosconfig(tmp_path)
+    (tmp_path / "kubeconfig").write_text("clusters: []\n")
+    state = _FakeState(False, tmp_path / "talossecrets.yaml")
+    monkeypatch.setattr(converge, "dry_run", lambda: False)
+    monkeypatch.setattr(
+        converge.talosctl, "running_extensions",
+        lambda *_a: pytest.fail("the shape check must refuse without probing"),
+    )
+
+    with pytest.raises(ReconcileError, match="toggling tailscale on a live cluster"):
+        _stub_converge(
+            monkeypatch, tmp_path, state,
+            _SecretsBackend(InfrastructureInventory(), stop_after_state=True),
+            machines=_cp_machines(),
+        )
 
 
 # ---- unsupported machine-change preflight runs before any mutation -----------
