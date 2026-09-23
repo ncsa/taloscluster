@@ -745,6 +745,89 @@ def test_upgrade_aborts_when_version_unresolved_and_no_control_plane_resolves(mo
         )
 
 
+def test_upgrade_aborts_when_an_older_cluster_has_no_control_plane_address(monkeypatch):
+    """A running cluster older than the target with no resolvable control-plane
+    address must fail rather than skip the kubernetes upgrade: the compute phase
+    would otherwise generate new-node configs at the target version, so new
+    nodes and joining metal control planes come up a minor ahead of the
+    running cluster."""
+    cfg = SimpleNamespace(name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8")
+    machines = {"cp-01": SimpleNamespace(role="controlplane", extensions=("base",))}
+    inventory = InfrastructureInventory(machines={"cp-01": InfrastructureMachine("cp-01")})
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    # no member addresses and no inventory/network address -> nothing resolves
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    # a valid older running version: the silent-skip case, not the unknown one
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.34.2")
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+
+    with pytest.raises(ReconcileError, match="from v1.34.2 to v1.35.8"):
+        converge._upgrade(
+            cfg, machines, inventory, NetworkResult(), {("base",): "installer:v1.13.9"},
+            {("base",): "sch-123"}, Path("talosconfig"), Path("kubeconfig"),
+        )
+
+
+def test_upgrade_drives_through_a_joined_metal_control_plane(monkeypatch):
+    """With no VM control plane address resolving, a joined metal control plane
+    is a valid upgrade-k8s target at its static cluster address."""
+    metal = SimpleNamespace(groups={"site": SimpleNamespace(servers={
+        "rp001": SimpleNamespace(name="rp001", role="controlplane"),
+    })})
+    cfg = SimpleNamespace(
+        name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8",
+        metal=metal,
+    )
+    inventory = InfrastructureInventory(machines={})
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, _n: True)
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.34.2")
+    monkeypatch.setattr(converge.kubectl, "cluster_up", lambda *_a: True)
+    monkeypatch.setattr(converge.kubectl, "unschedulable", lambda _kc: [])
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(converge, "_k8s_upgrade_path", lambda *_a, **_kw: ["v1.35.8"])
+    seen: list[str] = []
+    monkeypatch.setattr(
+        converge.talosctl,
+        "upgrade_k8s",
+        lambda _tc, _ep, node, _step: seen.append(node),
+    )
+
+    converge._upgrade(
+        cfg, {}, inventory, NetworkResult(), {}, {},
+        Path("talosconfig"), Path("kubeconfig"),
+    )
+    assert seen == ["192.0.2.61"]
+
+
+def test_upgrade_ignores_a_metal_control_plane_that_has_not_joined(monkeypatch):
+    """A metal control plane with no kube Node has never joined, so there is
+    nothing on it to upgrade: it is not an upgrade-k8s target and the run
+    fails rather than skipping."""
+    metal = SimpleNamespace(groups={"site": SimpleNamespace(servers={
+        "rp001": SimpleNamespace(name="rp001", role="controlplane"),
+    })})
+    cfg = SimpleNamespace(
+        name="test", talos_version="v1.13.9", kubernetes_version="v1.35.8",
+        metal=metal,
+    )
+    inventory = InfrastructureInventory(machines={})
+    monkeypatch.setattr(converge, "_reconcile_talos", lambda *_a, **_kw: None)
+    monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
+    monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
+    monkeypatch.setattr(converge.kubectl, "node_exists", lambda _kc, _n: False)
+    monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.34.2")
+    monkeypatch.setattr(converge.time, "sleep", lambda _s: None)
+
+    with pytest.raises(ReconcileError, match="no control-plane address resolved"):
+        converge._upgrade(
+            cfg, {}, inventory, NetworkResult(), {}, {},
+            Path("talosconfig"), Path("kubeconfig"),
+        )
+
+
 def test_upgrade_noop_for_unprefixed_kubernetes_pin(make_config, monkeypatch):
     """An unprefixed `kubernetes.version: 1.31.0` pin must be canonicalized to
     `v1.31.0` so converge does not schedule an upgrade against a server already

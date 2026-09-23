@@ -89,6 +89,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Push machine configs in the Talos document layout each node's running version accepts.
 - Exit cleanly when a confirmation prompt runs without a terminal, as in CI without `--yes`, instead of tracebacking.
 - Fail converge when the kube-api cannot answer a node query rather than silently skipping that node's config push and Talos upgrade, while a `plan` without a kubeconfig still completes.
+- Fail converge rather than silently skip the Kubernetes upgrade when no control plane, including a joined metal one, is reachable.
 - Treat a truncated or hand-edited `kubeconfig` or `talosconfig` as having no recorded endpoint instead of crashing converge.
 - Refuse to delete a control plane during scale-down unless the surviving control planes confirm it left etcd.
 - Abort a control-plane scale-down when the graceful reset fails or times out, and health-check between removals.

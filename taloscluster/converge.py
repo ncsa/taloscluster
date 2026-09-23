@@ -2347,6 +2347,10 @@ def _upgrade(
     if cur == cfg.kubernetes_version:
         info(f"{cur}, ok")
         return
+    # upgrade-k8s dials one control plane: a VM control plane resolved through
+    # discovery and the provider, else a joined metal control plane at the
+    # static address of its cluster link -- one with no kube Node has never
+    # joined, so there is nothing on it to upgrade yet
     cp1_address = next(
         (
             address
@@ -2356,6 +2360,24 @@ def _upgrade(
         ),
         "",
     )
+    if not cp1_address:
+        cp1_address = next(
+            (
+                metal_talos.cluster_ip(s)
+                for s in _metal_servers(cfg)
+                if s.role == "controlplane" and _node_present(kubeconfig, s.name)
+            ),
+            "",
+        )
+    if not cp1_address and cur != cfg.kubernetes_version:
+        # no control plane is reachable to drive the upgrade through, and the
+        # running version still differs from the target: skipping here would
+        # let the compute phase generate new-node configs at the target
+        # version, so new nodes would join a minor ahead of the running cluster
+        raise ReconcileError(
+            f"no control-plane address resolved; cannot perform a kubernetes upgrade "
+            f"from {cur or 'an unknown version'} to {cfg.kubernetes_version}"
+        )
     if cp1_address:
         consecutive = 0
         for _ in range(12):
@@ -2386,14 +2408,6 @@ def _upgrade(
         for node in kubectl.unschedulable(kubeconfig):
             if node in machines:
                 _uncordon_stale(kubeconfig, node)
-    if not cur:
-        # only reachable when no control-plane address resolved above: the
-        # stabilization path already rejects an empty version, and stepping
-        # needs a valid starting point, so fail rather than silently skip
-        raise ReconcileError(
-            "kubernetes server version unavailable and no control-plane address "
-            "resolved; cannot perform a kubernetes upgrade"
-        )
 
 
 # ---------------------------------------------------------------------------

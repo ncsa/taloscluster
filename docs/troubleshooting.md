@@ -102,13 +102,13 @@ Recovery: find which control plane owns the floating VIP and confirm it is healt
 
 ## Converge aborts a Kubernetes upgrade when no control-plane address resolves
 
-After a machine-config apply, converge stabilizes the cluster and re-reads the running Kubernetes version to step the upgrade. If the version stays unreadable and no control-plane address resolves, converge can no longer step upgrades and aborts instead of silently skipping:
+After a machine-config apply, converge stabilizes the cluster and re-reads the running Kubernetes version to step the upgrade. When the running version still differs from the target — it is older, or it stays unreadable — and no control-plane address resolves, converge can no longer drive `upgrade-k8s` and aborts instead of silently skipping the upgrade:
 
 ```
-kubernetes server version unavailable and no control-plane address resolved; cannot perform a kubernetes upgrade
+no control-plane address resolved; cannot perform a kubernetes upgrade from v1.34.2 to v1.35.8
 ```
 
-Diagnostics: converge exits 1 before any `upgrade-k8s` step runs, so a skipped upgrade never hides behind a healthy exit status. The abort follows the `kubernetes version (want ...)` heading and the version-read retry notices already printed; machine-config applies and Talos reconciliation earlier in the same run may already have changed or rebooted nodes.
+Diagnostics: converge exits 1 before any `upgrade-k8s` step runs, so a skipped upgrade never hides behind a healthy exit status — without the abort, the next converge would generate new-node configs at the target version and new machines would join a minor ahead of the running cluster. A joined metal control plane is a valid target here too: when no VM control plane address resolves, its static cluster address drives the upgrade. The abort follows the `kubernetes version (want ...)` heading and the version-read retry notices already printed; machine-config applies and Talos reconciliation earlier in the same run may already have changed or rebooted nodes.
 
 Recovery: investigate why the cluster's control planes are unreachable (see [A node cannot be reached](#a-node-cannot-be-reached)) and ensure a control-plane address resolves, then re-run `taloscluster converge`.
 
