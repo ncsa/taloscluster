@@ -102,9 +102,9 @@ def _manifest_urls(entry: Entry) -> tuple[str, ...]:
     call time, so converge and check always look at current upstream: a new
     release changes the url's content and shows up as drift on the next sync.
     Only the known gateway entry has a `{version}` template; explicit urls
-    never resolve.
+    never resolve and never touch upstream.
     """
-    if not entry.is_latest:
+    if not entry.is_latest or not any("{version}" in url for url in entry.manifest):
         return entry.urls()
     if entry.name == "gateway":
         latest = upstream.gateway_latest_version()
@@ -137,10 +137,18 @@ def converge(ctx: Context, assume_yes: bool = False) -> dict:
             "already installed in the cluster (traefik's gateway provider may fail without it)"
         )
 
-    result = {
-        entry.name: _converge_entry(entry, ctx, pool, gateway_on)
-        for entry in _ordered(cfg.entries)
-    }
+    # one broken entry (an unresolvable `latest`, a failed apply) must not
+    # stop the others: converge them all, then fail if any did
+    result: dict[str, dict] = {}
+    failed: list[str] = []
+    for entry in _ordered(cfg.entries):
+        try:
+            result[entry.name] = _converge_entry(entry, ctx, pool, gateway_on)
+        except ReconcileError as e:
+            warn(f"charts: {e}")
+            failed.append(entry.name)
+    if failed:
+        raise ReconcileError(f"charts: {', '.join(failed)} failed to converge")
     return {"entries": result}
 
 
@@ -153,14 +161,21 @@ def _converge_entry(entry: Entry, ctx: Context, pool: tuple[str, ...], gateway_o
 
 
 def _converge_manifest(entry: Entry, ctx: Context) -> dict:
-    urls = _manifest_urls(entry)
     if not entry.enabled:
+        # removing needs the applied urls; when the version cannot be
+        # resolved (unreachable GitHub) there is nothing to name, so the
+        # entry reports absent instead of failing the run
+        try:
+            urls = _manifest_urls(entry)
+        except ReconcileError:
+            return {"action": "absent", "kind": "manifest"}
         if not any(kube.exists(ctx.root, url) for url in urls):
             return {"action": "absent", "kind": "manifest"}
         for url in urls:
             kube.delete(ctx.root, url, label=url)
         return {"action": "removed", "kind": "manifest"}
 
+    urls = _manifest_urls(entry)
     changed = False
     for url in urls:
         # exists-first: a broken/unreachable url then surfaces as an apply
@@ -438,9 +453,12 @@ def status(ctx: Context) -> dict:
     entries: dict[str, Any] = {}
     for entry in _ordered(cfg.entries):
         if entry.is_manifest:
-            applied = entry.enabled and all(
-                kube.exists(ctx.root, url) for url in _manifest_urls(entry)
-            )
+            applied = False
+            if entry.enabled:
+                try:
+                    applied = all(kube.exists(ctx.root, url) for url in _manifest_urls(entry))
+                except ReconcileError:
+                    applied = False  # unresolvable latest: cannot probe the urls
             entries[entry.name] = {"kind": "manifest", "enabled": entry.enabled, "applied": applied}
             continue
         if entry.name == "ceph":
@@ -552,12 +570,20 @@ def _check_entry(
             latest = upstream.gateway_latest_version()
             if latest and is_newer(latest, entry.version):
                 upgrade_available[entry.name] = latest
-        still_there = any(kube.exists(root, url) for url in _manifest_urls(entry))
+        try:
+            urls = _manifest_urls(entry)
+        except ReconcileError:
+            # the urls cannot be resolved (unreachable GitHub, air-gap): a
+            # lookup failure must not fail check, so a disabled entry reports
+            # absent and an enabled one not_installed (converge fails on it
+            # with the same message)
+            return not entry.enabled, "absent" if not entry.enabled else "not_installed"
+        still_there = any(kube.exists(root, url) for url in urls)
         if not entry.enabled:
             return not still_there, "absent" if not still_there else "present"
         if not still_there:
             return False, "not_installed"
-        ok = all(kube.matches(root, url) for url in _manifest_urls(entry))
+        ok = all(kube.matches(root, url) for url in urls)
         return ok, "ok" if ok else "drifted"
 
     namespace = _namespace_of(entry)
@@ -604,7 +630,14 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
         if entry.is_manifest:
             # exists-guard: deleting an already-gone manifest set fails on
             # missing kinds even with --ignore-not-found
-            for url in entry.urls():
+            try:
+                urls = _manifest_urls(entry)
+            except ReconcileError as e:
+                # destroy must take the rest of the cluster down even when a
+                # `latest` manifest cannot be named (unreachable GitHub)
+                warn(f"charts: {e}")
+                continue
+            for url in urls:
                 if kube.exists(root, url):
                     kube.delete(root, url, label=url)
             continue

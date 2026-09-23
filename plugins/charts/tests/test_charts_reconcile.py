@@ -364,6 +364,39 @@ def test_destroy_skips_manifest_when_gone(tmp_path, monkeypatch):
     assert log == []
 
 
+def test_destroy_resolves_latest_gateway(tmp_path, monkeypatch):
+    log = []
+    _stub(monkeypatch, log, releases=(), exists=True)
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: "v1.7.0")
+    reconcile.destroy(_pool_ctx(tmp_path, {"gateway": {"version": "latest"}}))
+    assert log == [
+        "delete https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.7.0"
+        "/standard-install.yaml"
+    ]
+
+
+def test_destroy_skips_unresolvable_latest_gateway(tmp_path, monkeypatch, capsys):
+    # destroy must take the rest of the cluster down even when a `latest`
+    # manifest cannot be named
+    log = []
+    _stub(monkeypatch, log, releases=("metallb",), exists=True)
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: None)
+    charts = {"gateway": {"enabled": False, "version": "latest"}, "metallb": {}}
+    reconcile.destroy(_pool_ctx(tmp_path, charts))
+    assert log == [
+        "delete metallb pool resources",  # before the chart: helm uninstall removes the CRDs
+        "uninstall metallb",
+        "delete namespace metallb-system",
+    ]
+    assert "cannot resolve the latest release" in capsys.readouterr().err
+
+
+def test_status_tolerates_unresolvable_latest_gateway(tmp_path, fake_helm, no_kube, monkeypatch):
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: None)
+    report = reconcile.status(_pool_ctx(tmp_path, {"gateway": {"version": "latest"}}))
+    assert report["entries"]["gateway"] == {"kind": "manifest", "enabled": True, "applied": False}
+
+
 def test_traefik_without_gateway_warns(tmp_path, fake_helm, no_kube, capsys):
     charts = {
         "gateway": {"enabled": False, "version": "v1.3.1"},
@@ -493,6 +526,22 @@ def test_check_latest_gateway_tracks_upstream_without_note(tmp_path, monkeypatch
     assert report["upgrade_available"] == {}  # a new release shows up as drift instead
 
 
+def test_check_unresolvable_latest_gateway_reports_not_installed(tmp_path, monkeypatch, no_kube):
+    # a lookup failure must not fail check itself (upstream.py's contract)
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: None)
+    report = reconcile.check(_pool_ctx(tmp_path, {"gateway": {"version": "latest"}}))
+    assert report["ok"] is False
+    assert report["entries"]["gateway"] == "not_installed"
+
+
+def test_check_unresolvable_latest_gateway_disabled_is_absent(tmp_path, monkeypatch, no_kube):
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: None)
+    charts = {"gateway": {"enabled": False, "version": "latest"}}
+    report = reconcile.check(_pool_ctx(tmp_path, charts))
+    assert report["ok"] is True
+    assert report["entries"]["gateway"] == "absent"
+
+
 def test_converge_resolves_latest_gateway(tmp_path, fake_helm, no_kube, monkeypatch):
     monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: "v1.7.0")
     reconcile.converge(_pool_ctx(tmp_path, {"gateway": {"version": "latest"}}))
@@ -502,10 +551,60 @@ def test_converge_resolves_latest_gateway(tmp_path, fake_helm, no_kube, monkeypa
     ]
 
 
-def test_converge_latest_gateway_unresolvable(tmp_path, fake_helm, no_kube, monkeypatch):
+def test_converge_latest_gateway_unresolvable(tmp_path, fake_helm, no_kube, monkeypatch, capsys):
     monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: None)
-    with pytest.raises(ReconcileError, match="cannot resolve the latest release"):
-        reconcile.converge(_pool_ctx(tmp_path, {"gateway": {"version": "latest"}}))
+    charts = {"gateway": {"version": "latest"}}
+    with pytest.raises(ReconcileError, match="gateway failed to converge"):
+        reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert "cannot resolve the latest release" in capsys.readouterr().err
+
+
+def test_converge_continues_past_a_failed_entry(tmp_path, fake_helm, no_kube, monkeypatch, capsys):
+    # one unresolvable entry must not stop the others; the run still fails
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: None)
+    charts = {"gateway": {"version": "latest"}, "metallb": {}}
+    with pytest.raises(ReconcileError, match="gateway failed to converge"):
+        reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert fake_helm.upgrades and fake_helm.upgrades[0][0] == "metallb"
+    assert "cannot resolve the latest release" in capsys.readouterr().err
+
+
+def test_converge_continues_past_a_failed_chart(tmp_path, fake_helm, no_kube, monkeypatch):
+    def boom(kubeconfig, name, chart, repo, namespace, version, values_yaml):
+        if name == "traefik":
+            raise ReconcileError("helm upgrade --install traefik failed: boom")
+        fake_helm.upgrade_install(kubeconfig, name, chart, repo, namespace, version, values_yaml)
+
+    monkeypatch.setattr(reconcile.helm, "upgrade_install", boom)
+    with pytest.raises(ReconcileError, match="traefik failed to converge"):
+        reconcile.converge(_pool_ctx(tmp_path, {"traefik": {}, "metallb": {}}))
+    assert ("metallb", "metallb") in fake_helm.pulled
+
+
+def test_converge_skips_unresolvable_manifest_when_disabled(
+    tmp_path, fake_helm, no_kube, monkeypatch
+):
+    # the scaffolded default: a disabled `version: latest` gateway must not
+    # need the GitHub releases API at all
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: None)
+    charts = {"gateway": {"enabled": False, "version": "latest"}, "metallb": {}}
+    result = reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert result["entries"]["gateway"] == {"action": "absent", "kind": "manifest"}
+    assert result["entries"]["metallb"]["action"] == "installed"
+
+
+def test_converge_applies_custom_manifest_without_upstream(
+    tmp_path, fake_helm, no_kube, monkeypatch
+):
+    # explicit urls have no {version} template and never touch upstream
+    def no_lookup():
+        raise AssertionError("an explicit-url manifest entry looked up upstream")
+
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", no_lookup)
+    charts = {"platform": {"manifest": "https://example.com/platform.yaml"}}
+    result = reconcile.converge(_pool_ctx(tmp_path, charts))
+    assert result["entries"]["platform"]["action"] == "applied"
+    assert no_kube["apply"] == ["https://example.com/platform.yaml"]
 
 
 def test_config_load_error_surfaces(tmp_path, fake_helm, no_kube):
