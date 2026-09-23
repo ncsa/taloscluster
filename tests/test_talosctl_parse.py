@@ -7,6 +7,7 @@ logic.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,8 @@ import pytest
 
 from taloscluster.errors import ReconcileError
 from taloscluster.talos import talosctl
+
+TALOSCTL = shutil.which("talosctl")
 
 # Realistic `talosctl version` output: a Client block and a Server block, each
 # with its own Tag. The parser must return the SERVER tag, not the client one.
@@ -1489,3 +1492,70 @@ def test_reset_to_maintenance_keeps_the_install_and_reboots(monkeypatch):
     assert "--reboot=false" not in args
     labels = [args[i + 1] for i, a in enumerate(args) if a == "--system-labels-to-wipe"]
     assert labels == ["STATE", "EPHEMERAL"]
+
+
+# ---------------------------------------------------------------------------
+# gen_config
+# ---------------------------------------------------------------------------
+
+def _gen_config_kwargs(**overrides) -> dict:
+    kwargs = dict(
+        cluster="testcluster",
+        endpoint="https://192.0.2.10:6443",
+        secrets_path=Path("/dev/null/secrets.yaml"),
+        output_type="controlplane",
+        install_image="factory.talos.dev/installer/abc123:v1.13.9",
+        install_disk="/dev/vda",
+        kubernetes_version="1.31.0",
+        talos_version="v1.13.9",
+        patches=[],
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_gen_config_returns_the_generated_config(monkeypatch):
+    monkeypatch.setattr(
+        talosctl, "_run_nocheck", lambda args, timeout=None: (0, "machine: {}", "")
+    )
+    assert talosctl.gen_config(**_gen_config_kwargs()) == "machine: {}"
+
+
+def test_gen_config_raises_with_talosctl_stderr(monkeypatch):
+    """A bad `--config-patch` makes talosctl exit non-zero with the schema
+    error on stderr. The command line it dies with names @/tmp patch files
+    that are deleted by the time the user reads the message, so the raised
+    error must carry talosctl's own text instead."""
+    def failing(args, timeout=None):
+        return 1, "", (
+            "error parsing config JSON patch: unknown keys found during "
+            "decoding:\n    machine:\n        network:\n            noSuchField: true"
+        )
+
+    monkeypatch.setattr(talosctl, "_run_nocheck", failing)
+    with pytest.raises(ReconcileError) as excinfo:
+        talosctl.gen_config(**_gen_config_kwargs())
+    msg = str(excinfo.value)
+    assert "talosctl gen config failed" in msg
+    assert "noSuchField" in msg
+
+
+@pytest.mark.skipif(TALOSCTL is None, reason="talosctl not installed")
+def test_gen_config_reports_talosctl_error_for_a_bad_patch(tmp_path):
+    """End to end against the real binary: an invalid freeform config patch
+    must fail with talosctl's schema error, not a bare 'command failed' line
+    naming the deleted temp patch file."""
+    secrets = tmp_path / "secrets.yaml"
+    subprocess.run(
+        [TALOSCTL, "gen", "secrets", "--talos-version", "v1.13.9", "-o", str(secrets)],
+        check=True, capture_output=True,
+    )
+    bad = tmp_path / "bad-patch.yaml"
+    bad.write_text("machine:\n    network:\n        noSuchField: true\n")
+    with pytest.raises(ReconcileError) as excinfo:
+        talosctl.gen_config(
+            **_gen_config_kwargs(secrets_path=secrets, patches=[bad])
+        )
+    msg = str(excinfo.value)
+    assert "talosctl gen config failed" in msg
+    assert "noSuchField" in msg

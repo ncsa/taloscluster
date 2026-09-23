@@ -115,7 +115,10 @@ def gen_config(
         args += ["--additional-sans", san]
     for p in patches:
         args += ["--config-patch", f"@{p}"]
-    return _run(args, capture=True, quiet_stderr=True)
+    rc, out, err = _run_nocheck(args)
+    if rc != 0:
+        raise ReconcileError(f"talosctl gen config failed: {(err or out).strip()}")
+    return out
 
 
 def gen_talosconfig(cluster: str, endpoint: str, secrets_path: Path,

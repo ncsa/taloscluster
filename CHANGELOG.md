@@ -99,6 +99,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Refuse `charts:` keys an entry does not consume, install unknown chart entries into a namespace of their own, and keep the MetalLB pool in the entry's namespace.
 - Apply charts manifests with server-side apply, fail hung helm/kubectl calls with a clear error, and set the traefik v2 entrypoints annotation on the ACME solver.
 - Keep credentials out of YAML parse errors, which now name the file and the problem's line and column.
+- Show talosctl's error when machine-config generation fails instead of only the command line.
 - Push machine configs in the Talos document layout each node's running version accepts.
 - Exit cleanly when a confirmation prompt runs without a terminal, as in CI without `--yes`, instead of tracebacking.
 - Fail converge when the kube-api cannot answer a node query rather than silently skipping that node's config push and Talos upgrade, while a `plan` without a kubeconfig still completes.
