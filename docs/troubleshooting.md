@@ -90,13 +90,13 @@ Recovery: re-run `taloscluster plan` and `taloscluster converge` once the versio
 
 ## A kubectl request to the kube-api times out
 
-Every `kubectl` call the core and the rancher and argocd plugins make is bounded at 30 seconds of wall-clock time, so a kube-api that accepts TCP connections but never answers — for example a floating VIP owned by a control plane that is half-dead — cannot hang the run. `drain` gets 330 seconds for its own five-minute `--timeout`, and manifest apply/diff/delete get the same headroom because a full apply or a server-side diff against a remote cluster can legitimately take longer. When a call exceeds its bound, the run fails with a clear error that names the command instead of waiting forever:
+Every `kubectl` call the core and the rancher, argocd and charts plugins make is bounded at 30 seconds of wall-clock time, so a kube-api that accepts TCP connections but never answers — for example a floating VIP owned by a control plane that is half-dead — cannot hang the run. `drain` gets 330 seconds for its own five-minute `--timeout`, and manifest apply/diff/delete get the same headroom because a full apply or a server-side diff against a remote cluster can legitimately take longer. When a call exceeds its bound, the run fails with a clear error that names the command instead of waiting forever:
 
 ```
 ERROR: kubectl --kubeconfig /root/kubeconfig get nodes --request-timeout=10s timed out (the api accepted TCP but never answered); investigate the cluster and retry.
 ```
 
-Diagnostics: the API is reachable at the network layer (the connection is accepted) but not answering kubectl. The operator-facing run exits 1; a version read is retried three times before it aborts, so a transient stall recovers on its own. In the rancher and argocd plugins a timed-out read or write surfaces as that plugin's own `RancherError`/`ApplyError` rather than a raw subprocess traceback, so a hung downstream kube-api is reported as an error instead of being mistaken for "not installed" or for drift.
+Diagnostics: the API is reachable at the network layer (the connection is accepted) but not answering kubectl. The operator-facing run exits 1; a version read is retried three times before it aborts, so a transient stall recovers on its own. In the rancher, argocd and charts plugins a timed-out read or write surfaces as that plugin's own `RancherError`/`ApplyError`/`ReconcileError` rather than a raw subprocess traceback, so a hung downstream kube-api is reported as an error instead of being mistaken for "not installed" or for drift.
 
 Recovery: find which control plane owns the floating VIP and confirm it is healthy; if it is half-dead, recover the node (see [A node cannot be reached](#a-node-cannot-be-reached)) or fail over control of the VIP to a healthy control plane, then re-run `taloscluster converge`. The timeout is a safety valve: it does not fix an unhealthy API, only stops the run from hanging on one.
 

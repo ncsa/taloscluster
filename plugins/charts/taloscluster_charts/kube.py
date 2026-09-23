@@ -20,10 +20,27 @@ def _args(root: Path) -> list[str]:
     return [kubectl.BIN, "--kubeconfig", str((root / "kubeconfig").resolve())]
 
 
+def _timed_out(args: list[str], timeout: float) -> str:
+    """Message for a kubectl command that hung on the api instead of answering."""
+    return (
+        f"{kubectl.display(args)} timed out ({timeout:.0f}s); "
+        "investigate the cluster and retry"
+    )
+
+
 def _run(
     root: Path, args: list[str], *, input: str | None = None, timeout: float = kubectl.RUN_TIMEOUT
 ) -> subprocess.CompletedProcess:
-    return kubectl._run(_args(root) + args, capture=True, check=False, timeout=timeout, input=input)
+    """One kubectl subprocess run; a hung kube-api (it accepted TCP but never
+    answered) raises ReconcileError like argocd and rancher wrap theirs, so
+    converge's per-entry handling and the still_installed probe never see a
+    raw subprocess.TimeoutExpired."""
+    try:
+        return kubectl._run(
+            _args(root) + args, capture=True, check=False, timeout=timeout, input=input
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ReconcileError(_timed_out(_args(root) + args, timeout)) from e
 
 
 def exists(root: Path, target: str, *, input: str | None = None) -> bool:
@@ -75,8 +92,20 @@ def matches(root: Path, target: str, *, input: str | None = None) -> bool:
     raise ReconcileError(f"kubectl diff failed: {proc.stderr.strip()}")
 
 
-def apply(root: Path, target: str, *, label: str = "", input: str | None = None) -> None:
+def apply(
+    root: Path,
+    target: str,
+    *,
+    label: str = "",
+    input: str | None = None,
+    server_side: bool = False,
+) -> None:
     args = ["apply", "-f", target]
+    if server_side:
+        # client-side apply stores the whole manifest in the 256 KiB
+        # last-applied annotation, which a set like the gateway-api CRDs
+        # nearly fills on its own; the server merges instead of recording it
+        args.append("--server-side")
     if dry_run():
         action(f"kubectl apply {label or target}".strip())
         return

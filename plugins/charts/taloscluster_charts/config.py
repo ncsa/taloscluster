@@ -33,8 +33,9 @@ Entry keys:
     userID      str; ceph: CephX user for the csi secrets (with userKey; optional,
     userKey     str; usually kept in secrets.yaml under the same charts.ceph path)
 
-A known entry (cert-manager / gateway / metallb / sealed-secrets / traefik)
-ships builtin defaults; any other entry must set `repo` or `manifest` itself.
+A known entry (cert-manager / ceph / gateway / metallb / nfs / sealed-secrets
+/ traefik) ships builtin defaults; any other entry must set `repo` or
+`manifest` itself.
 """
 
 from __future__ import annotations

@@ -210,7 +210,8 @@ def test_cert_manager_issuers_prod_only(tmp_path):
     assert solver["ingressClassName"] == "traefik"
     annotations = solver["ingressTemplate"]["metadata"]["annotations"]
     assert annotations["traefik.ingress.kubernetes.io/router.priority"] == "99999"
-    assert annotations["traefik.ingress.kubernetes.io/frontend-entry-points"] == "web"
+    # traefik v2/v3 annotation; the v1 frontend-entry-points one is ignored
+    assert annotations["traefik.ingress.kubernetes.io/router.entrypoints"] == "web"
 
 
 def test_cert_manager_issuers_staging_and_prod(tmp_path):

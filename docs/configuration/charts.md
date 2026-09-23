@@ -94,7 +94,7 @@ The Helm chart repository, passed as `helm --repo`. An unknown entry must set `r
 
 Required for an unknown manifest entry · URL or list of URLs
 
-Manifests applied with `kubectl apply -f`. Mutually exclusive with `repo`. Manifest entries are removed with `kubectl delete -f` on disable or destroy.
+Manifests applied with `kubectl apply --server-side -f`, since a set like the Gateway API CRDs nearly fills the 256 KiB `last-applied-configuration` annotation client-side apply records. Mutually exclusive with `repo`. Manifest entries are removed with `kubectl delete -f` on disable or destroy.
 
 #### `charts.<entry>.namespace`
 
@@ -229,7 +229,7 @@ Once a Retained PV is deleted by hand, its image stays in the pool with nothing 
 ```yaml
 charts:
   ceph:
-    userID: admin
+    userID: kubernetes
     userKey: AQC...
 ```
 

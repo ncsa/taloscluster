@@ -119,7 +119,7 @@ def validate(root: Path, ctx: Context) -> None:
 
     Runs in core's converge validate phase, before any cluster mutation, so a
     broken section (an unsupported key, a chart with both repo and manifest, a
-    traefik without its email) stops the run while the cluster is still
+    cert-manager without its email) stops the run while the cluster is still
     untouched instead of failing the late plugin hooks.
     """
     validate_charts(root)

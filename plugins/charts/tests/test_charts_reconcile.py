@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -220,6 +221,20 @@ def test_still_installed_sees_an_applied_manifest(tmp_path, monkeypatch):
     assert reconcile.still_installed(ctx) is False
     pinned = _pool_ctx(tmp_path, {"gateway": {"enabled": False, "version": "v1.6.2"}})
     assert reconcile.still_installed(pinned) is True
+
+
+def test_still_installed_survives_a_hung_api(tmp_path, monkeypatch):
+    """A kube-api that accepts TCP but never answers surfaces from the probe
+    as the ReconcileError still_installed catches (reading as nothing left),
+    not as the raw TimeoutExpired that used to escape it."""
+
+    def hung(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs.get("timeout", 30))
+
+    (tmp_path / "kubeconfig").write_text("")
+    monkeypatch.setattr(reconcile.kube.kubectl, "_run", hung)
+    ctx = _pool_ctx(tmp_path, {"gateway": {"enabled": False, "version": "v1.6.2"}})
+    assert reconcile.still_installed(ctx) is False
 
 
 def test_still_installed_tolerates_a_missing_helm(tmp_path, monkeypatch):
@@ -961,6 +976,24 @@ def test_converge_resolves_latest_gateway(tmp_path, fake_helm, no_kube, monkeypa
         "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.7.0"
         "/standard-install.yaml"
     ]
+
+
+def test_converge_applies_manifests_server_side(tmp_path, fake_helm, no_kube, monkeypatch):
+    """The gateway-api httproutes CRD nearly fills the 256 KiB last-applied
+    annotation client-side apply records, so manifest entries apply with
+    --server-side."""
+    applied: dict = {}
+
+    def apply(root, target, **kwargs):
+        applied["target"] = target
+        applied["server_side"] = kwargs.get("server_side")
+
+    monkeypatch.setattr(reconcile.kube, "apply", apply)
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: "v1.7.0")
+    result = reconcile.converge(_pool_ctx(tmp_path, {"gateway": {"version": "latest"}}))
+    assert result["entries"]["gateway"]["action"] == "applied"
+    assert applied["server_side"] is True
+    assert applied["target"].endswith("/standard-install.yaml")
 
 
 def test_converge_latest_gateway_unresolvable(tmp_path, fake_helm, no_kube, monkeypatch, capsys):

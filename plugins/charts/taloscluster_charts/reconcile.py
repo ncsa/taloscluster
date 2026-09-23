@@ -229,7 +229,9 @@ def _converge_manifest(entry: Entry, ctx: Context) -> dict:
         if kube.exists(ctx.root, url) and kube.matches(ctx.root, url):
             info(f"{entry.name}: manifest up to date ({url})")
             continue
-        kube.apply(ctx.root, url, label=url)
+        # server-side: the gateway-api httproutes CRD alone nearly fills the
+        # 256 KiB last-applied annotation client-side apply would record
+        kube.apply(ctx.root, url, label=url, server_side=True)
         changed = True
     return {
         "action": "applied" if changed else "unchanged",

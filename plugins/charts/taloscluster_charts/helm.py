@@ -22,6 +22,11 @@ UPGRADE_TIMEOUT = 600.0
 QUERY_TIMEOUT = 120.0
 
 
+def _timed_out(args: list[str], timeout: float) -> str:
+    """Message for a helm command that never finished inside its bound."""
+    return f"{' '.join(args)} timed out ({timeout:.0f}s); investigate the cluster and retry"
+
+
 def _run(
     args: list[str],
     *,
@@ -30,15 +35,21 @@ def _run(
     timeout: float = QUERY_TIMEOUT,
     input: str | None = None,
 ) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        args,
-        check=check,
-        timeout=timeout,
-        text=True,
-        input=input,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.PIPE if capture else None,
-    )
+    """One helm subprocess run; a hung one raises ReconcileError like argocd
+    and rancher wrap theirs, so converge's per-entry handling and the plugin
+    activation probe never see a raw subprocess.TimeoutExpired traceback."""
+    try:
+        return subprocess.run(
+            args,
+            check=check,
+            timeout=timeout,
+            text=True,
+            input=input,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ReconcileError(_timed_out(args, timeout)) from e
 
 
 def _base(kubeconfig: Path) -> list[str]:

@@ -195,7 +195,7 @@ def cert_manager_issuers(entry: Entry) -> str:
                                                 "annotations": {
                                                     "traefik.ingress.kubernetes.io/router.priority":
                                                         "99999",
-                                                    "traefik.ingress.kubernetes.io/frontend-entry-points":
+                                                    "traefik.ingress.kubernetes.io/router.entrypoints":
                                                         "web",
                                                 }
                                             }

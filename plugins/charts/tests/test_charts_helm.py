@@ -5,6 +5,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+from taloscluster.errors import ReconcileError
+
 from taloscluster_charts import helm
 
 
@@ -58,3 +61,16 @@ def test_release_ignores_uninstalled_history(monkeypatch):
 
     monkeypatch.setattr(helm.subprocess, "run", run)
     assert helm.release(Path("kubeconfig"), "metallb", "metallb-system") is None
+
+
+def test_run_wraps_a_timeout(monkeypatch):
+    """A helm command that hangs past its bound raises the plugin's
+    ReconcileError naming the command -- the error converge's per-entry
+    handling catches -- instead of a raw subprocess.TimeoutExpired."""
+
+    def run(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs.get("timeout", 30))
+
+    monkeypatch.setattr(helm.subprocess, "run", run)
+    with pytest.raises(ReconcileError, match=r"helm --kubeconfig .* list .*timed out"):
+        helm.release(Path("kubeconfig"), "metallb", "metallb-system")
