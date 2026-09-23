@@ -151,25 +151,29 @@ def _boot_volume_id(attachments) -> str | None:
 
     Nova's ``volumes_attached`` extension reports each mounted volume; newer
     replies carry the volume under ``volume_id`` (the attachment itself is
-    ``id``), older ones only an ``id``. Prefer the attachment that looks like
-    the boot disk -- an explicit ``boot_index`` of 0, or the volume marked to
-    be deleted with the server -- before falling back to the first attachment
-    that names a volume. This avoids mistaking a data volume listed first for
-    the boot disk.
+    ``id``), older ones only an ``id`` -- there the id IS the Cinder volume.
+    Prefer the attachment that looks like the boot disk -- an explicit
+    ``boot_index`` of 0, or the volume marked to be deleted with the server --
+    before falling back to the first attachment that names a volume. This
+    avoids mistaking a data volume listed first for the boot disk.
     """
     boot_signal: str | None = None
     first_named: str | None = None
     for attach in attachments:
         if isinstance(attach, dict):
             volume_id = attach.get("volume_id") or attach.get("volumeId")
+            attach_id = attach.get("id")
             boot_index = attach.get("boot_index")
             delete_on_termination = attach.get("delete_on_termination")
         else:
             volume_id = getattr(attach, "volume_id", None) or getattr(
                 attach, "volumeId", None
             )
+            attach_id = getattr(attach, "id", None)
             boot_index = getattr(attach, "boot_index", None)
             delete_on_termination = getattr(attach, "delete_on_termination", None)
+        if not volume_id:
+            volume_id = attach_id
         if not volume_id:
             continue
         if boot_index == 0:
@@ -180,15 +184,7 @@ def _boot_volume_id(attachments) -> str | None:
             first_named = volume_id
     if boot_signal is not None:
         return boot_signal
-    if first_named is not None:
-        return first_named
-    for attach in attachments:
-        attach_id = attach.get("id") if isinstance(attach, dict) else getattr(
-            attach, "id", None
-        )
-        if attach_id:
-            return attach_id
-    return None
+    return first_named
 
 
 def _create_server(conn, cfg: Config, m: Machine, inv, boot_image: str, configs) -> None:

@@ -25,9 +25,7 @@ def _server(name="testcluster-controlplane-01", flavor="gp.medium", az="nova", d
         name=name,
         flavor=types.SimpleNamespace(original_name=flavor, id="flavor-implicit"),
         availability_zone=az,
-        attached_volumes=[
-            {"id": "attach-boot-1", "volume_id": "vol-boot-1", "boot_index": 0}
-        ],
+        attached_volumes=[{"id": "vol-boot-1", "delete_on_termination": True}],
         volumes=None,
     )
 
@@ -146,6 +144,22 @@ def test_validate_selects_the_boot_attachment_without_boot_index(make_config):
     server.attached_volumes = [
         {"id": "attach-data-1", "volume_id": "vol-data-1", "delete_on_termination": False},
         {"id": "attach-boot-1", "volume_id": "vol-boot-1", "delete_on_termination": True},
+    ]
+
+    with pytest.raises(ReconcileError, match="boot volume 80GB != configured 40GB"):
+        compute.validate(conn, cfg, cfg.machines, _inventory_with(server))
+
+
+def test_validate_selects_the_boot_volume_from_delete_on_termination_alone(make_config):
+    # Nova reports attachments as {"id", "delete_on_termination"} with no
+    # volume_id or boot_index, and a CSI data volume may be listed first --
+    # its size must not stand in for the boot volume's.
+    cfg = make_config()
+    conn = FakeConn(volumes={"vol-data-1": 10, "vol-boot-1": 80})
+    server = _server()
+    server.attached_volumes = [
+        {"id": "vol-data-1", "delete_on_termination": False},
+        {"id": "vol-boot-1", "delete_on_termination": True},
     ]
 
     with pytest.raises(ReconcileError, match="boot volume 80GB != configured 40GB"):
