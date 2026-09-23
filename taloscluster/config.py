@@ -27,8 +27,8 @@ SECRETS_FILE = "secrets.yaml"
 
 # Top-level `cluster.yaml` keys taloscluster understands itself. Plugin-owned
 # sections (e.g. `argocd:`, `rancher:`) are added from each installed plugin's
-# CONFIG_SECTIONS; `openstack`/`proxmox` is the optional VM provider and
-# `metal` the optional bare-metal section beside (or instead of) it.
+# CONFIG_SECTIONS; `openstack`/`proxmox` is the one required VM provider and
+# `metal` the optional bare-metal section beside it.
 _CLUSTER_KEYS = {
     "name", "tags", "talos", "kubernetes", "controlplane", "workers",
     "network", "security", "tailscale", "openstack", "proxmox", "metal",
@@ -403,7 +403,7 @@ class Config:
     workers: dict[str, dict[str, Any]] # pool -> count / provider sizing / disk / overrides
 
     provider: ProviderConfig | None
-    # bare-metal groups joined alongside (or instead of) the VM provider
+    # bare-metal groups joined alongside the VM provider
     metal: MetalConfig | None
 
     network: NetworkConfig
@@ -415,8 +415,9 @@ class Config:
     # pre-auth key nodes register with; None leaves the extension idle, and it
     # stays out of the repr like the provider credentials
     auth_key: str | None = field(default=None, repr=False)
-    # a `tailscale:` section in cluster.yaml opts the installed system into the
-    # tailscale extension; the shared boot ISO always carries it either way
+    # a `tailscale:` section in cluster.yaml or secrets.yaml opts the installed
+    # system into the tailscale extension; the shared boot ISO always carries
+    # it either way
     tailscale_enabled: bool = True
     # talos.kubespan: true emits machine.network.kubespan on every node; false
     # (the default) emits no kubespan settings at all, and _validate requires
@@ -1303,8 +1304,10 @@ def _provider_config(
     """The selected VM provider plus the optional `metal` section.
 
     One VM provider (openstack or proxmox) is required; a `metal` section may
-    sit beside it. Which machines land on which side is a per-pool decision the
-    rest of the config is not asked to make yet.
+    sit beside it. The provider's machines are the `controlplane`/`workers`
+    pools, and every bare-metal machine is listed under `metal:`, so which
+    machines are which is settled here: each metal group declares the role
+    (controlplane or worker) its machines take.
     A metal group without its own `network` sits on the cluster L2, so the
     parsed blocks arrive here.
     """
@@ -1314,8 +1317,11 @@ def _provider_config(
             f"{where}: at most one VM provider section is allowed: openstack or proxmox"
         )
     if not vm and "metal" not in d:
+        # `metal` is deliberately absent from this message: a metal section
+        # alone is refused in _validate, so naming it here would suggest a
+        # metal-only cluster is a choice
         raise ConfigError(
-            f"{where}: one provider section is required: openstack, proxmox or metal"
+            f"{where}: one provider section is required: openstack or proxmox"
         )
 
     provider: ProviderConfig | None = None

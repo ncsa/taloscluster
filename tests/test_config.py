@@ -492,8 +492,12 @@ def test_openstack_region_is_loaded_from_cluster_yaml(make_config):
 
 
 def test_a_provider_section_is_still_required(make_config):
-    with pytest.raises(ConfigError, match="one provider section is required"):
+    with pytest.raises(ConfigError) as excinfo:
         make_config(remove=("openstack",))
+    assert "one provider section is required: openstack or proxmox" in str(excinfo.value)
+    # `metal` is not a valid answer here: a metal-only cluster is refused, so
+    # the error must not name it as a choice
+    assert "metal" not in str(excinfo.value)
 
 
 def test_at_most_one_vm_provider_is_allowed(make_config):

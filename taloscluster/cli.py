@@ -6,6 +6,8 @@
     taloscluster plan                           # dry-run converge: print what would change
     taloscluster status [-o yaml]               # show managed resources, endpoints + nodes
     taloscluster check [-o yaml]                # are talos/kubernetes up to date?
+    taloscluster dashboard [NODE ...]           # open talosctl dashboard on all nodes
+    taloscluster env                            # print provider CLI authentication exports
     taloscluster image download|remove              # manage the shared boot image
     taloscluster metal ACTION SERVER            # inspect / join bare-metal machines
     taloscluster destroy [--yes]                # tear down all managed resources
@@ -171,10 +173,10 @@ def _plugin_list(root):
     if not found:
         info("no plugins installed (try: uv tool install 'taloscluster[all]')")
         return 0
-    try:
-        ctx = Context.load(root)
-    except ConfigError:
-        ctx = None
+    # only an absent cluster.yaml means "not in a cluster directory": a file
+    # that is there but does not load is a real error, reported as such instead
+    # of being answered with the missing-file note and a clean exit
+    ctx = Context.load(root) if (root / CLUSTER_FILE).is_file() else None
     log("plugins")
     for plugin in found:
         after = f" (after {', '.join(plugin.after)})" if plugin.after else ""

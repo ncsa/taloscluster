@@ -557,6 +557,21 @@ def test_plugin_list_shows_configured_state_with_a_cluster_yaml(
     assert "off          not configured" in out
 
 
+def test_plugin_list_reports_a_broken_cluster_yaml(monkeypatch, tmp_path, capsys):
+    """"What is installed" does not need a cluster, but a cluster.yaml that is
+    there and does not load is a real error: answering it with the missing-file
+    note and exit 0 would hide the problem."""
+    from taloscluster import cli
+
+    (tmp_path / "cluster.yaml").write_text("{not: valid")
+    install(monkeypatch, FakeEntryPoint("a", make_module("a")))
+    assert cli.main(["plugin", "-C", str(tmp_path), "list"]) == 1
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "could not parse" in captured.err
+    assert "not showing which are configured" not in captured.out
+
+
 # ---- direct `plugin NAME destroy` confirmation -----------------------------
 
 def test_direct_destroy_declines_without_yes(monkeypatch, tmp_path, make_config):
