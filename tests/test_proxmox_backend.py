@@ -3242,6 +3242,30 @@ def test_firewall_rules_admit_a_metal_group_on_another_l2(make_config):
     assert ("udp", None, cfg.network.cluster.cidr) in desired
 
 
+def test_firewall_rules_admit_a_server_that_replaces_its_groups_l2(make_config):
+    """A server overriding its group's network reaches the VMs from its own
+    L2: tcp+udp for apid, kubelet and etcd, plus the KubeSpan handshakes."""
+    metal = {
+        "rack": {
+            **METAL_GROUP["rack"],
+            "servers": {
+                **METAL_GROUP["rack"]["servers"],
+                "rp002": {
+                    "network": {"cidr": "172.29.23.0/24", "gateway": "172.29.23.1"},
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.23.5/24"}},
+                },
+            },
+        },
+    }
+    cfg = _firewall_cfg(make_config, {}, metal=metal)
+
+    desired = _backend(cfg, FakeClient(_data()))._desired_firewall_rules()
+
+    assert ("tcp", None, "172.29.23.0/24") in desired
+    assert ("udp", None, "172.29.23.0/24") in desired
+    assert ("udp", 51820, "172.29.23.0/24") in desired
+
+
 def test_firewall_reconcile_with_a_metal_group_is_idempotent(make_config):
     cfg = _firewall_cfg(make_config, {}, metal=METAL_GROUP)
     desired = _backend(cfg, FakeClient(_data()))._desired_firewall_rules()

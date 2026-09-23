@@ -270,6 +270,27 @@ def test_desired_rules_admit_a_metal_group_on_another_l2(make_config):
     assert ("udp", None, None, None, SELF) in rules
 
 
+def test_desired_rules_admit_a_server_that_replaces_its_groups_l2(make_config):
+    """A server overriding its group's network is admitted by its own CIDR,
+    beside the group's."""
+    rack = METAL["metal"]["rack"]
+    cfg = make_config({"talos": {"kubespan": True}, "metal": {"rack": {
+        **rack,
+        "servers": {
+            **rack["servers"],
+            "rp002": {
+                "network": {"cidr": "172.29.23.0/24", "gateway": "172.29.23.1"},
+                "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.23.5/24"}},
+            },
+        },
+    }}})
+    rules = _desired_rules(cfg)
+
+    assert ("tcp", None, None, "172.29.23.0/24", None) in rules
+    assert ("udp", None, None, "172.29.23.0/24", None) in rules
+    assert ("udp", 51820, 51820, "172.29.23.0/24", None) in rules
+
+
 def test_desired_rules_no_metal_cidr_rules_without_another_l2(make_config):
     """A single-L2 cluster gets no CIDR-scoped all-port or KubeSpan rules, so
     the next converge of an existing security group reconciles to no change."""

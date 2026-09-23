@@ -504,14 +504,19 @@ class Config:
 
     def intra_cluster_cidrs(self, node_cidr: str | None = None) -> list[str]:
         """Every L2 the cluster's nodes sit on, for the firewalls' intra-cluster
-        rules: `network.cluster.cidr` plus each `metal` group's own. `node_cidr`
-        adds the L2 of a node sitting off the cluster network (a metal server),
-        so a stack keyed on it still admits the group alongside the rest.
-        Deduplicated, the cluster L2 first.
+        rules: `network.cluster.cidr`, each `metal` group's own, and each
+        server that overrides its group's network. `node_cidr` adds the L2 of
+        a node sitting off the cluster network (a metal server), so a stack
+        keyed on it still admits the group alongside the rest. Deduplicated,
+        the cluster L2 first.
         """
         subnets = [self.network.cluster.cidr]
         if self.metal is not None:
-            subnets.extend(group.network.cidr for group in self.metal.groups.values())
+            for group in self.metal.groups.values():
+                subnets.append(group.network.cidr)
+                subnets.extend(
+                    server.network.cidr for server in group.servers.values()
+                )
         if node_cidr:
             subnets.append(node_cidr)
         return list(dict.fromkeys(subnets))

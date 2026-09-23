@@ -99,6 +99,50 @@ def test_metal_node_firewall_is_keyed_on_its_own_l2(make_config):
     assert rules["kubespan"]["ingress"] == [{"subnet": cfg.network.cluster.cidr}]
 
 
+def test_firewall_documents_admit_a_server_that_replaces_its_groups_l2(make_config):
+    """A server overriding its group's network joins the intra-cluster rules
+    with its own L2, and another overridden server's stack admits its peers."""
+    metal = {
+        "rack": {
+            "role": "worker",
+            "disk": "/dev/sda",
+            "network": {"cidr": "172.29.22.0/24", "gateway": "172.29.22.1"},
+            "servers": {
+                "rp001": {
+                    "network": {"cidr": "172.29.23.0/24", "gateway": "172.29.23.1"},
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.23.5/24"}},
+                },
+                "rp002": {
+                    "network": {"cidr": "172.29.24.0/24", "gateway": "172.29.24.1"},
+                    "interfaces": {"enp1s0f0": {"role": "cluster", "ip": "172.29.24.5/24"}},
+                },
+            },
+        },
+    }
+    cfg = make_config({"talos": {"kubespan": True}, "metal": metal})
+    rules = _rules(machineconfig._firewall_docs(cfg))
+
+    for name in ("cluster-tcp", "cluster-udp"):
+        assert {"subnet": "172.29.23.0/24"} in rules[name]["ingress"]
+        assert {"subnet": "172.29.24.0/24"} in rules[name]["ingress"]
+    assert rules["kubespan"]["ingress"] == [
+        {"subnet": "172.29.22.0/24"},
+        {"subnet": "172.29.23.0/24"},
+        {"subnet": "172.29.24.0/24"},
+    ]
+
+    # a server's own stack, keyed on its L2, still admits the other L2s
+    own = _rules(machineconfig._firewall_docs(cfg, node_cidr="172.29.23.0/24"))
+    for name in ("cluster-tcp", "cluster-udp"):
+        assert {"subnet": cfg.network.cluster.cidr} in own[name]["ingress"]
+        assert {"subnet": "172.29.24.0/24"} in own[name]["ingress"]
+    assert own["kubespan"]["ingress"] == [
+        {"subnet": cfg.network.cluster.cidr},
+        {"subnet": "172.29.22.0/24"},
+        {"subnet": "172.29.24.0/24"},
+    ]
+
+
 def test_no_kubespan_rule_without_another_l2(make_config):
     """A single-L2 cluster gets no KubeSpan document, with or without a metal
     group on the cluster network itself."""
