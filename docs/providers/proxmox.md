@@ -101,7 +101,7 @@ pveum acl modify / -user taloscluster@pve -role TalosCluster
 pveum user token add taloscluster@pve provider --privsep 0
 ```
 
-The preflight checks the following paths are `/` (`Pool.Allocate`), the ISO, cidata and VM storages, `/vms`, the bridge or VNet at `/sdn/zones/localnetwork` for a bridge or `/sdn/vnets/<vnet>` for a VNet, and every compute node under `/nodes/`; scope the ACL down to those if you prefer. A managed SDN cluster additionally needs `SDN.Allocate` and `SDN.Audit` on `/sdn`. `Sys.Firewall` is not needed: `VM.Config.Network` covers the per-VM firewall.
+The preflight checks the following paths are `/` (`Pool.Allocate`, plus `Sys.Audit` for the datacenter firewall options read that backs the firewall-disabled refusal), the ISO, cidata and VM storages, `/vms`, the bridge or VNet at `/sdn/zones/localnetwork` for a bridge or `/sdn/vnets/<vnet>` for a VNet, and every compute node under `/nodes/`; scope the ACL down to those if you prefer, but `Sys.Audit` must stay granted on `/` itself — the firewall options are a datacenter-wide read no node-scoped grant covers. A managed SDN cluster additionally needs `SDN.Allocate` and `SDN.Audit` on `/sdn`. `Sys.Firewall` is not needed: `VM.Config.Network` covers the per-VM firewall.
 
 ## Managed EVPN SDN
 
@@ -130,7 +130,7 @@ network:
   dns: [192.0.2.53]       # required: the overlay has no DHCP
 ```
 
-Nodes get deterministic static addresses from `network.cluster.cidr`, so reordering worker pools would renumber later pools; converge refuses to renumber a running node. Proxmox marks EVPN as a technology preview, and the hosts need preparation that taloscluster cannot do for you:
+Nodes get deterministic static addresses from `network.cluster.cidr`, so reordering worker pools would renumber later pools; the run refuses to renumber a running node during validate — `plan` included — before any phase has mutated anything. Proxmox marks EVPN as a technology preview, and the hosts need preparation that taloscluster cannot do for you:
 
 - FRR installed and running on every node, and `net.ipv4.ip_forward=1` (persist it under `/etc/sysctl.d/`), or the exit node silently drops forwarded traffic.
 - With the datacenter firewall on, rules accepting tcp/179 (BGP) and udp/4789 (VXLAN) between the nodes; a zone reports `available` even while BGP sessions sit in `Connect`.

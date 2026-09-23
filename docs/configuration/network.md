@@ -103,7 +103,7 @@ VLAN tag for the external NIC.
 
 Optional · integer, at least 1280 · default `1500`
 
-The MTU of the external network. Above 1500 it is stated explicitly on the external link's machine configuration, never inherited from another link (see [`network.cluster.mtu`](#networkclustermtu)). On Proxmox the external NIC is created with no MTU, so it inherits the external bridge's, `plan` warns when that bridge reads below this value, and converge rewrites NICs of existing VMs that do not yet inherit.
+The MTU of the external network. Above 1500 it is stated explicitly on the external link's machine configuration, never inherited from another link (see [`network.cluster.mtu`](#networkclustermtu)), and the external default route — the one the ingress return path and an API VIP on the external network route their replies through — is clamped to 1500 like the private link's, so large replies survive a gateway that silently drops jumbo frames. On Proxmox the external NIC is created with no MTU, so it inherits the external bridge's, `plan` warns when that bridge reads below this value, and converge rewrites NICs of existing VMs that do not yet inherit.
 
 ### `network.external.kubeapi_vip`
 

@@ -49,7 +49,6 @@ class ProxmoxInventory:
     #: instead of gambling on the `cluster/resources` list order.
     vm_collisions: dict[str, list[ProxmoxVM]] = field(default_factory=dict)
     permissions: dict[str, Any] = field(default_factory=dict)
-    firewall_options: dict[str, Any] = field(default_factory=dict)
 
 
 def load(client: ProxmoxClient) -> ProxmoxInventory:
@@ -95,7 +94,6 @@ def load(client: ProxmoxClient) -> ProxmoxInventory:
             collisions.setdefault(vm.name, [earlier]).append(vm)
         vms[vm.name] = vm
     permissions = client.get("access/permissions")
-    fw_opts = client.get("cluster/firewall/options")
     return ProxmoxInventory(
         nodes=nodes,
         storages=storages,
@@ -103,7 +101,6 @@ def load(client: ProxmoxClient) -> ProxmoxInventory:
         vms=vms,
         vm_collisions=collisions,
         permissions=dict(permissions) if isinstance(permissions, dict) else {},
-        firewall_options=dict(fw_opts) if isinstance(fw_opts, dict) else {},
     )
 
 

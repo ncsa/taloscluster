@@ -155,9 +155,12 @@ def test_inventory_uses_bulk_reads_and_only_exposes_owned_vms(proxmox_cfg):
         ("GET", "pools"),
         ("GET", "cluster/resources"),
         ("GET", "access/permissions"),
-        ("GET", "cluster/firewall/options"),
-        # the supported-release check, once per run against the first node
+        # the supported-release check, once per run against the first node,
+        # then the datacenter firewall options -- read only after the
+        # permission preflight, which is what vouches for the Sys.Audit on /
+        # the read needs
         ("GET", "nodes/pve001/version"),
+        ("GET", "cluster/firewall/options"),
         ("GET", "nodes/pve001/qemu/800/config"),
         ("GET", "nodes/pve001/qemu/800/agent/network-get-interfaces"),
     ]
@@ -2202,6 +2205,9 @@ def test_sdn_reads_happen_only_after_permission_preflight(sdn_cfg):
 
     paths = [path for _method, path in client.calls]
     assert all(not path.startswith("cluster/sdn") for path in paths)
+    # the datacenter firewall options need Sys.Audit on /, so they are read
+    # only after the preflight has vouched for the token's privileges
+    assert "cluster/firewall/options" not in paths
     assert all(method == "GET" for method, _path in client.calls)
 
 
@@ -2217,11 +2223,26 @@ def test_sdn_renumber_guard_refuses_to_reconfigure_a_running_node(sdn_cfg):
     inventory = backend.load_inventory()
 
     with pytest.raises(ReconcileError, match="static addresses"):
-        backend.reconcile_network(sdn_cfg.machines, inventory)
-
-    set_dry_run(True)
-    backend.reconcile_network(sdn_cfg.machines, inventory)  # plan only reports
+        backend.validate_machines(sdn_cfg.machines, inventory)
     assert client.mutations == []
+
+
+def test_sdn_renumber_guard_fails_plan_before_anything_mutates(sdn_cfg):
+    """plan runs the same validate phase, so a renumbered node fails the dry
+    run with the refusal converge raises -- not a warning after the image
+    phase has already run."""
+    data = _sdn_converged_data(_backend(sdn_cfg, FakeClient({})).sdn)
+    data["nodes/pve001/qemu/800/agent/network-get-interfaces"] = {
+        "result": [
+            {"name": "eth0", "ip-addresses": [{"ip-address": "192.168.1.23"}]}
+        ]
+    }
+    backend = _backend(sdn_cfg, FakeClient(data))
+    inventory = backend.load_inventory()
+    set_dry_run(True)
+
+    with pytest.raises(ReconcileError, match="static addresses"):
+        backend.validate_machines(sdn_cfg.machines, inventory)
 
 
 def test_sdn_destroy_removes_subnet_vnet_zone_and_applies_once(sdn_cfg):

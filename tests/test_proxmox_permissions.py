@@ -49,6 +49,14 @@ def test_node_requirements_include_access_network():
     assert "Sys.Audit" in node_reqs[0].privileges
 
 
+def test_root_requirement_includes_the_datacenter_firewall_audit():
+    """Reading the datacenter firewall options -- the read behind the
+    firewall-disabled refusal -- checks Sys.Audit on /, not on the node
+    paths, so the preflight must ask for it there."""
+    by_path = {r.path: r.privileges for r in _requirements()}
+    assert by_path["/"] == frozenset({"Pool.Allocate", "Sys.Audit"})
+
+
 def test_parent_acl_path_applies_to_owned_vm_path():
     grants = {
         requirement.path: {privilege: 1 for privilege in requirement.privileges}

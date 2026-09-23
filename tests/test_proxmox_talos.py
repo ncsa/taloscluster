@@ -635,6 +635,49 @@ def test_with_external_jumbo_private_link_clamps_its_default_route(make_config):
     assert private["routes"] == [{"gateway": "192.168.0.1", "mtu": 1500}]
 
 
+def test_jumbo_external_l2_clamps_the_table_100_default_route(make_config):
+    """On a jumbo external L2 the external link states its MTU and the
+    table-100 default route is clamped to 1500 like the private link's: a
+    gateway that drops jumbo frames sends no ICMP, so the route MTU is what
+    keeps the replies this table routes working off-subnet."""
+    cfg = make_config(
+        {
+            "controlplane": {"count": 1, "cores": 4, "memory": 8, "disk": 40},
+            "workers": {"worker": {"count": 1, "cores": 4, "memory": 8, "disk": 40}},
+            "network": {
+                "external": {
+                    "cidr": "203.0.113.0/24",
+                    "gateway": "203.0.113.1",
+                    "anchor_cidr": "169.254.40.0/24",
+                    "ingress_pool": "203.0.113.20-203.0.113.40",
+                    "kubeapi_vip": "203.0.113.10",
+                    "mtu": 9000,
+                },
+            },
+            "proxmox": {
+                "url": "https://pve.example:8006",
+                "storage": "vms",
+                "iso_storage": "isos",
+                "network": {
+                    "cluster": {"bridge": "vmbr0"},
+                    "external": {"bridge": "vmbr1"},
+                },
+            },
+        },
+        remove=("openstack",),
+    )
+    for host in ("testcluster-controlplane-01", "testcluster-worker-01"):
+        docs = talos.external_network_docs(cfg.machines[host], cfg)
+        ext_link = next(
+            d for d in docs if d["kind"] == "LinkConfig" and d["name"] == "external"
+        )
+        assert ext_link["mtu"] == 9000
+        assert ext_link["routes"] == [
+            {"destination": "203.0.113.0/24", "table": "100"},
+            {"gateway": "203.0.113.1", "table": "100", "mtu": 1500},
+        ]
+
+
 def test_kubeapi_vip_in_the_new_cluster_block_is_used_as_the_private_vip(make_config):
     cfg = make_config(
         {

@@ -303,10 +303,16 @@ def external_network_docs(m: Machine, cfg: Config) -> list[dict]:
     if stated is not None:
         ext_link["mtu"] = stated
     if (m.role == "controlplane" and vip_on_external) or return_path:
-        ext_link["routes"] = [
+        routes: list[dict] = [
             {"destination": ext["cidr"], "table": EXT_ROUTE_TABLE},
             {"gateway": ext["gateway"], "table": EXT_ROUTE_TABLE},
         ]
+        # a gateway that drops jumbo frames sends no ICMP, so the route MTU
+        # keeps the replies this table routes working off-subnet, like the
+        # private link's clamped default route
+        if stated is not None:
+            routes[1]["mtu"] = DEFAULT_MTU
+        ext_link["routes"] = routes
     docs.append(ext_link)
 
     if m.role == "controlplane":

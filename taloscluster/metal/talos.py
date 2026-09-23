@@ -275,7 +275,13 @@ def _cabling(server: MetalServer, cfg: Config, vip: str = "") -> tuple[list[dict
             if ext.cidr:
                 routes.append({"destination": ext.cidr, "table": EXT_ROUTE_TABLE})
             if ext.gateway:
-                routes.append({"gateway": ext.gateway, "table": EXT_ROUTE_TABLE})
+                route = {"gateway": ext.gateway, "table": EXT_ROUTE_TABLE}
+                if stated_mtu(ext.mtu) is not None:
+                    # a gateway that drops jumbo frames sends no ICMP, so the
+                    # route MTU keeps the replies this table routes working
+                    # off-subnet, like the cluster link's clamped default route
+                    route["mtu"] = DEFAULT_MTU
+                routes.append(route)
             if routes:
                 child["routes"] = routes
             # the child inherits the parent port's MTU; state the external L2's

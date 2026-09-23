@@ -115,6 +115,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Remember a grown Proxmox disk until the node reboots so a later `--reboot` converge restarts it.
 - Accept Proxmox tasks that finish with warnings as successful.
 - Refuse to run while the Proxmox datacenter firewall is disabled.
+- Refuse a managed-SDN renumber during validate and `plan`, clamp the external default route to 1500 on jumbo external networks, and require datacenter `Sys.Audit` in the Proxmox token preflight.
 - Reclaim OpenStack ports left behind by machines that never got a server.
 - Fix OpenStack security-group normalization so allowlists are enforced and `0.0.0.0/0` is not recreated on every run.
 - Read a security host given as a bare address as the /32 network the firewalls store it as.

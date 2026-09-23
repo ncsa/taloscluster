@@ -46,7 +46,9 @@ def requirements(
     manage_sdn: bool = False,
 ) -> tuple[Requirement, ...]:
     required = [
-        Requirement("/", frozenset({"Pool.Allocate"})),
+        # the datacenter firewall-options read backs the firewall refusal and
+        # checks Sys.Audit at /, not on the node paths
+        Requirement("/", frozenset({"Pool.Allocate", "Sys.Audit"})),
         Requirement(f"/storage/{iso_storage}", ISO_PRIVILEGES),
         Requirement(f"/storage/{cidata_storage}", ISO_PRIVILEGES),
         Requirement(f"/storage/{vm_storage}", VM_STORAGE_PRIVILEGES),

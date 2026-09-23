@@ -143,6 +143,7 @@ class ProxmoxBackend:
             self._refuse_duplicate_names(self._inventory)
             self._validate_environment(self._inventory)
             self._validate_permissions(self._inventory)
+            self._check_firewall(self._inventory)
         return self._inventory
 
     def _refuse_duplicate_names(self, inventory: ProxmoxInventory) -> None:
@@ -209,7 +210,6 @@ class ProxmoxBackend:
         if not self._compute_nodes:
             raise ReconcileError("no online Proxmox node can access every required storage")
         self._require_pve9()
-        self._check_firewall(inventory)
 
     def _check_firewall(self, inventory: ProxmoxInventory) -> None:
         """Fail without the datacenter firewall; warn on a missing NIC flag.
@@ -221,8 +221,14 @@ class ProxmoxBackend:
         ``policy_in=DROP`` and the allowlist rules would never take effect --
         and warn if existing owned VMs are missing NIC firewall flags (e.g.
         created before this was enforced).
+
+        Runs after the permission preflight: reading the datacenter firewall
+        options needs ``Sys.Audit`` on ``/``, which the preflight requires, so
+        a token scoped without it is refused with the missing privilege named
+        instead of a raw API error from this read.
         """
-        if not _truthy(inventory.firewall_options.get("enable")):
+        options = self.client.get("cluster/firewall/options")
+        if not (isinstance(options, dict) and _truthy(options.get("enable"))):
             raise ReconcileError(
                 "Proxmox cluster firewall is not enabled — "
                 "security allowlists are NOT enforced; enable it in the "
@@ -344,7 +350,6 @@ class ProxmoxBackend:
     ) -> NetworkResult:
         if self.sdn:
             self._require_preflight()
-            self._check_static_addresses(machines, inventory)
             self._reconcile_sdn()
         else:
             self._check_bridge_mtu()
@@ -1093,6 +1098,8 @@ class ProxmoxBackend:
 
         Reordering or removing a worker pool shifts later pools' static
         addresses; surface that instead of quietly rewriting machine configs.
+        Runs from the validate phase (``validate_machines``), so both ``plan``
+        and converge refuse before any phase has mutated anything.
         """
         worker_pools = tuple(self.cfg.workers)
         mismatched = []
@@ -1111,12 +1118,11 @@ class ProxmoxBackend:
             return
         for detail in mismatched:
             warn(f"static SDN address mismatch: {detail}")
-        if not dry_run():
-            raise ReconcileError(
-                "running nodes do not match their computed static addresses "
-                "(worker pool changes renumber later pools); recreate the "
-                "machines or restore the pool layout"
-            )
+        raise ReconcileError(
+            "running nodes do not match their computed static addresses "
+            "(worker pool changes renumber later pools); recreate the "
+            "machines or restore the pool layout"
+        )
 
     def reconcile_machines(
         self,
@@ -1228,9 +1234,13 @@ class ProxmoxBackend:
         phases, so a disk shrink or NIC attachment change is rejected while the
         cluster is still untouched. Unrecognized or unowned VMs are handled here
         exactly as ``reconcile_machines`` would handle them later, so the preflight
-        and the compute phase agree on what is valid.
+        and the compute phase agree on what is valid. A managed-SDN renumber
+        (running nodes no longer matching their computed static addresses) is
+        refused here too, so ``plan`` fails on it the way converge does.
         """
         raw = self._raw(inventory)
+        if self.sdn:
+            self._check_static_addresses(machines, inventory)
         for name, machine in machines.items():
             existing = raw.vms.get(name)
             if existing is None:

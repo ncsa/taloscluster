@@ -291,6 +291,26 @@ def test_metal_patch_stack_matches_golden(make_config, monkeypatch, tmp_path):
     assert 'iifname "enp2s0f0.1691" ip daddr 203.0.113.0/24' in script
 
 
+def test_metal_jumbo_external_l2_clamps_the_table_100_default_route(make_config):
+    """On a jumbo external L2 the table-100 default route is clamped to 1500
+    like the cluster link's: the external gateway drops jumbo frames without
+    sending ICMP, so the route MTU keeps the replies this table routes working
+    off-subnet. The child inherits the jumbo parent's MTU, so it states none."""
+    external = {**EXTERNAL, "mtu": 9000}
+    cfg = _cfg(make_config, external=external)
+    server = cfg.metal.groups["phoenix"].servers["rp001"]
+
+    (child,) = [
+        d for d in metal_talos.network_docs(server, cfg) if d["kind"] == "VLANConfig"
+    ]
+
+    assert child["routes"] == [
+        {"destination": "203.0.113.0/24", "table": "100"},
+        {"gateway": "203.0.113.1", "table": "100", "mtu": 1500},
+    ]
+    assert "mtu" not in child
+
+
 def test_metal_firewall_admits_the_cluster_l2_and_kubespan(
     make_config, monkeypatch, tmp_path
 ):
