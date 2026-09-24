@@ -49,7 +49,7 @@ _L2_EXTERNAL_ONLY_KEYS = {"anchor_cidr", "ingress_pool"}
 _KUBERNETES_KEYS = {"version"}
 _TAILSCALE_KEYS = {"login_server", "auth_key"}
 _PROVIDER_KEYS = {
-    "openstack": {"url", "availability_zone", "external_net", "region",
+    "openstack": {"url", "availability_zone", "external_net", "region", "metadata",
                   "credential_id", "credential_secret"},
     "proxmox": {"url", "storage", "iso_storage", "cidata_storage",
                 "placement_strategy", "nodes", "tls_verify", "network",
@@ -179,6 +179,10 @@ class OpenStackConfig:
     external_net: str
     # Default region; override in cluster.yaml with `openstack.region`.
     region: str = "RegionOne"
+    # `openstack.metadata: true` leaves the Nova metadata service reachable:
+    # the security group keeps Neutron's allow-all egress instead of the
+    # rules that block 169.254.169.254 (see openstack.security)
+    metadata: bool = False
     # application credential; scaffolded into secrets.yaml, which cluster.yaml
     # includes; kept out of the repr so a traceback or a debug print cannot leak
     # it
@@ -473,6 +477,10 @@ class Config:
     @property
     def region(self) -> str:
         return self._openstack.region
+
+    @property
+    def openstack_metadata(self) -> bool:
+        return self._openstack.metadata
 
     @property
     def openstack_credentials(self) -> tuple[str, str]:
@@ -1331,6 +1339,7 @@ def _provider_config(
                     provider_map, "external_net", where=f"{where}: openstack"
                 ),
                 region=str(provider_map.get("region") or "RegionOne"),
+                metadata=provider_map.get("metadata", False),
                 credential_id=provider_map.get("credential_id") or "",
                 credential_secret=provider_map.get("credential_secret") or "",
             )
@@ -1991,6 +2000,8 @@ def _validate(cfg: Config) -> None:
                 "cluster.yaml: network.cluster.vlan is not valid with openstack: the VLAN "
                 "tag is the Proxmox VM NIC setting; the tenant network carries no tag"
             )
+        if not isinstance(cfg.provider.metadata, bool):
+            raise ConfigError("cluster.yaml: openstack.metadata must be true or false")
     if isinstance(cfg.provider, ProxmoxConfig):
         provider = cfg.provider
         for field_name, value in (

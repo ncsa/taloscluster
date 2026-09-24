@@ -15,7 +15,7 @@ All example addresses and hostnames in these pages are placeholders: RFC 5737 do
 | `kubernetes` | yes | Kubernetes version | [General](configuration/general.md#kubernetes) |
 | `controlplane` | yes | Control plane pool: count and sizing | [Pools](configuration/pools.md) |
 | `workers` | no | Worker pools by name: count, sizing, extensions, tags | [Pools](configuration/pools.md) |
-| `openstack` | at most one | OpenStack endpoint, availability zone, external network, optional region | [OpenStack](configuration/openstack.md) |
+| `openstack` | at most one | OpenStack endpoint, availability zone, external network, optional region and metadata access | [OpenStack](configuration/openstack.md) |
 | `proxmox` | at most one | Proxmox endpoint, storages, placement, and the bridge, VNet or SDN each network is reached through | [Proxmox](configuration/proxmox.md) |
 | `metal` | no | Bare-metal machine groups joined alongside the VM provider | [Metal](configuration/metal.md) |
 | `network` | yes | The node L2 (`network.cluster`), the optional routed L2 (`network.external`), DNS and NTP servers | [Network](configuration/network.md) |

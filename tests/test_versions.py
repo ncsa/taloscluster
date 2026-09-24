@@ -90,3 +90,43 @@ def test_talos_versions_sorts_numerically(monkeypatch):
 
     monkeypatch.setattr(versions.requests, "get", lambda *a, **k: FakeResp())
     assert versions.talos_versions() == ["v1.12.9", "v1.12.10", "v1.13.9"]
+
+
+def test_kubernetes_versions_reads_the_published_kubelet_tags(monkeypatch):
+    """The anonymous-token ghcr.io tag list, across a `Link` page, reduced to
+    stable x.y.z releases (no pre-releases, no `-fat` variants), sorted."""
+    pages = {
+        versions.KUBELET_TAGS: (
+            {"tags": ["v1.36.10", "v1.36.0-rc.1", "v1.36.2-fat"]},
+            {"next": {"url": "/v2/siderolabs/kubelet/tags/list?last=b"}},
+        ),
+        "https://ghcr.io/v2/siderolabs/kubelet/tags/list?last=b": (
+            {"tags": ["v1.36.2", "latest", "v1.35.8"]},
+            {},
+        ),
+    }
+
+    class FakeResp:
+        def __init__(self, data, links=None):
+            self._data, self.links = data, links or {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._data
+
+    def get(url, headers=None, timeout=None):
+        if url == versions.KUBELET_TOKEN:
+            return FakeResp({"token": "anon"})
+        assert headers == {"Authorization": "Bearer anon"}
+        return FakeResp(*pages[url])
+
+    monkeypatch.setattr(versions.requests, "get", get)
+    got = versions.kubernetes_versions()
+    assert got == ["v1.35.8", "v1.36.2", "v1.36.10"]
+    assert versions.latest_kubernetes(got) == "v1.36.10"
+    assert versions.latest_kubernetes_patch("1.35", got) == "v1.35.8"
+    assert versions.latest_kubernetes_patch("1.37", got) == ""
+    assert versions.kubernetes_published("1.36.2", got)
+    assert not versions.kubernetes_published("v1.36.5", got)

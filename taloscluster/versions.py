@@ -6,9 +6,10 @@ tool:
   factory.talos.dev/versions   every talos version the image factory can build
                                (so a version listed here is one we could
                                actually boot), including pre-releases
-  dl.k8s.io/release/stable.txt the newest stable kubernetes, plus
-                               stable-<minor>.txt for the newest patch of a
-                               given minor
+  ghcr.io/siderolabs/kubelet   the tags of the kubelet image Talos runs: a
+                               kubernetes release is only usable once Sidero
+                               publishes it, which trails the upstream release
+                               (dl.k8s.io) by a few days
 
 Pre-releases (``v1.14.0-beta.1``) are filtered out of "latest": taloscluster
 never suggests running an alpha/beta/rc on a real cluster.
@@ -19,17 +20,12 @@ from __future__ import annotations
 import requests
 
 FACTORY_VERSIONS = "https://factory.talos.dev/versions"
-K8S_STABLE = "https://dl.k8s.io/release/stable.txt"
-K8S_STABLE_MINOR = "https://dl.k8s.io/release/stable-{minor}.txt"
+KUBELET_IMAGE = "ghcr.io/siderolabs/kubelet"
+# ghcr.io serves public images through the registry API with an anonymous token
+KUBELET_TOKEN = "https://ghcr.io/token?scope=repository:siderolabs/kubelet:pull"
+KUBELET_TAGS = "https://ghcr.io/v2/siderolabs/kubelet/tags/list?n=10000"
 
 TIMEOUT = 15
-
-
-def _get(url: str) -> str:
-    """GET a small text document, or raise requests.RequestException."""
-    resp = requests.get(url, timeout=TIMEOUT)
-    resp.raise_for_status()
-    return resp.text.strip()
 
 
 # ---- parsing / comparison -------------------------------------------------
@@ -55,7 +51,7 @@ def is_stable(version: str) -> bool:
 
 
 def minor(version: str) -> str:
-    """"v1.36.1" -> "1.36" (the form dl.k8s.io's stable-<minor>.txt wants)."""
+    """"v1.36.1" -> "1.36"."""
     p = parse(version)
     if len(p) < 2:
         raise ValueError(f"not a x.y.z version: {version!r}")
@@ -143,11 +139,49 @@ def latest_talos_patch(want_minor: str, versions: list[str] | None = None) -> st
 
 # ---- kubernetes -----------------------------------------------------------
 
-def latest_kubernetes() -> str:
-    """Newest stable kubernetes release, e.g. "v1.36.4"."""
-    return _get(K8S_STABLE)
+def kubernetes_versions() -> list[str]:
+    """Every stable kubernetes version Talos has a kubelet image for, newest last.
+
+    Read from the ghcr.io/siderolabs/kubelet tags, following the registry's
+    `Link` pagination. Pre-releases and the `-fat` image variants are dropped.
+    """
+    resp = requests.get(KUBELET_TOKEN, timeout=TIMEOUT)
+    resp.raise_for_status()
+    headers = {"Authorization": f"Bearer {resp.json()['token']}"}
+    tags: list[str] = []
+    url: str | None = KUBELET_TAGS
+    while url:
+        resp = requests.get(url, headers=headers, timeout=TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, dict) or not isinstance(data.get("tags"), list):
+            raise ValueError(f"unexpected payload from {KUBELET_TAGS}")
+        tags += [str(t) for t in data["tags"]]
+        nxt = resp.links.get("next", {}).get("url")
+        url = requests.compat.urljoin(url, nxt) if nxt else None
+    stable = [t for t in tags if is_stable(t) and len(parse(t)) == 3]
+    return sorted(stable, key=parse)
 
 
-def latest_kubernetes_patch(want_minor: str) -> str:
-    """Newest patch release of a kubernetes minor, e.g. "1.35" -> "v1.35.7"."""
-    return _get(K8S_STABLE_MINOR.format(minor=want_minor))
+def latest_kubernetes(versions: list[str] | None = None) -> str:
+    """Newest kubernetes release Talos has a kubelet for, e.g. "v1.36.4"."""
+    stable = versions if versions is not None else kubernetes_versions()
+    if not stable:
+        raise ValueError(f"no stable versions of {KUBELET_IMAGE} published")
+    return stable[-1]
+
+
+def latest_kubernetes_patch(want_minor: str, versions: list[str] | None = None) -> str:
+    """Newest published patch of a kubernetes minor, e.g. "1.35" -> "v1.35.7".
+
+    Returns "" if Sidero has published no kubelet for that minor yet.
+    """
+    prefix = parse(f"v{want_minor}")
+    stable = [v for v in (versions if versions is not None else kubernetes_versions())
+              if parse(v)[:2] == prefix[:2]]
+    return stable[-1] if stable else ""
+
+
+def kubernetes_published(version: str, versions: list[str]) -> bool:
+    """Whether `version` is among the published kubelet versions."""
+    return parse(version) in {parse(v) for v in versions}

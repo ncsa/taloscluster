@@ -46,6 +46,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Validate Rancher settings and require the `BackingNamespaceCreated` condition to be `True` before creating registration tokens.
 - Split ArgoCD sync settings: `argocd.sync` sets the chart value, new `argocd.automated` controls automated sync, pruning and self-healing.
 - Require real YAML types for ArgoCD booleans, member lists, URLs and apply targets; refuse unknown per-app keys and version overrides on apps that ignore them.
+- Show a redacted diff of each ArgoCD manifest `plan` would apply, never printing Secret values.
+- Fold each redacted block in a `plan` machine-config diff into one line with a count of the hidden lines.
+- Add `openstack.metadata` (default `false`); `true` keeps Neutron's allow-all egress instead of the 42 rules blocking the metadata service, with a warning.
 - Encrypt STATE and EPHEMERAL partitions with LUKS2 on new clusters only, boot new Proxmox VMs with Secure Boot, keep pre-release nodes on the plain installer, vendor bootstrap manifests, and require https tailscale logins.
 - Add a `scripts/rbd-review.sh` helper that reviews a Ceph pool's ceph-csi RBD images one at a time — size, real usage, PVC, last write — and deletes confirmed images together with their ceph-csi journal records.
 
@@ -86,6 +89,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Take Kubernetes versions from the published Talos kubelet images instead of dl.k8s.io, so `check` no longer suggests a patch Talos cannot run yet and converge refuses one before `upgrade-k8s` starts.
+- Stop converge hanging after a Talos upgrade when `talosctl` waits on a connection the rebooted node dropped; converge now polls the node's version without printing each failed probe during the reboot, stops `talosctl` once it lands, and fails at once on a real upgrade error.
 - Align the core package version with bundled plugins requiring `taloscluster>=0.8.0`.
 - Keep disabled `latest` Gateway API manifests eligible for cleanup.
 - Remove chart namespaces only after all releases are removed, preserving namespaces shared with enabled charts or Ceph.

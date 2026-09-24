@@ -6,6 +6,7 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from taloscluster_argocd import kube, reconcile
 from taloscluster_argocd.config import ApplyTarget
@@ -365,3 +366,109 @@ def test_rancher_report_wins_without_a_kubectl_call(monkeypatch):
 
     assert reconcile.check(ctx)["ok"] is True
     assert called == []
+
+
+PROJECT = "kind: AppProject\nmetadata:\n  name: quad\n"
+
+
+def _fake_kubectl(live: str | None, desired: str):
+    """kubectl stub: `get` answers `live` (absent when None), a server-side
+    dry-run apply answers `desired`."""
+
+    def run(args, **kwargs):
+        if "get" in args:
+            code = 1 if live is None else 0
+            return SimpleNamespace(returncode=code, stdout=live or "", stderr="")
+        assert "--dry-run=server" in args
+        return SimpleNamespace(returncode=0, stdout=desired, stderr="")
+
+    return run
+
+
+def test_dry_run_apply_never_prints_secret_values(monkeypatch, tmp_path, capsys):
+    live = """
+kind: Secret
+metadata:
+  name: quad
+  namespace: argocd
+  resourceVersion: "1"
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: '{"stringData":{"config":"old-hunter2"}}'
+data:
+  config: b2xkLWh1bnRlcjI=
+"""
+    desired = live.replace("old-hunter2", "new-hunter2")
+    desired = desired.replace("b2xkLWh1bnRlcjI=", "bmV3LWh1bnRlcjI=")
+    monkeypatch.setattr(kube, "dry_run", lambda: True)
+    monkeypatch.setattr(kube.kubectl, "_run", _fake_kubectl(live, desired))
+
+    kube.apply(ApplyTarget(context="argocd"), tmp_path, "kind: Secret\nmetadata:\n  name: quad\n")
+
+    out = capsys.readouterr().out
+    assert "hunter2" not in out and "aHVudGVy" not in out and "bmV3" not in out
+    assert "Secret/quad: secret values differ (not shown)" in out
+
+
+def test_dry_run_apply_prints_a_diff_of_the_change(monkeypatch, tmp_path, capsys):
+    live = "kind: AppProject\nmetadata:\n  name: quad\nspec:\n  description: old\n"
+    desired = live.replace("old", "new")
+    monkeypatch.setattr(kube, "dry_run", lambda: True)
+    monkeypatch.setattr(kube.kubectl, "_run", _fake_kubectl(live, desired))
+
+    kube.apply(ApplyTarget(context="argocd"), tmp_path, PROJECT)
+
+    out = capsys.readouterr().out
+    assert "-  description: old" in out
+    assert "+  description: new" in out
+
+
+def test_dry_run_apply_shows_a_new_object_as_added(monkeypatch, tmp_path, capsys):
+    desired = "kind: AppProject\nmetadata:\n  name: quad\nspec:\n  description: new\n"
+    monkeypatch.setattr(kube, "dry_run", lambda: True)
+    monkeypatch.setattr(kube.kubectl, "_run", _fake_kubectl(None, desired))
+
+    kube.apply(ApplyTarget(context="argocd"), tmp_path, PROJECT)
+
+    assert "+  description: new" in capsys.readouterr().out
+
+
+def test_dry_run_apply_diffs_helm_values_line_by_line(monkeypatch, tmp_path, capsys):
+    """`kubectl get -f -` wraps the object in a List; it is unwrapped, its status
+    and last-applied copy dropped, and the Helm values string parsed so its
+    credentials are redacted and only the changed value shows."""
+    values = "openstack:\n  credential_secret: hunter2\nnfs:\n  path: /taiga/old\n"
+    app = {
+        "kind": "Application",
+        "metadata": {"name": "quad-cluster"},
+        "spec": {"source": {"helm": {"releaseName": "quad", "values": values}}},
+    }
+    live = {
+        "kind": "List",
+        "items": [{
+            **app,
+            "metadata": {
+                "name": "quad-cluster",
+                "annotations": {kube._LAST_APPLIED: f'{{"values": "{values}"}}'},
+            },
+            "status": {"history": [{"source": {"helm": {"values": values}}}]},
+        }],
+    }
+    desired = {**app, "spec": {"source": {"helm": {
+        "releaseName": "quad", "values": values.replace("old", "new"),
+    }}}}
+    monkeypatch.setattr(kube, "dry_run", lambda: True)
+    monkeypatch.setattr(
+        kube.kubectl, "_run", _fake_kubectl(yaml.safe_dump(live), yaml.safe_dump(desired)),
+    )
+
+    kube.apply(ApplyTarget(context="argocd"), tmp_path, yaml.safe_dump(app))
+
+    out = capsys.readouterr().out
+    assert "hunter2" not in out
+    changed = [" ".join(line.split()) for line in out.splitlines() if line.strip()[:1] in "+-"]
+    assert changed == [
+        "--- live Application/quad-cluster",
+        "+++ desired Application/quad-cluster",
+        "- path: /taiga/old",
+        "+ path: /taiga/new",
+    ]

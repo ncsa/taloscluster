@@ -71,8 +71,8 @@ def test_upgrade_resume_uncordons_a_node_already_at_the_target(monkeypatch):
         converge.talosctl, "member_addresses", lambda *_a, **_kw: {"cp-01": "192.0.2.1"}
     )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "sch-123")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "sch-123")
     monkeypatch.setattr(converge, "_uncordon_stale", lambda _kc, host: uncordoned.append(host))
     monkeypatch.setattr(converge, "_health_or_kube_fallback", lambda *_a, **_kw: True)
     monkeypatch.setattr(converge.kubectl, "server_version", lambda *_a: "v1.35.8")
@@ -97,8 +97,8 @@ def test_extension_only_change_triggers_an_upgrade(monkeypatch):
         converge.talosctl, "member_addresses", lambda *_a, **_kw: {"cp-01": "192.0.2.1"}
     )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "sch-old")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "sch-old")
     monkeypatch.setattr(
         converge.talosctl, "upgrade", lambda *_a, **_kw: upgrade_calls.append("upgrade")
     )
@@ -126,8 +126,8 @@ def test_extension_only_change_uses_the_schematic_as_the_wait_barrier(monkeypatc
         converge.talosctl, "member_addresses", lambda *_a, **_kw: {"cp-01": "192.0.2.1"}
     )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "sch-old")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "sch-old")
     monkeypatch.setattr(converge.talosctl, "upgrade", lambda *_a, **_kw: None)
     monkeypatch.setattr(converge, "_wait_version",
                         lambda *args, **kw: waits.append(args) or None)
@@ -184,8 +184,8 @@ def test_reconcile_talos_upgrades_a_node_created_on_the_base_schematic(monkeypat
         converge.talosctl, "member_addresses", lambda *_a, **_kw: {"w-01": "192.0.2.1"}
     )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "base-sch")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "base-sch")
     monkeypatch.setattr(
         converge.talosctl, "upgrade", lambda *_a, **_kw: upgrade_calls.append("upgrade")
     )
@@ -213,8 +213,8 @@ def test_reconcile_talos_is_a_noop_for_a_node_on_the_target_schematic(monkeypatc
         converge.talosctl, "member_addresses", lambda *_a, **_kw: {"w-01": "192.0.2.1"}
     )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "sch-123")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "sch-123")
     monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         converge.talosctl, "upgrade", lambda *_a, **_kw: upgrade_calls.append("upgrade")
@@ -248,8 +248,8 @@ def _upgrade_image_guard_setup(monkeypatch, enforced):
         converge.talosctl, "member_addresses", lambda *_a, **_kw: {"w-01": "192.0.2.1"}
     )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.12.0")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "sch-123")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.12.0")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "sch-123")
     monkeypatch.setattr(
         converge.talosctl, "secureboot_enforced", lambda *_a, **_kw: enforced
     )
@@ -347,8 +347,8 @@ def test_reconcile_talos_health_checks_a_resumed_control_plane_at_target(monkeyp
         lambda *_a, **_kw: {h: f"192.0.2.{i}" for i, h in enumerate(machines, 1)},
     )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "sch-123")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "sch-123")
     monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
 
     def fake_health(*_a, **_kw):
@@ -391,7 +391,7 @@ def test_reconcile_talos_advances_past_a_healthy_resumed_control_plane(monkeypat
         lambda *_a, **_kw: {h: f"192.0.2.{i}" for i, h in enumerate(machines, 1)},
     )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
     # cp-01 sits on the target schematic; w-01 joins on the shared base image
     monkeypatch.setattr(
         converge.talosctl, "running_schematic",
@@ -440,8 +440,8 @@ def test_reconcile_joined_reloads_inventory_to_see_created_nodes(monkeypatch):
         converge.talosctl, "member_addresses", lambda *_a, **_kw: {"w-01": "192.0.2.1"}
     )
     monkeypatch.setattr(converge.kubectl, "node_exists", lambda *_a: True)
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "base-sch")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "base-sch")
     monkeypatch.setattr(
         converge.talosctl, "upgrade", lambda *_a, **_kw: upgrade_calls.append("upgrade")
     )
@@ -495,8 +495,8 @@ def test_reconcile_talos_upgrades_a_joined_metal_node(monkeypatch, make_config):
     upgrades: list[tuple[str, str]] = []
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
     monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_kw: "ep")
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.8")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "old-sch")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.8")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "old-sch")
     monkeypatch.setattr(
         converge.talosctl,
         "upgrade",
@@ -557,8 +557,8 @@ def test_reconcile_talos_reinstalls_a_metal_node_joined_by_an_early_dev_build(
     upgrades: list[tuple[str, str]] = []
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
     monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_kw: "ep")
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: cfg.talos_version)
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "dev-sch")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: cfg.talos_version)
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "dev-sch")
     monkeypatch.setattr(
         converge.talosctl,
         "upgrade",
@@ -610,8 +610,8 @@ def test_reconcile_talos_health_checks_a_metal_control_plane_at_target(
     calls: list[str] = []
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
     monkeypatch.setattr(converge, "_talos_endpoint", lambda *_a, **_kw: "ep")
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "m-sch")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "m-sch")
     monkeypatch.setattr(converge, "_uncordon_stale", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         converge, "_health_or_kube_fallback",
@@ -642,9 +642,9 @@ def test_wait_version_waits_for_the_schematic_through_a_reboot(monkeypatch):
     """An extension-only upgrade keeps the talos version constant, so the wait
     follows the running schematic: old -> unreachable mid-reboot -> target."""
     states = iter([("sch-old", None), None, ("sch-123", None)])
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
 
-    def fake_schematic(*_args):
+    def fake_schematic(*_args, **_k):
         state = next(states)
         if state is None:
             raise subprocess.CalledProcessError(1, "talosctl")
@@ -661,8 +661,8 @@ def test_wait_version_waits_for_the_schematic_through_a_reboot(monkeypatch):
 
 
 def test_wait_version_times_out_when_the_schematic_never_matches(monkeypatch):
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
-    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a: "sch-old")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "running_schematic", lambda *_a, **_k: "sch-old")
     monkeypatch.setattr(converge.time, "sleep", lambda s: None)
     clock = iter([0.0, 1.0, 62.0])  # deadline is 0 + 60
     monkeypatch.setattr(converge.time, "monotonic", lambda: next(clock))
@@ -679,7 +679,7 @@ def test_wait_version_treats_a_timed_out_probe_as_still_down(monkeypatch):
     deadline."""
     polls = iter(["timeout", "v1.13.9"])
 
-    def fake_version(*_a):
+    def fake_version(*_a, **_k):
         result = next(polls)
         if result == "timeout":
             raise subprocess.TimeoutExpired("talosctl", 15)
@@ -699,13 +699,13 @@ def test_wait_version_treats_a_timed_out_schematic_read_as_still_down(monkeypatc
     read is the node still rebooting, not a failed rollout."""
     schematic_polls = iter(["timeout", "sch-123"])
 
-    def fake_schematic(*_args):
+    def fake_schematic(*_args, **_k):
         result = next(schematic_polls)
         if result == "timeout":
             raise subprocess.TimeoutExpired("talosctl", 15)
         return result
 
-    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a: "v1.13.9")
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
     monkeypatch.setattr(converge.talosctl, "running_schematic", fake_schematic)
     monkeypatch.setattr(converge.time, "sleep", lambda s: None)
     clock = iter([0.0, 1.0, 2.0])
@@ -714,6 +714,75 @@ def test_wait_version_treats_a_timed_out_schematic_read_as_still_down(monkeypatc
     converge._wait_version(Path("talosconfig"), "ep", "cp-01", "v1.13.9",
                            want_schematic="sch-123", timeout_s=60)
     # reached the target without error
+
+
+class _FakeUpgrade:
+    """A running talosctl upgrade: `fail` makes check() raise, as a real error does."""
+
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+        self.stopped = False
+
+    def check(self):
+        if self.fail:
+            raise ReconcileError("upgrade of cp-01 failed: failed to pull installer image")
+
+    def stop(self):
+        self.stopped = True
+
+
+def test_wait_version_stops_talosctl_once_the_node_is_on_the_target(monkeypatch):
+    """The node's version is the answer: talosctl, still watching a connection
+    the rebooted node no longer has, is stopped as soon as the node lands."""
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.10")
+    monkeypatch.setattr(converge.time, "sleep", lambda s: None)
+    clock = iter([0.0, 1.0])
+    monkeypatch.setattr(converge.time, "monotonic", lambda: next(clock))
+    running = _FakeUpgrade()
+
+    converge._wait_version(Path("talosconfig"), "ep", "cp-01", "v1.13.10",
+                           timeout_s=60, upgrade=running)
+
+    assert running.stopped
+
+
+def test_wait_version_polls_quietly(monkeypatch):
+    """A probe that fails while the node reboots is expected and retried, so
+    the poll drops talosctl's stderr instead of printing each failure."""
+    seen = {}
+
+    def fake_version(*_a, **kw):
+        seen["version"] = kw.get("quiet")
+        return "v1.13.10"
+
+    def fake_schematic(*_a, **kw):
+        seen["schematic"] = kw.get("quiet")
+        return "sch-123"
+
+    monkeypatch.setattr(converge.talosctl, "server_version", fake_version)
+    monkeypatch.setattr(converge.talosctl, "running_schematic", fake_schematic)
+    monkeypatch.setattr(converge.time, "sleep", lambda s: None)
+    clock = iter([0.0, 1.0])
+    monkeypatch.setattr(converge.time, "monotonic", lambda: next(clock))
+
+    converge._wait_version(Path("talosconfig"), "ep", "cp-01", "v1.13.10",
+                           want_schematic="sch-123", timeout_s=60)
+
+    assert seen == {"version": True, "schematic": True}
+
+
+def test_wait_version_fails_fast_when_talosctl_reports_a_real_error(monkeypatch):
+    """A rejected upgrade ends the wait at once instead of after the 30m deadline."""
+    monkeypatch.setattr(converge.talosctl, "server_version", lambda *_a, **_k: "v1.13.9")
+    monkeypatch.setattr(converge.time, "sleep", lambda s: None)
+    clock = iter([0.0, 1.0])
+    monkeypatch.setattr(converge.time, "monotonic", lambda: next(clock))
+    running = _FakeUpgrade(fail=True)
+
+    with pytest.raises(ReconcileError, match="failed to pull installer image"):
+        converge._wait_version(Path("talosconfig"), "ep", "cp-01", "v1.13.10",
+                               timeout_s=60, upgrade=running)
+    assert running.stopped
 
 
 # ---------------------------------------------------------------------------
@@ -755,7 +824,7 @@ def test_upgrade_aborts_when_kube_api_stabilizes_but_version_is_still_unknown(mo
     monkeypatch.setattr(converge.kubectl, "cluster_up", lambda *_a: True)
     calls = {"n": 0}
 
-    def fake_version(*_a):
+    def fake_version(*_a, **_k):
         calls["n"] += 1
         return "v1.34.2" if calls["n"] == 1 else None
 
@@ -817,7 +886,7 @@ def test_upgrade_dry_run_with_no_kubeconfig_skips_version_read_retries(monkeypat
     monkeypatch.setattr(converge.talosctl, "member_addresses", lambda *_a, **_kw: {})
     seen = {"reads": 0, "sleeps": []}
 
-    def fake_version(*_a):
+    def fake_version(*_a, **_k):
         seen["reads"] += 1
         return "v1.34.2"
 

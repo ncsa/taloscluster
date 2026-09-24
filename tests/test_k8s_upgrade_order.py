@@ -1294,28 +1294,41 @@ def test_converge_keeps_the_recorded_address_when_the_inventory_poll_fails(
 # _k8s_upgrade_path: step one minor at a time, stone-patch hops
 # ---------------------------------------------------------------------------
 
-def test_upgrade_path_steps_through_intermediate_minors(monkeypatch):
-    monkeypatch.setattr(
-        converge.versions, "latest_kubernetes_patch", lambda minor: f"v{minor}.9"
-    )
+PUBLISHED = ["v1.34.1", "v1.35.0", "v1.35.9", "v1.36.1", "v1.36.2", "v1.36.4"]
+
+
+@pytest.fixture
+def published(monkeypatch):
+    """Fake the ghcr.io/siderolabs/kubelet tag list."""
+    monkeypatch.setattr(converge.versions, "kubernetes_versions", lambda: PUBLISHED)
+
+
+def test_upgrade_path_steps_through_intermediate_minors(published):
     assert converge._k8s_upgrade_path("v1.34.1", "v1.36.2") == ["v1.35.9", "v1.36.2"]
 
 
-def test_upgrade_path_is_direct_for_adjacent_minors():
+def test_upgrade_path_is_direct_for_adjacent_minors(published):
     assert converge._k8s_upgrade_path("v1.34.5", "v1.35.0") == ["v1.35.0"]
 
 
-def test_upgrade_path_at_target_returns_only_the_target():
+def test_upgrade_path_at_target_returns_only_the_target(published):
     assert converge._k8s_upgrade_path("v1.36.2", "v1.36.2") == ["v1.36.2"]
 
 
-def test_upgrade_path_falls_back_to_minor_point_zero_when_lookup_fails(monkeypatch, capsys):
-    def boom(_minor):
-        raise OSError("dl.k8s.io unreachable")
+def test_upgrade_path_refuses_a_target_talos_has_no_kubelet_for(published):
+    """Upstream ships a patch days before Sidero builds its kubelet image; the
+    upgrade is refused up front instead of failing in upgrade-k8s's pre-pull."""
+    with pytest.raises(ReconcileError, match=r"kubelet:v1\.36\.5 is not published yet.*v1\.36\.4"):
+        converge._k8s_upgrade_path("v1.36.1", "v1.36.5")
 
-    monkeypatch.setattr(converge.versions, "latest_kubernetes_patch", boom)
+
+def test_upgrade_path_falls_back_to_minor_point_zero_when_lookup_fails(monkeypatch, capsys):
+    def boom():
+        raise OSError("ghcr.io unreachable")
+
+    monkeypatch.setattr(converge.versions, "kubernetes_versions", boom)
     assert converge._k8s_upgrade_path("v1.34.1", "v1.36.2") == ["v1.35.0", "v1.36.2"]
-    assert "using 1.35.0" in capsys.readouterr().err
+    assert "using <minor>.0" in capsys.readouterr().err
 
 
 def test_upgrade_path_rejects_an_unknown_current():

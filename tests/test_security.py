@@ -305,8 +305,8 @@ def test_desired_rules_no_metal_cidr_rules_without_another_l2(make_config):
 # desired egress rules (the metadata-service block)
 # ---------------------------------------------------------------------------
 
-def test_desired_egress_rules_exclude_the_metadata_address():
-    rules = _desired_egress_rules()
+def test_desired_egress_rules_exclude_the_metadata_address(make_config):
+    rules = _desired_egress_rules(make_config())
     assert len(rules) == 42  # 32 IPv4 blocks around a /32, 10 IPv6 around a /10
     for (ether, proto, pmin, pmax, remote_ip, group) in rules:
         assert proto is None and pmin is None and pmax is None and group is None
@@ -318,10 +318,10 @@ def test_desired_egress_rules_exclude_the_metadata_address():
     assert ("IPv6", None, None, None, None, None) not in rules
 
 
-def test_ipv4_egress_complement_covers_everything_but_the_metadata_address():
+def test_ipv4_egress_complement_covers_everything_but_the_metadata_address(make_config):
     """Collapsing the 32 blocks with the metadata /32 back together must yield
     exactly 0.0.0.0/0, and no block may contain the metadata address."""
-    blocks = [ipaddress.ip_network(k[4]) for k in _desired_egress_rules()
+    blocks = [ipaddress.ip_network(k[4]) for k in _desired_egress_rules(make_config())
               if k[0] == "IPv4"]
     assert len(blocks) == 32
     metadata = ipaddress.ip_network(METADATA_V4)
@@ -331,10 +331,10 @@ def test_ipv4_egress_complement_covers_everything_but_the_metadata_address():
     ]
 
 
-def test_ipv6_egress_complement_covers_everything_but_link_local():
+def test_ipv6_egress_complement_covers_everything_but_link_local(make_config):
     """The same complement around fe80::/10, so the link-local metadata
     address Neutron also answers on stays denied."""
-    blocks = [ipaddress.ip_network(k[4]) for k in _desired_egress_rules()
+    blocks = [ipaddress.ip_network(k[4]) for k in _desired_egress_rules(make_config())
               if k[0] == "IPv6"]
     assert len(blocks) == 10
     link_local = ipaddress.ip_network(METADATA_V6)
@@ -346,8 +346,8 @@ def test_ipv6_egress_complement_covers_everything_but_link_local():
     ]
 
 
-def test_egress_key_normalizes_an_egress_rule():
-    rules = _desired_egress_rules()
+def test_egress_key_normalizes_an_egress_rule(make_config):
+    rules = _desired_egress_rules(make_config())
     (ether, proto, pmin, pmax, cidr, _) = next(iter(rules))
     r = _fake_rule(direction="egress", ethertype=ether, ether_type=ether,
                    protocol=proto, port_range_min=pmin, port_range_max=pmax,
@@ -536,3 +536,40 @@ def test_reconcile_picks_the_block_up_on_an_existing_cluster(make_config):
         and c.get("remote_ip_prefix") == "10.0.0.0/24"
         for c in net.created
     )
+
+
+def test_metadata_true_keeps_the_default_egress_rules(make_config, capsys):
+    """`openstack.metadata: true` leaves Neutron's allow-all pair in place and
+    creates no egress rules, with a warning that the address is reachable."""
+    cfg = make_config({"openstack": {"metadata": True}})
+    net = _FakeNetwork([
+        _default_egress_rule("IPv4", "d1"),
+        _default_egress_rule("IPv6", "d2"),
+    ])
+    _reconcile(net, cfg)
+    assert net.deleted == []
+    assert not any(c.get("direction") == "egress" for c in net.created)
+    assert "openstack.metadata is true" in capsys.readouterr().err
+
+
+def test_metadata_true_restores_allow_all_on_a_blocked_group(make_config):
+    """Switching to `metadata: true` on a group that carries the block deletes
+    the 42 CIDR rules and puts the allow-all pair back."""
+    blocked = _FakeNetwork([
+        _default_egress_rule("IPv4", "d1"),
+        _default_egress_rule("IPv6", "d2"),
+    ])
+    _reconcile(blocked, make_config())
+    net = _FakeNetwork(blocked._store)
+    _reconcile(net, make_config({"openstack": {"metadata": True}}))
+    assert len(net.deleted) == 42
+    egress = [c for c in net.created if c.get("direction") == "egress"]
+    assert sorted(c["ethertype"] for c in egress) == ["IPv4", "IPv6"]
+    assert all(c.get("remote_ip_prefix") is None and c["protocol"] is None for c in egress)
+
+
+def test_metadata_must_be_a_boolean(make_config):
+    from taloscluster.errors import ConfigError
+
+    with pytest.raises(ConfigError, match="openstack.metadata must be true or false"):
+        make_config({"openstack": {"metadata": "yes"}})

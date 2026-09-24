@@ -6,12 +6,15 @@ secrets.yaml. The kubeconfig path is resolved against the cluster directory.
 
 from __future__ import annotations
 
+import difflib
 import subprocess
 from pathlib import Path
+from typing import Any
 
+import yaml
 from taloscluster.errors import ReconcileError
 from taloscluster.k8s import kubectl, rancher
-from taloscluster.output import action, dry_run, info
+from taloscluster.output import action, dry_run, info, redact
 
 from .config import ApplyTarget
 from .errors import ApplyError
@@ -156,6 +159,7 @@ def _run_apply(base: list[str], manifest: str, message: str, label: str) -> None
     args = base + ["apply", "-f", "-"]
     if dry_run():
         action(f"kubectl apply {label} " + " ".join(args[1:]))
+        _show_diff(base, manifest)
         return
     action(message)
     try:
@@ -168,6 +172,101 @@ def _run_apply(base: list[str], manifest: str, message: str, label: str) -> None
         raise ApplyError(f"kubectl apply failed: {proc.stderr.strip()}")
     for line in proc.stdout.splitlines():
         info(line)
+
+
+#: metadata the server rewrites on every write; noise in a preview
+_SERVER_METADATA = ("managedFields", "resourceVersion", "uid", "creationTimestamp", "generation")
+#: holds a clear-text copy of the whole applied manifest, Secret values included
+_LAST_APPLIED = "kubectl.kubernetes.io/last-applied-configuration"
+
+
+def _show_diff(base: list[str], manifest: str) -> None:
+    """Print what applying `manifest` would change, with credentials redacted.
+
+    `kubectl diff` output is not shown as is: it prints the last-applied
+    annotation, a clear-text copy of a Secret's values. Instead the live object
+    and the one the server would store (a server-side dry-run apply) are each
+    passed through `redact` and diffed here. An Application's Helm values are
+    one YAML string, so they are parsed first: `redact` then sees the keys
+    inside them, and the diff shows the changed values line by line. A Secret
+    whose only change is in its (redacted) values gets a one-line note instead
+    of a diff.
+    """
+    for doc in yaml.safe_load_all(manifest):
+        if not doc:
+            continue
+        text = yaml.safe_dump(doc)
+        live = _fetch(base + ["get", "-f", "-", "-o", "yaml"], text)
+        desired = _fetch(base + ["apply", "--dry-run=server", "-f", "-", "-o", "yaml"], text)
+        before, after = _strip(live), _strip(desired or doc)
+        ref = f"{doc.get('kind')}/{doc.get('metadata', {}).get('name')}"
+        diff = list(difflib.unified_diff(
+            _dump(redact(before)), _dump(redact(after)),
+            f"live {ref}", f"desired {ref}", lineterm="",
+        ))
+        for line in diff:
+            info("      " + line)
+        if not diff and before != after:
+            info(f"      {ref}: secret values differ (not shown)")
+
+
+def _fetch(args: list[str], text: str) -> dict | None:
+    """The object a read-only kubectl call prints as yaml, or None if it failed."""
+    try:
+        proc = kubectl._run(
+            args, input=text, capture=True, check=False, timeout=kubectl.MANIFEST_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ApplyError(_timed_out(kubectl.display(args))) from e
+    if proc.returncode != 0:
+        return None
+    return yaml.safe_load(proc.stdout)
+
+
+def _strip(obj: dict | None) -> dict | None:
+    """Copy of `obj` without status and the server-managed metadata, its Helm
+    values parsed. A one-item `kind: List` (what `kubectl get -f -` prints) is
+    unwrapped to that item."""
+    if obj is None:
+        return None
+    if obj.get("kind") == "List" and len(obj.get("items") or []) == 1:
+        obj = obj["items"][0]
+    obj = {k: _parse_values(v) for k, v in obj.items() if k != "status"}
+    meta = {k: v for k, v in (obj.get("metadata") or {}).items() if k not in _SERVER_METADATA}
+    annotations = {k: v for k, v in (meta.get("annotations") or {}).items() if k != _LAST_APPLIED}
+    if annotations:
+        meta["annotations"] = annotations
+    else:
+        meta.pop("annotations", None)
+    obj["metadata"] = meta
+    return obj
+
+
+def _parse_values(node: Any) -> Any:
+    """`node` with every `helm.values` string replaced by the mapping it holds.
+
+    A values string that is not a YAML mapping is masked whole, since `redact`
+    could not look inside it.
+    """
+    if isinstance(node, list):
+        return [_parse_values(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    out = {k: _parse_values(v) for k, v in node.items()}
+    helm = out.get("helm")
+    if isinstance(helm, dict) and isinstance(helm.get("values"), str):
+        try:
+            values = yaml.safe_load(helm["values"])
+        except yaml.YAMLError:
+            values = "REDACTED"
+        if values is not None and not isinstance(values, dict):
+            values = "REDACTED"
+        out["helm"] = {**helm, "values": values}
+    return out
+
+
+def _dump(obj: dict | None) -> list[str]:
+    return yaml.safe_dump(obj, default_flow_style=False).splitlines() if obj else []
 
 
 def delete(target: ApplyTarget, root: Path, manifest: str) -> None:

@@ -10,7 +10,8 @@ Egress is the metadata-service block: Neutron seeds every new security group
 with two allow-all egress rules, which are removed and replaced by rules
 allowing every destination except the Nova metadata address (IPv4 and the IPv6
 link-local form Neutron also answers on). That cuts node and masqueraded pod
-traffic to it under any CNI, in every namespace.
+traffic to it under any CNI, in every namespace. `openstack.metadata: true`
+opts out: the security group keeps (or gets back) the allow-all pair.
 
 This is the one place true diffing matters: we compute the desired ingress and
 egress rule sets as comparable tuples, then add the missing ones and delete the
@@ -26,7 +27,7 @@ from openstack.connection import Connection
 
 from .. import naming
 from ..config import KUBESPAN_PORT, Config
-from ..output import action, dry_run, info
+from ..output import action, dry_run, info, warn
 from .session import Inventory
 from .tags import create_tagged
 
@@ -46,7 +47,7 @@ METADATA_V6 = "fe80::/10"
 def _normalize_cidr(cidr: str | None) -> str | None:
     """Normalize the wildcard prefix to None so clouds that materialize the
     default prefix don't flap add/delete against clouds that store null."""
-    return None if cidr == "0.0.0.0/0" else cidr
+    return None if cidr in ("0.0.0.0/0", "::/0") else cidr
 
 
 def _complement(cidr: str) -> list[str]:
@@ -67,12 +68,18 @@ def _complement(cidr: str) -> list[str]:
     return blocks
 
 
-def _desired_egress_rules() -> dict[tuple, str]:
+def _desired_egress_rules(cfg: Config) -> dict[tuple, str]:
     """desired egress rule tuple -> human description.
 
     All-protocol rules for every CIDR around the metadata address, so the two
     default allow-all egress rules can go away without opening anything else.
+    With `openstack.metadata: true` it is Neutron's allow-all pair instead.
     """
+    if cfg.openstack_metadata:
+        return {
+            ("IPv4", None, None, None, None, None): "egress allow all IPv4",
+            ("IPv6", None, None, None, None, None): "egress allow all IPv6",
+        }
     rules: dict[tuple, str] = {}
     for cidr in _complement(METADATA_V4):
         rules[("IPv4", None, None, None, cidr, None)] = f"egress allow {cidr}"
@@ -170,7 +177,12 @@ def reconcile(conn: Connection, cfg: Config, inv: Inventory) -> Any:
         return None
 
     desired = _desired_rules(cfg)
-    desired_egress = _desired_egress_rules()
+    desired_egress = _desired_egress_rules(cfg)
+    if cfg.openstack_metadata:
+        warn(
+            "openstack.metadata is true: pods can read the machine config "
+            "(cluster CA keys, join tokens) from the Nova metadata service"
+        )
     existing = list(conn.network.security_group_rules(security_group_id=sg.id))
     ingress_keys: dict[tuple, Any] = {}
     egress_keys: dict[tuple, Any] = {}

@@ -18,6 +18,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 import yaml
 
@@ -517,7 +518,24 @@ def _dry_run_summary(out: str) -> list[str]:
     lines = [line for line in lines if line and line != "Dry run summary:"]
     if any(line.startswith("No changes") for line in lines):
         return ["no changes"]
-    return _redact(lines)
+    return _collapse(_redact(lines))
+
+
+def _collapse(lines: list[str]) -> list[str]:
+    """Fold each run of identical `<redacted>` lines into one with a count.
+
+    A redacted inline manifest or file body is hundreds of lines that all read
+    `+    <redacted>`; one line saying how many were hidden says the same.
+    """
+    out: list[str] = []
+    counts: list[int] = []
+    for line in lines:
+        if out and line == out[-1] and line.endswith("<redacted>"):
+            counts[-1] += 1
+        else:
+            out.append(line)
+            counts.append(1)
+    return [f"{line} ({n} lines)" if n > 1 else line for line, n in zip(out, counts, strict=True)]
 
 
 _SECRET_KEY = re.compile(
@@ -810,20 +828,24 @@ def _server_tag(out: str) -> str:
     return ""
 
 
-def server_version(talosconfig: Path, endpoint: str, node: str) -> str:
+def server_version(talosconfig: Path, endpoint: str, node: str, quiet: bool = False) -> str:
     """Parse the Server Tag from `talosctl version` (structured, not awk).
 
     Bounded by a subprocess timeout like `reachable`: an unroutable address
     raises `subprocess.TimeoutExpired` instead of stalling the caller for the
     OS TCP connect timeout, and a poll-loop caller reads that as still down.
+    `quiet` drops talosctl's stderr, for a poll that expects the node to be
+    down for a while and retries.
     """
     return _server_tag(
         _run(_talos(talosconfig, endpoint, node, "version"), capture=True,
-             timeout=PROBE_TIMEOUT_S)
+             quiet_stderr=quiet, timeout=PROBE_TIMEOUT_S)
     )
 
 
-def running_schematic(talosconfig: Path, endpoint: str, node: str) -> str:
+def running_schematic(
+    talosconfig: Path, endpoint: str, node: str, quiet: bool = False
+) -> str:
     """The schematic (extension set) the node is currently RUNNING, or "".
 
     The Image Factory bakes a virtual `schematic` extension into Every image it
@@ -839,11 +861,13 @@ def running_schematic(talosconfig: Path, endpoint: str, node: str) -> str:
 
     Bounded by a subprocess timeout like `reachable`: an expired read raises
     `subprocess.TimeoutExpired`, which the rollout's poll loop reads as the
-    node still being down mid-reboot.
+    node still being down mid-reboot. `quiet` drops talosctl's stderr, as for
+    `server_version`.
     """
     out = _run(
         _talos(talosconfig, endpoint, node, "get", "extensions", "-o", "yaml"),
         capture=True,
+        quiet_stderr=quiet,
         timeout=PROBE_TIMEOUT_S,
     )
     for doc in _resource_docs(out):
@@ -985,44 +1009,85 @@ def _resource_docs(out: str) -> list[dict]:
     return docs
 
 
-def upgrade(talosconfig: Path, endpoint: str, node: str, image: str) -> None:
-    """Trigger the upgrade and return; the caller polls for the node to come back.
+class Upgrade:
+    """A `talosctl upgrade` running in the background; see :func:`upgrade`."""
 
-    The progress watch cannot be turned off on the legacy upgrade path (which is
-    what an older server falls back to): `--wait=false` is passed and ignored,
-    talosctl watches anyway. That watch holds a long-lived stream open across
-    the node's reboot, and apid kills it whenever the client is newer than the
-    server -- exactly the case during an upgrade:
-
-        received prior goaway: ENHANCE_YOUR_CALM, debug data: "too_many_pings"
-
-    talosctl then exits non-zero even though the upgrade was accepted. So a
-    dropped watch is downgraded to a warning and the caller polls the node's
-    reported version instead (converge._wait_version), which is skew-proof.
-    Any other failure -- a bad image, a rejected request -- still raises.
-    """
-    action(f"talosctl upgrade {node} --image {image}")
-    if dry_run():
-        return
-    rc, out, err = _run_nocheck(
-        _talos(talosconfig, endpoint, node, "upgrade", "--image", image, "--wait=false")
-    )
-    if rc == 0:
-        return
-    msg = err + out
-    if "upgrade completed" in msg and "post check passed" in msg:
-        warn(f"upgrade completed for {node} despite talosctl exiting non-zero")
-        return
-    # the upgrade is under way; only the client's view of it died
-    watch_died = (
+    # talosctl output that means only the client's watch died, not the upgrade
+    _WATCH_DIED = (
         "too_many_pings", "ENHANCE_YOUR_CALM", "error reading from server: EOF",
         "transport is closing", "connection refused",
     )
-    if any(s in msg for s in watch_died):
-        warn(f"upgrade progress watch dropped for {node} "
-             "(client/server version skew); polling for the new version instead")
-        return
-    raise ReconcileError(f"upgrade of {node} failed: {msg.strip()}")
+
+    def __init__(self, node: str, proc: subprocess.Popen | None = None,
+                 output: IO[str] | None = None):
+        self.node = node
+        self._proc = proc
+        self._output = output
+        self._done = proc is None
+
+    def check(self) -> None:
+        """Raise if talosctl has exited with a real failure; no-op otherwise."""
+        if self._done or self._proc is None or self._proc.poll() is None:
+            return
+        self._done = True
+        rc = self._proc.returncode
+        msg = self._read()
+        if rc == 0:
+            return
+        if "upgrade completed" in msg and "post check passed" in msg:
+            warn(f"upgrade completed for {self.node} despite talosctl exiting non-zero")
+            return
+        if any(s in msg for s in self._WATCH_DIED):
+            info(f"upgrade progress watch dropped for {self.node} "
+                 "(client/server version skew); polling for the new version instead")
+            return
+        raise ReconcileError(f"upgrade of {self.node} failed: {msg.strip()}")
+
+    def stop(self) -> None:
+        """End talosctl if it is still watching; the node's version is the answer."""
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait()
+        if self._output is not None:
+            self._output.close()
+            self._output = None
+
+    def _read(self) -> str:
+        if self._output is None:
+            return ""
+        self._output.seek(0)
+        return self._output.read()
+
+
+def upgrade(talosconfig: Path, endpoint: str, node: str, image: str) -> Upgrade:
+    """Start the upgrade and return at once; the caller polls the node's version.
+
+    talosctl's own progress watch is not a reliable signal. On the legacy
+    upgrade path (what an older server falls back to) `--wait=false` is ignored
+    and talosctl watches anyway, and when the client is newer than the server
+    -- exactly the case during an upgrade -- that watch either dies:
+
+        received prior goaway: ENHANCE_YOUR_CALM, debug data: "too_many_pings"
+
+    or never returns at all, long after the node rebooted on the new version.
+    So talosctl runs in the background: converge._wait_version polls the
+    node's reported version, which is skew-proof, calls `check()` to fail fast
+    on a real error (a bad image, a rejected request), and `stop()`s talosctl
+    once the node is on the target.
+    """
+    action(f"talosctl upgrade {node} --image {image}")
+    if dry_run():
+        return Upgrade(node)
+    output = tempfile.NamedTemporaryFile("w+")
+    proc = subprocess.Popen(
+        [BIN, *_talos(talosconfig, endpoint, node, "upgrade", "--image", image, "--wait=false")],
+        text=True, stdout=output, stderr=subprocess.STDOUT,
+    )
+    return Upgrade(node, proc, output)
 
 
 def upgrade_k8s(talosconfig: Path, endpoint: str, node: str, version: str) -> None:

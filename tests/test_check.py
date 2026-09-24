@@ -42,11 +42,12 @@ def upstream(monkeypatch):
     """Fake the upstream lookups; returns a dict the test can retune."""
     state = {"talos": TALOS_VERSIONS, "k8s_latest": "v1.36.4", "k8s_patch": "v1.35.8"}
     monkeypatch.setattr(versions, "talos_versions", lambda: state["talos"])
-    monkeypatch.setattr(versions, "latest_kubernetes", lambda: state["k8s_latest"])
+    monkeypatch.setattr(versions, "kubernetes_versions", lambda: [])
+    monkeypatch.setattr(versions, "latest_kubernetes", lambda _all=None: state["k8s_latest"])
     monkeypatch.setattr(
         versions,
         "latest_kubernetes_patch",
-        lambda minor: state["k8s_patch"] if minor == "1.35" else "",
+        lambda minor, _all=None: state["k8s_patch"] if minor == "1.35" else "",
     )
     return state
 
@@ -253,7 +254,7 @@ def test_upstream_unreachable_reports_config_only(cluster_dir, nodes, monkeypatc
         raise converge.requests.RequestException("no route to host")
 
     monkeypatch.setattr(versions, "talos_versions", boom)
-    monkeypatch.setattr(versions, "latest_kubernetes", boom)
+    monkeypatch.setattr(versions, "kubernetes_versions", boom)
     rc = converge.check(cluster_dir, output="yaml")
     report = _report(capsys)
     for c in report["components"]:

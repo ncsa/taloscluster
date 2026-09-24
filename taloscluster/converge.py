@@ -1496,6 +1496,7 @@ def _wait_version(
     want_schematic: str = "",
     timeout_s: int = 1800,
     interval_s: int = 10,
+    upgrade: talosctl.Upgrade | None = None,
 ) -> None:
     """Block until `node` reboots into talos `want` -- and, for an
     extension-only upgrade that keeps the same talos version (`want_schematic`
@@ -1518,24 +1519,48 @@ def _wait_version(
     flaky pull is the normal reason this takes a while. A timeout here means
     the upgrade really did not land -- check `talosctl -n <node> dmesg` for
     image-pull errors.
+
+    `upgrade` is the background talosctl that started it: a real failure it
+    reports ends the wait at once, and it is stopped when the wait ends.
     """
     if dry_run():
         return
+    try:
+        _poll_version(talosconfig, endpoint, node, want, want_schematic,
+                      timeout_s, interval_s, upgrade)
+    finally:
+        if upgrade is not None:
+            upgrade.stop()
+
+
+def _poll_version(
+    talosconfig: Path,
+    endpoint: str,
+    node: str,
+    want: str,
+    want_schematic: str,
+    timeout_s: int,
+    interval_s: int,
+    upgrade: talosctl.Upgrade | None,
+) -> None:
     marker = want if not want_schematic else f"{want}/{want_schematic}"
     info(f"waiting for {node} to come back on {marker} (up to {timeout_s // 60}m)...")
     deadline = time.monotonic() + timeout_s
     seen = ""
     while time.monotonic() < deadline:
         time.sleep(interval_s)
+        if upgrade is not None:
+            upgrade.check()
         try:
-            seen = talosctl.server_version(talosconfig, endpoint, node)
+            seen = talosctl.server_version(talosconfig, endpoint, node, quiet=True)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             continue  # node is rebooting; apid not answering yet
         if seen != want:
             continue
         if want_schematic:
             try:
-                if talosctl.running_schematic(talosconfig, endpoint, node) != want_schematic:
+                schematic = talosctl.running_schematic(talosconfig, endpoint, node, quiet=True)
+                if schematic != want_schematic:
                     continue
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 continue  # node is still down mid-reboot
@@ -1724,9 +1749,12 @@ def _k8s_upgrade_path(cur: str, want: str) -> list[str]:
         unsupported upgrade path 1.34->1.36 (from "1.34.1" to "1.36.2")
 
     So 1.34.1 -> 1.36.2 becomes [1.35.<latest>, 1.36.2]. Intermediate hops use
-    the newest patch of that minor (dl.k8s.io), since a stepping stone should
-    not be a stale .0. Falls back to <minor>.0 if dl.k8s.io is unreachable --
-    still a valid hop, just older.
+    the newest patch of that minor Talos has a kubelet for, since a stepping
+    stone should not be a stale .0. Every step, the target included, must have
+    a published ghcr.io/siderolabs/kubelet image: upstream releases a patch
+    days before Sidero builds it, and `upgrade-k8s` only finds that out when
+    its image pre-pull fails. If ghcr.io is unreachable, hops fall back to
+    <minor>.0 -- still a valid hop, just older -- and nothing is checked.
     """
     if not cur:
         raise ReconcileError(
@@ -1739,15 +1767,29 @@ def _k8s_upgrade_path(cur: str, want: str) -> list[str]:
 
     cur_major, cur_minor = minor_of(cur)
     want_major, want_minor = minor_of(want)
+    published: list[str] | None
+    try:
+        published = versions.kubernetes_versions()
+    except (OSError, requests.RequestException, ValueError) as e:
+        warn(f"could not list the published {versions.KUBELET_IMAGE} versions ({e}); "
+             "using <minor>.0 for intermediate hops and not checking the target")
+        published = None
     path: list[str] = []
     for m in range(cur_minor + 1, want_minor):  # strictly intermediate hops
         label = f"{cur_major}.{m}"
-        try:
-            path.append(versions.latest_kubernetes_patch(label))
-        except (OSError, requests.RequestException) as e:
-            warn(f"could not resolve latest {label} patch ({e}); using {label}.0")
-            path.append(f"v{label}.0")
+        hop = versions.latest_kubernetes_patch(label, published) if published else ""
+        path.append(hop or f"v{label}.0")
     path.append(want)
+    if published:
+        for step in path:
+            if not versions.kubernetes_published(step, published):
+                newest = versions.latest_kubernetes_patch(versions.minor(step), published)
+                raise ReconcileError(
+                    f"{versions.KUBELET_IMAGE}:{step} is not published yet, so Talos "
+                    f"cannot run kubernetes {step}; newest {versions.minor(step)} is "
+                    f"{newest or 'none'}. Set kubernetes.version to a published release "
+                    "or wait for Sidero to publish it"
+                )
     if len(path) > 1:
         info(f"stepping through minors: {' -> '.join(path)}")
     return path
@@ -2381,8 +2423,9 @@ def _reconcile_talos(
                 image = plain_image
         reason = "extensions changed" if cur_ver == cfg.talos_version else str(cur_ver or "?")
         info(f"{host}: {reason} -> {cfg.talos_version} ({image})")
-        talosctl.upgrade(talosconfig, endpoint, address, image)
-        _wait_version(talosconfig, endpoint, address, cfg.talos_version, want_schematic)
+        running = talosctl.upgrade(talosconfig, endpoint, address, image)
+        _wait_version(talosconfig, endpoint, address, cfg.talos_version, want_schematic,
+                      upgrade=running)
         _uncordon_stale(kubeconfig, host)
         if not _health_or_kube_fallback(
             talosconfig,
@@ -2724,7 +2767,7 @@ def check(root: Path, output: str = "text") -> int:
     """Compare cluster.yaml's pinned versions against the newest upstream
     releases (and against what the cluster actually runs).
 
-    Read-only and cloud-free: it asks factory.talos.dev / dl.k8s.io what exists,
+    Read-only and cloud-free: it asks factory.talos.dev / ghcr.io/siderolabs/kubelet what exists,
     talos discovery + the local kubeconfig what is running, and changes nothing.
     A listed include file that is missing loads as empty, with a warning, so a
     directory whose credentials are absent or not written yet still checks.
@@ -2747,10 +2790,13 @@ def check(root: Path, output: str = "text") -> int:
         warn(f"could not reach the talos image factory ({e}); talos not checked")
         talos_latest = talos_patch = ""
     try:
-        k8s_latest = versions.latest_kubernetes()
-        k8s_patch = versions.latest_kubernetes_patch(versions.minor(cfg.kubernetes_version))
+        k8s_all = versions.kubernetes_versions()
+        k8s_latest = versions.latest_kubernetes(k8s_all)
+        k8s_patch = versions.latest_kubernetes_patch(
+            versions.minor(cfg.kubernetes_version), k8s_all
+        )
     except (requests.RequestException, ValueError) as e:
-        warn(f"could not reach dl.k8s.io ({e}); kubernetes not checked")
+        warn(f"could not list {versions.KUBELET_IMAGE} versions ({e}); kubernetes not checked")
         k8s_latest = k8s_patch = ""
 
     report["components"] = [

@@ -314,9 +314,10 @@ def main(argv: list[str] | None = None) -> int:
         help="check whether talos/kubernetes are up to date",
         description="Compare the versions pinned in cluster.yaml against the "
                     "newest upstream releases (factory.talos.dev for talos, "
-                    "dl.k8s.io for kubernetes) and against what the cluster "
-                    "actually runs. Reports the newest patch of the pinned "
-                    "minor (a safe in-place bump) separately from the newest "
+                    "the published Talos kubelet images for kubernetes) and "
+                    "against what the cluster actually runs. Reports the "
+                    "newest patch of the pinned minor (a safe in-place bump) "
+                    "separately from the newest "
                     "release overall, plus any node not yet on the pinned "
                     "versions. Read-only: it needs no provider credentials and "
                     "changes nothing. Exits 1 when an update or a drift was "

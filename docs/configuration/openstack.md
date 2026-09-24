@@ -38,6 +38,17 @@ Optional · string · default `RegionOne`
 
 OpenStack region the session connects to and the one reported in status / `env` and emitted into the ArgoCD cluster-apps values. Omit it for the common `RegionOne` default.
 
+### `openstack.metadata`
+
+Optional · boolean · default `false`
+
+Whether the nodes may reach the Nova metadata service at `169.254.169.254`. By default they may not: the security group swaps Neutron's allow-all egress rules for 42 rules that allow everything except the metadata address, so no pod can read a node's machine configuration from it (see [the metadata service](../providers/openstack.md#machine-configuration-and-the-metadata-service)). Set `true` to accept that exposure, for example when the project's security group rule quota has no room for the 42 rules: converge then keeps (or restores) the two allow-all egress rules and warns on every run. The `block-cloud-metadata` NetworkPolicy is still installed either way.
+
+```yaml
+openstack:
+  metadata: true
+```
+
 ## secrets.yaml
 
 ```yaml

@@ -34,19 +34,19 @@ Server:
 
 
 def test_server_version_returns_server_tag(monkeypatch):
-    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: VERSION_OUTPUT)
+    monkeypatch.setattr(talosctl, "_run", lambda args, **_k: VERSION_OUTPUT)
     tag = talosctl.server_version(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert tag == "v1.8.3"
 
 
 def test_server_version_empty_output_returns_empty(monkeypatch):
-    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: "")
+    monkeypatch.setattr(talosctl, "_run", lambda args, **_k: "")
     assert talosctl.server_version(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
 
 
 def test_server_version_garbage_output_returns_empty(monkeypatch):
     monkeypatch.setattr(
-        talosctl, "_run", lambda args, capture=False, timeout=None: "nonsense\nno tags here"
+        talosctl, "_run", lambda args, **_k: "nonsense\nno tags here"
     )
     assert talosctl.server_version(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
 
@@ -54,7 +54,7 @@ def test_server_version_garbage_output_returns_empty(monkeypatch):
 def test_server_version_client_only_no_server_returns_empty(monkeypatch):
     """If no Server: block is present, there is no server tag."""
     out = "Client:\n    Tag: v1.8.0\n"
-    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: out)
+    monkeypatch.setattr(talosctl, "_run", lambda args, **_k: out)
     assert talosctl.server_version(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
 
 
@@ -64,7 +64,7 @@ def test_server_version_passes_a_subprocess_timeout(monkeypatch):
     timeout, and the caller treats the expiry as still down."""
     seen = {}
 
-    def fake_run(args, capture=False, timeout=None):
+    def fake_run(args, capture=False, quiet_stderr=False, timeout=None):
         seen["timeout"] = timeout
         return VERSION_OUTPUT
 
@@ -127,7 +127,7 @@ EXTENSIONS_OUTPUT = (
 
 def test_running_schematic_reads_the_factory_schematic_extension(monkeypatch):
     monkeypatch.setattr(
-        talosctl, "_run", lambda args, capture=False, timeout=None: EXTENSIONS_OUTPUT
+        talosctl, "_run", lambda args, **_k: EXTENSIONS_OUTPUT
     )
     got = talosctl.running_schematic(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert got == SCHEMATIC
@@ -145,12 +145,12 @@ def test_running_schematic_empty_when_no_factory_schematic(monkeypatch):
         "        name: qemu-guest-agent\n"
         "        version: 1.2"
     )
-    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: out)
+    monkeypatch.setattr(talosctl, "_run", lambda args, **_k: out)
     assert talosctl.running_schematic(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
 
 
 def test_running_schematic_empty_on_empty_output(monkeypatch):
-    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, timeout=None: "")
+    monkeypatch.setattr(talosctl, "_run", lambda args, **_k: "")
     assert talosctl.running_schematic(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01") == ""
 
 
@@ -159,7 +159,7 @@ def test_running_schematic_passes_a_subprocess_timeout(monkeypatch):
     version read so a hung apid cannot outlive the wait's own deadline."""
     seen = {}
 
-    def fake_run(args, capture=False, timeout=None):
+    def fake_run(args, capture=False, quiet_stderr=False, timeout=None):
         seen["timeout"] = timeout
         return EXTENSIONS_OUTPUT
 
@@ -528,22 +528,69 @@ def test_member_version_tolerates_an_odd_os_string():
     assert talosctl._member_version("") == ""
 
 
-def test_upgrade_accepts_successful_post_check_with_nonzero_exit(monkeypatch):
-    out = "upgrade completed\npost check passed\n"
-    monkeypatch.setattr(talosctl, "_run_nocheck", lambda *a, **k: (1, out, ""))
+class _FakeProc:
+    """A `subprocess.Popen` stand-in: running until `exit()` is called."""
 
-    talosctl.upgrade(Path("talosconfig"), "endpoint", "node", "installer:v1.13.9")
+    def __init__(self):
+        self.returncode = None
+        self.terminated = False
+
+    def exit(self, rc):
+        self.returncode = rc
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = -15
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+
+
+def _upgrade(monkeypatch, output: str = ""):
+    """Start talosctl.upgrade against a fake talosctl that prints `output`."""
+    proc = _FakeProc()
+
+    def popen(args, stdout, **kwargs):
+        stdout.write(output)
+        stdout.flush()
+        return proc
+
+    monkeypatch.setattr(talosctl.subprocess, "Popen", popen)
+    return talosctl.upgrade(Path("talosconfig"), "endpoint", "node", "installer:v1.13.10"), proc
+
+
+def test_upgrade_returns_while_talosctl_is_still_watching(monkeypatch):
+    """The upgrade call does not wait on talosctl: a watch that hangs on a
+    connection the rebooted node no longer has is simply stopped later."""
+    running, proc = _upgrade(monkeypatch)
+    running.check()  # still running: nothing to report
+    running.stop()
+    assert proc.terminated
+
+
+def test_upgrade_accepts_successful_post_check_with_nonzero_exit(monkeypatch):
+    running, proc = _upgrade(monkeypatch, "upgrade completed\npost check passed\n")
+    proc.exit(1)
+    running.check()
+
+
+def test_upgrade_treats_a_dropped_watch_as_under_way(monkeypatch):
+    running, proc = _upgrade(monkeypatch, 'ENHANCE_YOUR_CALM, debug data: "too_many_pings"')
+    proc.exit(1)
+    running.check()
 
 
 def test_upgrade_still_raises_on_unclassified_nonzero_exit(monkeypatch):
-    monkeypatch.setattr(
-        talosctl,
-        "_run_nocheck",
-        lambda *a, **k: (1, "", "failed to pull installer image"),
-    )
-
+    running, proc = _upgrade(monkeypatch, "failed to pull installer image")
+    proc.exit(1)
     with pytest.raises(ReconcileError, match="failed to pull installer image"):
-        talosctl.upgrade(Path("talosconfig"), "endpoint", "node", "installer:v1.13.9")
+        running.check()
 
 
 def test_members_skips_the_shared_vip_when_excluded(monkeypatch, tmp_path):
@@ -873,6 +920,31 @@ def test_plan_apply_config_redacts_files_and_inline_manifests(tmp_path, monkeypa
     assert "username: registry-user" in out
     assert "KUBELET_HOSTNAME=worker-01" in out
     assert "path: /etc/secret/config" in out
+
+
+def test_plan_apply_config_folds_a_redacted_block_into_one_line(tmp_path, monkeypatch, capsys):
+    """A redacted inline manifest body prints one counted line, not one per line."""
+    from taloscluster.output import set_dry_run
+
+    body = "".join(f"+                      line{i}: value\n" for i in range(300))
+    diff = (
+        "Dry run summary:\nConfig diff:\n--- a\n+++ b\n"
+        "+    inlineManifests:\n"
+        "+        - name: metrics-server\n"
+        "+          contents: |\n" + body +
+        "-    extraManifests:\n"
+    )
+    monkeypatch.setattr(talosctl, "_run_nocheck", lambda args, timeout=None: (0, "", diff))
+    set_dry_run(True)
+    try:
+        talosctl.apply_config(tmp_path / "talosconfig", "10.0.0.1", "10.0.0.5", "machine: {}")
+    finally:
+        set_dry_run(False)
+    out = capsys.readouterr().out
+    assert "line1" not in out
+    assert "+    <redacted> (300 lines)" in out
+    assert out.count("<redacted>") == 2  # the `contents:` header and the folded body
+    assert "name: metrics-server" in out
 
 
 def test_plan_apply_config_redacts_blank_lines_in_block_body(tmp_path, monkeypatch, capsys):
