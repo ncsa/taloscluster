@@ -1,0 +1,1745 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Declarative Talos Linux clusters on OpenStack or Proxmox, optionally alongside bare metal">
+      
+      
+      
+        <link rel="canonical" href="https://ncsa.github.io/taloscluster/configuration/argocd/">
+      
+      
+        <link rel="prev" href="../rancher/">
+      
+      
+        <link rel="next" href="../charts/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>ArgoCD plugin - taloscluster</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#argocd-plugin" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="taloscluster" class="md-header__button md-logo" aria-label="taloscluster" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            taloscluster
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              ArgoCD plugin
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/ncsa/taloscluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="taloscluster" class="md-nav__button md-logo" aria-label="taloscluster" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    taloscluster
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ncsa/taloscluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Usage
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../maintenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Maintenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Live workflow testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../load-balancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Load balancing and ingress
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Planning and building
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/machines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Machines and access
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/proxmox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/openstack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenStack setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/talos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Why Talos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../general/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    General
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node pools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openstack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenStack
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../proxmox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tailscale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tailscale
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rancher/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rancher plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ArgoCD plugin
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ArgoCD plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#clusteryaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cluster.yaml
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="cluster.yaml">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#argocdadmins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.admins
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdusers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.users
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdgiturl" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.git.url
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdinfraurl" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.infra.url
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdsync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdautomated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.automated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-app-sections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-app sections
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secretsyaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        secrets.yaml
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="secrets.yaml">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#argocdkubeconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.kubeconfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdcontext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.context
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdurl-and-argocdtoken" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.url and argocd.token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdgitusername-and-argocdgittoken" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.git.username and argocd.git.token
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../charts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Charts plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#clusteryaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cluster.yaml
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="cluster.yaml">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#argocdadmins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.admins
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdusers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.users
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdgiturl" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.git.url
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdinfraurl" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.infra.url
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdsync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdautomated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.automated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-app-sections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-app sections
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secretsyaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        secrets.yaml
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="secrets.yaml">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#argocdkubeconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.kubeconfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdcontext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.context
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdurl-and-argocdtoken" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.url and argocd.token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#argocdgitusername-and-argocdgittoken" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        argocd.git.username and argocd.git.token
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/ncsa/taloscluster/edit/main/docs/configuration/argocd.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="argocd-plugin">ArgoCD plugin<a class="headerlink" href="#argocd-plugin" title="Permanent link">&para;</a></h1>
+<p>Back to the <a href="../">configuration index</a>.</p>
+<p>The argocd plugin registers this cluster with an ArgoCD instance running elsewhere. It renders a cluster Secret (built from this cluster's own <code>kubeconfig</code>), an AppProject with <code>admin</code> and <code>user</code> roles, and, when the repositories are set, an app-of-apps Application whose values carry the per-cluster settings below. It is skipped unless the merged configuration names a way to reach the ArgoCD cluster. Converge is drift-driven: every rendered manifest is compared against the live object and only the missing or drifted ones are applied, so a converged cluster reports no work in <code>plan</code> and <code>check</code>. It adds a Rancher cluster-id annotation to the cluster Secret so ArgoCD and Rancher point at the same cluster. During a shared converge it runs after Rancher and takes the id from that hook's result; standalone runs, which never ran rancher, read the same id off the downstream cluster's own <code>cattle-cluster-agent</code>, so both paths resolve the same identity. Every user-controlled scalar the plugin renders is emitted through a YAML serializer and kept on one physical line, so a value containing a colon+space, quote, leading or trailing space, newline, or a YAML-reserved word round-trips exactly instead of producing an unparsable manifest or silently corrupting its value. See <a href="../../concepts/plugins/#argocd">Plugins</a> for integration details.</p>
+<h2 id="clusteryaml">cluster.yaml<a class="headerlink" href="#clusteryaml" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="nt">argocd</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">admins</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">carol@example.com</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">users</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">dave@example.com</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">git</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://git.example.com/kubernetes/cluster.git</span>
+<span class="w">  </span><span class="nt">infra</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://git.example.com/kubernetes/infra.git</span>
+<span class="w">  </span><span class="nt">sync</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">automated</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">metallb</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">ingress</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">class</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">traefik</span>
+<span class="w">    </span><span class="nt">traefik</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="s">"34.0.0"</span>
+<span class="w">  </span><span class="nt">certmanager</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">email</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">admin@example.edu</span>
+<span class="w">  </span><span class="nt">sealedsecrets</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">cinder</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">  </span><span class="nt">nfs</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">servers</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">shared</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nfs.example.edu</span>
+<span class="w">        </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/exports/mycluster</span>
+<span class="w">        </span><span class="nt">defaultClass</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">monitoring</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+</code></pre></div>
+<h3 id="argocdadmins"><code>argocd.admins</code><a class="headerlink" href="#argocdadmins" title="Permanent link">&para;</a></h3>
+<p>Optional · list of email addresses · default empty</p>
+<p>Groups granted the AppProject <code>admin</code> role. Merged with <code>rancher.admins</code> when a rancher section exists.</p>
+<h3 id="argocdusers"><code>argocd.users</code><a class="headerlink" href="#argocdusers" title="Permanent link">&para;</a></h3>
+<p>Optional · list of email addresses · default empty</p>
+<p>Groups granted the AppProject <code>user</code> role. Merged with <code>rancher.users</code>.</p>
+<h3 id="argocdgiturl"><code>argocd.git.url</code><a class="headerlink" href="#argocdgiturl" title="Permanent link">&para;</a></h3>
+<p>Required to render the Application · URL</p>
+<p>This cluster's own GitOps repository. When set, the plugin renders a repository Secret, a root Application pointing at this repository's <code>charts/apps</code>, and a second <code>&lt;name&gt;-cluster</code> Application pointing at <code>argocd.infra.url</code>. Both repository URLs must be set together. Omit both the Git URL and Git credentials for registration with only the cluster Secret and AppProject.</p>
+<h3 id="argocdinfraurl"><code>argocd.infra.url</code><a class="headerlink" href="#argocdinfraurl" title="Permanent link">&para;</a></h3>
+<p>Required when <code>argocd.git.url</code> is set · URL</p>
+<p>The repository whose <code>charts/apps</code> chart is the app-of-apps the cluster Application points at. NCSA's is <a href="https://github.com/ncsa/radiant-cluster/tree/main/charts/apps">ncsa/radiant-cluster</a>.</p>
+<p>Converge validates the <code>argocd:</code> section before any cluster change: setting only one of <code>git.url</code> / <code>infra.url</code>, specifying git credentials without <code>git.url</code>, a non-mapping <code>argocd:</code> sub-section, a top-level <code>argocd:</code> option the plugin does not understand, an unknown key inside a per-app section, an unknown key inside a <code>git</code>/<code>infra</code> repository block or an apply-target/credential block, a chart <code>version</code> the plugin would silently ignore, a <code>url</code>/<code>token</code> apply target without a <code>kubeconfig</code>/<code>context</code> (see below), <code>cinder.enabled</code> without the OpenStack application credential its Secret is built from, or a component enabled under both <code>argocd:</code> and <a href="../charts/"><code>charts:</code></a> is refused in the validate phase while the cluster is still untouched. The last refusal keeps one component under one manager: an app ArgoCD deploys through the infra chart and the same chart installed by the charts plugin would each keep re-applying the other's release (ArgoCD self-heal against helm). Validation runs whether or not the plugin is active, so a malformed or unsupported-mode section is reported even though it would otherwise be silently discarded by activation. <code>taloscluster plan</code> reports the same rejections before anything is attempted. The documented scalar types are enforced too: <code>sync</code>, <code>automated</code>, and each per-app <code>enabled</code> must be a real YAML boolean (a quoted <code>"false"</code> is refused rather than treated as truthy), <code>admins</code>/<code>users</code> must be lists of email addresses, the repository URLs non-empty strings, and the apply-target and credential values plain strings.</p>
+<h3 id="argocdsync"><code>argocd.sync</code><a class="headerlink" href="#argocdsync" title="Permanent link">&para;</a></h3>
+<p>Optional · boolean · default <code>false</code></p>
+<p>Controls the chart-only sync toggle: pass <code>sync</code> into the infrastructure chart’s Helm values. It controls whether the chart applies its own apps when it runs; it does <strong>not</strong> govern the two parent Applications’ automated sync (see <code>argocd.automated</code>). The two knobs are independent: you can keep chart-level sync on while turning off parent auto-sync, or vice-versa.</p>
+<h3 id="argocdautomated"><code>argocd.automated</code><a class="headerlink" href="#argocdautomated" title="Permanent link">&para;</a></h3>
+<p>Optional · boolean · default <code>true</code></p>
+<p>Enable automated sync, pruning, and self-healing on the two parent Applications (the root app-of-apps and the <code>&lt;cluster&gt;-cluster</code> app). When <code>false</code>, those Applications are created without a <code>syncPolicy.automated</code> block, so ArgoCD does not continuously apply them and they sync only when triggered manually. This is separate from <code>argocd.sync</code>, which only reaches the chart's Helm values.</p>
+<h3 id="per-app-sections">Per-app sections<a class="headerlink" href="#per-app-sections" title="Permanent link">&para;</a></h3>
+<p>Optional · mapping each</p>
+<p><code>metallb</code>, <code>ingress</code>, <code>sealedsecrets</code>, <code>certmanager</code>, <code>cinder</code>, <code>nfs</code> and <code>monitoring</code> each accept <code>enabled: true</code> to turn the app on. Enabling <code>metallb</code>, <code>ingress</code>, <code>sealedsecrets</code>, <code>certmanager</code> or <code>nfs</code> while the same component is also enabled under <a href="../charts/"><code>charts:</code></a> is refused: ArgoCD's self-healing and helm would fight over the one release, so pick one manager per component. The plugin forwards <code>version</code> for <code>metallb</code>, <code>sealedsecrets</code>, <code>certmanager</code>, and <code>cinder</code>; Traefik uses <code>ingress.traefik.version</code>. It does not forward <code>ingress.version</code>, <code>nfs.version</code>, or <code>monitoring.version</code> — setting one of those is refused during validation rather than silently ignored; pin those charts under <code>ingress.traefik.version</code> instead. When a supported version key is absent, the chart default is kept. Each per-app section is validated: an unknown key inside one (a typo or an unsupported override) is refused, and a forwarded <code>version</code> must be a non-empty string. A few apps take extra keys:</p>
+<ul>
+<li><strong><code>ingress.class</code></strong>: ingress class name, default <code>traefik</code>. Also used as the cert-manager solver class.</li>
+<li><strong><code>ingress.traefik.version</code></strong>: pins the Traefik chart.</li>
+<li><strong><code>certmanager.email</code></strong>: ACME registration email.</li>
+<li><strong><code>nfs.servers</code></strong>: mapping of server name to <code>server</code>, <code>path</code> and <code>defaultClass</code>, copied verbatim into the nfs chart values. Only rendered when <code>nfs.enabled</code> is true.</li>
+</ul>
+<p>When <code>metallb.enabled</code> is true, the plugin renders the provider's load-balancer address pool into <code>metallb.addresses</code>. On OpenStack this is the single ingress VIP, emitted as <code>address/32</code>; on Proxmox it is the <a href="../network/#networkexternal"><code>ingress_pool</code></a> range (<code>start-end</code>), emitted verbatim because MetalLB accepts it directly. The ingress controller's <code>publicIP</code>/<code>privateIP</code> are only populated on OpenStack from the floating IP and VIP; a Proxmox cluster has no single VIP, so those stay empty.</p>
+<p>When <code>cinder.enabled</code> is true on an OpenStack cluster, the OpenStack application credential is not embedded in any ArgoCD Application. The plugin instead writes a Secret named <code>cinder-csi-cloud-config</code> into the <code>cinder-csi</code> namespace of this cluster itself (using this cluster’s own kubeconfig from <code>kubeconfig</code>), carrying the Cinder <code>cloud.conf</code> — the <code>[Global]</code> auth block with the application credential. The infra chart’s cinder Application must reference that existing Secret through the upstream cinder-csi chart’s <code>secret.enabled=true, secret.create=false, secret.name=cinder-csi-cloud-config, secret.filename=cloud.conf</code> instead of building a Secret from values. <a href="https://github.com/ncsa/radiant-cluster/tree/main/charts/apps"><code>ncsa/radiant-cluster</code></a> needs a one-line change to its <code>charts/apps/templates/storage/cinder.yaml</code> (switch <code>secret.create</code> from <code>true</code> to <code>false</code>, and drop the now-unused <code>secret.data</code>); with a forked <code>argocd.infra.url</code>, make the equivalent change there. Setting <code>cinder.enabled: true</code> without <code>openstack.credential_id</code> / <code>openstack.credential_secret</code> is refused during the validate phase, before any cluster change. Converge ensures the <code>cinder-csi</code> Namespace (ArgoCD also syncs it, so the plugin does not <code>check</code> or <code>destroy</code> it) and applies the Secret; check compares it and destroy removes it, all against this cluster. Converge also deletes the Secret when <code>cinder.enabled</code> is turned off, so disabling Cinder clears the credential. The cluster kubeconfig needs create, get, patch, and delete on Secrets in the <code>cinder-csi</code> namespace. The cinder-csi service account still needs the chart’s usual RBAC to read its own Secret.</p>
+<h2 id="secretsyaml">secrets.yaml<a class="headerlink" href="#secretsyaml" title="Permanent link">&para;</a></h2>
+<p>Use <code>kubeconfig</code> and <code>context</code> for the plugin activation. Like every credential, they and the <code>git</code> credentials below may live in <code>cluster.yaml</code>, <code>secrets.yaml</code> or any other included file — <code>cluster.yaml</code> merges the files it lists before the section is read. A <code>url</code>/<code>token</code> pair alone is not a supported apply target and does not activate the plugin.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">argocd</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">kubeconfig</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">../argocd-kubeconfig</span>
+<span class="w">  </span><span class="c1"># context: argocd</span>
+<span class="w">  </span><span class="c1"># url: https://argocd.example.edu</span>
+<span class="w">  </span><span class="c1"># token: CHANGE-ME</span>
+<span class="w">  </span><span class="nt">git</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">deploy</span>
+<span class="w">    </span><span class="nt">token</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CHANGE-ME</span>
+</code></pre></div>
+<h3 id="argocdkubeconfig"><code>argocd.kubeconfig</code><a class="headerlink" href="#argocdkubeconfig" title="Permanent link">&para;</a></h3>
+<p>One of · path</p>
+<p>Kubeconfig for the cluster running ArgoCD, resolved relative to the taloscluster cluster directory when the path is relative. Manifests are applied with <code>kubectl --kubeconfig &lt;path&gt;</code>.</p>
+<h3 id="argocdcontext"><code>argocd.context</code><a class="headerlink" href="#argocdcontext" title="Permanent link">&para;</a></h3>
+<p>One of · string</p>
+<p>A context in your default kubeconfig, passed as <code>kubectl --context</code>. May be combined with <code>kubeconfig</code>.</p>
+<h3 id="argocdurl-and-argocdtoken"><code>argocd.url</code> and <code>argocd.token</code><a class="headerlink" href="#argocdurl-and-argocdtoken" title="Permanent link">&para;</a></h3>
+<p>Not a supported apply target · URL and string</p>
+<p>ArgoCD API endpoint and token. The plugin applies manifests via kubectl only, so a <code>url</code>/<code>token</code> pair without a <code>kubeconfig</code> or <code>context</code> does not activate the plugin and is refused during validate as an unsupported apply target: set <code>kubeconfig</code> or <code>context</code> above instead.</p>
+<h3 id="argocdgitusername-and-argocdgittoken"><code>argocd.git.username</code> and <code>argocd.git.token</code><a class="headerlink" href="#argocdgitusername-and-argocdgittoken" title="Permanent link">&para;</a></h3>
+<p>Optional · strings</p>
+<p>Credentials for <code>argocd.git.url</code>, rendered into its ArgoCD repository Secret. Supplying either credential also requires that Git URL. The plugin does not create a separate credential Secret for <code>argocd.infra.url</code>; configure access to a private infrastructure repository in ArgoCD separately. Credential values are serialized with the same YAML serializer as every other scalar the plugin renders (see the <a href="#argocd-plugin">intro</a>).</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

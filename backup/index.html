@@ -1,0 +1,1591 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Declarative Talos Linux clusters on OpenStack or Proxmox, optionally alongside bare metal">
+      
+      
+      
+        <link rel="canonical" href="https://ncsa.github.io/taloscluster/backup/">
+      
+      
+        <link rel="prev" href="../concepts/plugins/">
+      
+      
+        <link rel="next" href="../troubleshooting/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Backup and recovery - taloscluster</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#backup-and-recovery" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="taloscluster" class="md-header__button md-logo" aria-label="taloscluster" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            taloscluster
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Backup and recovery
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/ncsa/taloscluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="taloscluster" class="md-nav__button md-logo" aria-label="taloscluster" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    taloscluster
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ncsa/taloscluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Usage
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maintenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Maintenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Live workflow testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../load-balancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Load balancing and ingress
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Planning and building
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/machines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Machines and access
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../providers/proxmox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../providers/openstack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenStack setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../providers/metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/talos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Why Talos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/general/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    General
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/pools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node pools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/openstack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenStack
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/proxmox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/tailscale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tailscale
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/rancher/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rancher plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/argocd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ArgoCD plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/charts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Charts plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and recovery
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-to-back-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What to back up
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#talos-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Talos identity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#etcd-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd snapshot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#application-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Application data
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovery-lost-management-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery: lost management machine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovery-interrupted-bootstrap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery: interrupted bootstrap
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-to-back-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What to back up
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#talos-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Talos identity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#client-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#etcd-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd snapshot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#application-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Application data
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovery-lost-management-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery: lost management machine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovery-interrupted-bootstrap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery: interrupted bootstrap
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/ncsa/taloscluster/edit/main/docs/backup.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="backup-and-recovery">Backup and recovery<a class="headerlink" href="#backup-and-recovery" title="Permanent link">&para;</a></h1>
+<p>taloscluster stores the cluster's desired state in git and a handful of generated files in the cluster directory that it never commits. Which of those files are irreplaceable, which are derived, and how the cluster's own state is preserved is the difference between recovering a lost machine in minutes and losing the ability to touch a live cluster at all. This page tells you what to back up and how to recover.</p>
+<p>The categories, in order of how bad it is to lose them:</p>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>Where it lives</th>
+<th>Loss is</th>
+<th>Recoverable?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Provider credentials</td>
+<td><code>secrets.yaml</code> plus the cloud account behind it</td>
+<td>locked out of the cloud</td>
+<td>re-create the credential and restore the file</td>
+</tr>
+<tr>
+<td>Talos identity</td>
+<td><code>talossecrets.yaml</code></td>
+<td>control of an existing cluster</td>
+<td><strong>no</strong> — restore from backup or rebuild</td>
+</tr>
+<tr>
+<td>Client configuration</td>
+<td><code>talosconfig</code>, <code>kubeconfig</code></td>
+<td>no clients for a still-running cluster</td>
+<td>re-generated by <code>converge</code></td>
+</tr>
+<tr>
+<td>etcd snapshot</td>
+<td>a file you write elsewhere</td>
+<td>cluster control-plane state</td>
+<td>restore the snapshot</td>
+</tr>
+<tr>
+<td>Application data</td>
+<td>inside the cluster (etcd, volumes)</td>
+<td>the workloads themselves</td>
+<td>restore from a Kubernetes backup</td>
+</tr>
+</tbody>
+</table>
+<p>Run <code>taloscluster status</code> to see what a cluster currently owns. The shared boot image is not per-cluster (it is keyed by <code>talos.version</code> and the base schematic and can be reused), so it does not need backing up.</p>
+<h2 id="what-to-back-up">What to back up<a class="headerlink" href="#what-to-back-up" title="Permanent link">&para;</a></h2>
+<p>A cluster directory holds <code>cluster.yaml</code> (your desired state, committed to git), <code>secrets.yaml</code> (provider credentials, mode 0600), <code>talossecrets.yaml</code> (the Talos identity, mode 0600), and the derived client files <code>talosconfig</code> and <code>kubeconfig</code>. <code>taloscluster init</code> writes a <code>.gitignore</code> that keeps <code>secrets.yaml</code>, <code>talossecrets.yaml</code>, <code>talosconfig</code>, and <code>kubeconfig</code> out of git precisely because they hold credentials or identity.</p>
+<p>Back these up off the management machine and out of git:</p>
+<ul>
+<li><strong><code>secrets.yaml</code></strong> — the OpenStack application credential, the Proxmox API token, and the Tailscale pre-auth key. It is needed to talk to the provider; it is not the cluster's identity. See the <a href="../providers/openstack/#application-credentials">OpenStack setup</a> and <a href="../providers/proxmox/">Proxmox setup</a> pages.</li>
+<li><strong><code>talossecrets.yaml</code></strong> — the one file that cannot be regenerated. It holds the cluster CA, the etcd CA, the join tokens that make the machines part of the same cluster, and the passphrase the machines' encrypted <code>STATE</code> and <code>EPHEMERAL</code> partitions are keyed with (see <a href="../concepts/talos/">Why Talos</a>). Converge refuses to mint a new one when the cluster's machines already exist, so restore this from backup before the first <code>converge</code> of a recovered machine. See <a href="#talos-identity">Talos identity</a> below.</li>
+<li><strong><code>cluster.yaml</code> and the git history</strong> — the desired state. Even without git, keeping a copy of <code>cluster.yaml</code> lets you rebuild an identical cluster; with git you also keep every previous state.</li>
+</ul>
+<p><code>talosconfig</code> and <code>kubeconfig</code> are derived and safe to regenerate, but they still hold the cluster's client certificate and API credentials, so treat them as secrets too. Keep their backups only if you want clients working before a <code>converge</code>.</p>
+<p>An application credential or API token is created and scoped by the cloud, not by taloscluster. <code>secrets.yaml</code> only stores it: if the machine that holds it is lost but the credential still exists in the cloud, restoring <code>secrets.yaml</code> is enough. If the credential itself is gone, rotate a new one in the cloud and update <code>secrets.yaml</code>; the clustered nodes do not depend on it after bootstrap because the Talos identity lives in <code>talossecrets.yaml</code>, not in the provider credential.</p>
+<h2 id="talos-identity">Talos identity<a class="headerlink" href="#talos-identity" title="Permanent link">&para;</a></h2>
+<p><code>talossecrets.yaml</code> is the cluster's cryptographic identity. Losing it means no tool, including taloscluster itself, can authenticate to the existing nodes — the Talos API only accepts mutual TLS with the cluster's own certificates, and the machine configs nodes run were built with these secrets. It cannot be regenerated. This is why converge hard-fails with "restore it from backup" when the file is missing but the cluster's machines already exist, rather than silently minting a fresh identity against a live cluster.</p>
+<p>Back up <code>talossecrets.yaml</code> as soon as the first <code>converge</code> writes it (see <a href="../concepts/lifecycle/#day-1-build">Day 1</a>). <code>converge</code> mints the identity in the secrets phase, before it creates the network, creates the machines or bootstraps the cluster, and configures the nodes from that same bundle; bootstrap never replaces it. A backup that predates the bootstrap is therefore already the current identity — take it as soon as the file appears in the cluster directory, not after the cluster finishes building.</p>
+<h2 id="client-configuration">Client configuration<a class="headerlink" href="#client-configuration" title="Permanent link">&para;</a></h2>
+<p><code>talosconfig</code> and <code>kubeconfig</code> are derived client configs, not backup-class artifacts. <code>converge</code> rewrites <code>talosconfig</code> (from <code>talossecrets.yaml</code> and controlplane-01's endpoint) and the kubeconfig, so deleting them costs nothing but the next unscheduled reconcile. Doing it by hand:</p>
+<div class="highlight"><pre><span></span><code>rm<span class="w"> </span>-f<span class="w"> </span>mycluster/talosconfig<span class="w"> </span>mycluster/kubeconfig
+taloscluster<span class="w"> </span>converge<span class="w"> </span>-C<span class="w"> </span>mycluster
+</code></pre></div>
+<p><code>converge</code> requires <code>talossecrets.yaml</code> to regenerate the <code>talosconfig</code> context, so this only works when the Talos identity is present. It also recovers a <code>kubeconfig</code> that went missing (for example a lost management machine) by re-fetching it from the cluster through the restored identity, so the cluster is reconciled as existing instead of being misread as a fresh bootstrap. After a <code>destroy</code>, converge wipes both derived files along with <code>talossecrets.yaml</code> so clients do not point stale credentials at a cluster that no longer exists — unless the cluster has a <code>metal</code> section, where destroy keeps the <code>talosconfig</code> for the machine resets it names.</p>
+<h2 id="etcd-snapshot">etcd snapshot<a class="headerlink" href="#etcd-snapshot" title="Permanent link">&para;</a></h2>
+<p><code>talossecrets.yaml</code> and the derived configs let you talk to nodes; they do not back up the cluster's own state inside etcd. The control-plane data layer — Kubernetes objects, secrets, and the state of workloads the API server wrote — lives in etcd. Take a snapshot of a healthy control plane:</p>
+<div class="highlight"><pre><span></span><code>talosctl<span class="w"> </span>--talosconfig<span class="w"> </span>talosconfig<span class="w"> </span>-n<span class="w"> </span>mycluster-controlplane-01<span class="w"> </span>etcd<span class="w"> </span>snapshot<span class="w"> </span>etcd-snapshot-<span class="k">$(</span>date<span class="w"> </span>+%F<span class="k">)</span>.db
+</code></pre></div>
+<p><code>-n</code> targets a real control-plane node; the <code>talosconfig</code> context carries the endpoint, so no <code>-e</code> is needed. Run it from controlplane-01, whose etcd is authoritative. Restore is a low-level operation on an etcd member rather than something converge does; see the <a href="https://docs.siderolabs.com/talos/latest/advanced/etcd">Talos documentation</a> for etcd maintenance and restore procedures.</p>
+<p>An etcd snapshot is only consistent for the moment it was taken. Workloads that write between snapshots are not covered, so snapshot on a schedule, not once.</p>
+<h2 id="application-data">Application data<a class="headerlink" href="#application-data" title="Permanent link">&para;</a></h2>
+<p>etcd snapshots protect cluster control-plane state. They are not a backup of your data: PersistentVolumes, uncommitted writes, and anything managed by external controllers live elsewhere. Back up application data with a real Kubernetes backup tool (for example <a href="https://velero.io/">Velero</a>), taking the running cluster's storage, CSI snapshots, and restore procedures into account. Verify and practice a restore before you need it.</p>
+<p>The Talos host firewall allows intra-cluster traffic from <code>network.cluster.cidr</code> by default, so in-cluster backup pods can reach their storage; out-of-cluster sources need the <a href="../configuration/security/">security</a> allowlists to reach port 6443.</p>
+<h2 id="recovery-lost-management-machine">Recovery: lost management machine<a class="headerlink" href="#recovery-lost-management-machine" title="Permanent link">&para;</a></h2>
+<p>A new management machine recovers a cluster in the same way you back it up, in reverse: restore the backed-up files to a fresh cluster directory, reconnect to the tailnet, then let <code>converge</code> rebuild the derived state.</p>
+<ol>
+<li>Install taloscluster and connect the machine to the cluster's tailnet (or a reachable route to the private network). taloscluster does not join the tailnet for you; see <a href="../concepts/machines/#reaching-the-nodes">Machines and access</a>.</li>
+<li>Restore <code>cluster.yaml</code>, <code>secrets.yaml</code>, and <code>talossecrets.yaml</code> from backup into the cluster directory. Keep the file modes: <code>secrets.yaml</code> and <code>talossecrets.yaml</code> should be 0600. Keep the <code>include: [secrets.yaml]</code> line in the restored <code>cluster.yaml</code> too: the loader refuses a <code>secrets.yaml</code> the include list does not name, so the credentials cannot be dropped by restoring <code>cluster.yaml</code> alone.</li>
+<li>Run <code>taloscluster plan</code> to confirm the configuration matches what exists, then <code>taloscluster converge</code>. Converge regenerates <code>talosconfig</code> and <code>kubeconfig</code> from the restored identity and reconciles the cluster, so the new machine can manage it again.</li>
+</ol>
+<p>A missing <code>kubeconfig</code> is not treated as proof that the cluster was never bootstrapped. Because the identity and machines exist, converge first recovers the kubeconfig from the first control plane through the restored identity and only then decides whether the cluster is fresh. A recovered cluster is reconciled as an existing one -- scale-down, machine-config apply and the Kubernetes upgrade all run, and any node scaled up in the same run boots at the upgraded version rather than a newer one joining an older cluster. Only when the recovery produces no kubeconfig (a first run that never reached bootstrap) does converge treat the cluster as fresh and bootstrap it. That verdict needs the first control plane to have answered: one that never becomes reachable during the recovery wait could equally be a live cluster, and converge then refuses to bootstrap or create machines, reporting an incomplete converge to re-run once the node answers -- an interrupted first run and a live-but-unreachable cluster look identical until the node speaks. Recovery reaches the first control plane the way every talosctl call does: by its MagicDNS name when Tailscale is enabled with an auth key, or its real provider-reported address otherwise (no tailnet hostname resolves when the section or the key is missing).</p>
+<div class="highlight"><pre><span></span><code>taloscluster<span class="w"> </span>plan<span class="w"> </span>-C<span class="w"> </span>mycluster
+taloscluster<span class="w"> </span>converge<span class="w"> </span>-C<span class="w"> </span>mycluster
+taloscluster<span class="w"> </span>status<span class="w"> </span>-C<span class="w"> </span>mycluster
+</code></pre></div>
+<p>If <code>talossecrets.yaml</code> was lost, converge refuses to proceed once it sees the cluster's machines exist (see <a href="#talos-identity">Talos identity</a>); there is no way around restoring the identity or rebuilding the cluster. If only the provider credential is lost, rotate it in the cloud and put the new value in <code>secrets.yaml</code> before converging.</p>
+<h2 id="recovery-interrupted-bootstrap">Recovery: interrupted bootstrap<a class="headerlink" href="#recovery-interrupted-bootstrap" title="Permanent link">&para;</a></h2>
+<p>A <code>converge</code> interrupted between creating machines and bootstrapping etcd is not a broken cluster — it is an unfinished first run, and converge self-heals. The create phases (image, network, machines) are idempotent re-runs, and because a never-bootstrapped cluster has no <code>kubeconfig</code>, converge recognizes there was no bootstrap and completes it on the next run rather than trying to recreate the machines or mint a new identity — as long as the first control plane answers: while it never becomes reachable during the recovery wait, converge refuses to bootstrap or create machines (an interrupted first run and a live cluster look identical) and exits nonzero, so bring the node up and re-run. See <a href="../concepts/lifecycle/#day-1-build">Day 1</a>. That interrupted first run already generated <code>talossecrets.yaml</code> in its secrets phase, so keep the backup you took of that pre-bootstrap identity: the re-run bootstraps the cluster from the same bundle without re-minting it, so the pre-bootstrap backup matches the running cluster.</p>
+<div class="highlight"><pre><span></span><code>taloscluster<span class="w"> </span>converge<span class="w"> </span>-C<span class="w"> </span>mycluster<span class="w">   </span><span class="c1"># re-run after an interruption</span>
+</code></pre></div>
+<p>That clears up after an interruption before the bootstrap. An interruption during upgrade, drain, or scale-down is different: converge re-runs and picks the safe reconciliation from wherever it stopped, but for control-plane work it refuses to progress past a half-done operation (for example a failed graceful reset) rather than risk losing quorum. Investigate with <code>taloscluster status</code>, re-run converge once the phase completes, and see <a href="../troubleshooting/">Troubleshooting</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

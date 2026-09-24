@@ -1,0 +1,1924 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Declarative Talos Linux clusters on OpenStack or Proxmox, optionally alongside bare metal">
+      
+      
+      
+        <link rel="canonical" href="https://ncsa.github.io/taloscluster/configuration/network/">
+      
+      
+        <link rel="prev" href="../metal/">
+      
+      
+        <link rel="next" href="../security/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Network - taloscluster</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#network" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="taloscluster" class="md-header__button md-logo" aria-label="taloscluster" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            taloscluster
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Network
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/ncsa/taloscluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="taloscluster" class="md-nav__button md-logo" aria-label="taloscluster" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    taloscluster
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ncsa/taloscluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Usage
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../maintenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Maintenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Live workflow testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../load-balancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Load balancing and ingress
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Planning and building
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/machines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Machines and access
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/proxmox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/openstack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenStack setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/talos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Why Talos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../general/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    General
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node pools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openstack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenStack
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../proxmox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#networkcluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="network.cluster">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#networkclustercidr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster.cidr
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkclustergateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster.gateway
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkclustervlan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster.vlan
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkclustermtu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster.mtu
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkclusterkubeapi_vip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster.kubeapi_vip
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#networkexternal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="network.external">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalcidr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.cidr
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalgateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.gateway
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalvlan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.vlan
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalmtu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.mtu
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalkubeapi_vip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.kubeapi_vip
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalanchor_cidr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.anchor_cidr
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalingress_pool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.ingress_pool
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#addresses-outside-the-dhcp-range" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Addresses outside the DHCP range
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mtu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MTU
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#networkdns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.dns
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#networkntp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.ntp
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#moving-from-the-old-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Moving from the old keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tailscale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tailscale
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rancher/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rancher plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../argocd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ArgoCD plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../charts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Charts plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#networkcluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="network.cluster">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#networkclustercidr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster.cidr
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkclustergateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster.gateway
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkclustervlan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster.vlan
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkclustermtu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster.mtu
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkclusterkubeapi_vip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.cluster.kubeapi_vip
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#networkexternal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="network.external">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalcidr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.cidr
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalgateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.gateway
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalvlan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.vlan
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalmtu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.mtu
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalkubeapi_vip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.kubeapi_vip
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalanchor_cidr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.anchor_cidr
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networkexternalingress_pool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.external.ingress_pool
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#addresses-outside-the-dhcp-range" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Addresses outside the DHCP range
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mtu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MTU
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#networkdns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.dns
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#networkntp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        network.ntp
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#moving-from-the-old-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Moving from the old keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/ncsa/taloscluster/edit/main/docs/configuration/network.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="network">Network<a class="headerlink" href="#network" title="Permanent link">&para;</a></h1>
+<p>Back to the <a href="../">configuration index</a>.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">network</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">cluster</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">cidr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.0.0.0/24</span>
+<span class="w">  </span><span class="nt">dns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">192.0.2.53</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">198.51.100.53</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">ntp</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">ntp.example.edu</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<h2 id="networkcluster"><code>network.cluster</code><a class="headerlink" href="#networkcluster" title="Permanent link">&para;</a></h2>
+<p>Required · mapping</p>
+<p>The layer-2 network the nodes sit on, described in one place for every provider. Which bridge, VNet or SDN the network is reached through is Proxmox plumbing and stays in <a href="../proxmox/#proxmoxnetworkcluster"><code>proxmox.network.cluster</code></a>.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">network</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">cluster</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">cidr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.0.0.0/24</span>
+<span class="w">    </span><span class="nt">gateway</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.0.0.1</span><span class="w">       </span><span class="c1"># route-MTU clamp on DHCP-backed Proxmox L2s</span>
+<span class="w">    </span><span class="nt">vlan</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span><span class="w">               </span><span class="c1"># Proxmox only</span>
+<span class="w">    </span><span class="nt">mtu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9000</span><span class="w">               </span><span class="c1"># applied to the node links</span>
+<span class="w">    </span><span class="nt">kubeapi_vip</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.0.0.200</span><span class="w"> </span><span class="c1"># Proxmox only</span>
+</code></pre></div>
+<h3 id="networkclustercidr"><code>network.cluster.cidr</code><a class="headerlink" href="#networkclustercidr" title="Permanent link">&para;</a></h3>
+<p>Required · IPv4 network</p>
+<p>The network the nodes' private addresses come from, written as a network address (<code>10.0.0.0/24</code>, not a host inside it). What it means depends on the provider:</p>
+<ul>
+<li><strong>OpenStack</strong>: becomes the tenant subnet converge creates.</li>
+<li><strong>Proxmox with <code>bridge</code> or <code>vnet</code></strong>: must match the DHCP-served subnet on that link.</li>
+<li><strong>Proxmox managed SDN</strong>: the overlay subnet. Nodes get static addresses from it, so it cannot change once the cluster runs. See <a href="../proxmox/#proxmoxnetworkclustersdn">Proxmox</a>.</li>
+</ul>
+<p>It must not overlap the Kubernetes pod or service networks, which Talos defaults to <code>10.244.0.0/16</code> and <code>10.96.0.0/12</code>. A node whose own addresses fall inside either cannot tell its traffic from cluster traffic, and Talos raises its <a href="https://talos.dev/latest/advanced/troubleshooting-control-plane/"><code>address-overlap</code></a> diagnostic on it while kubelet, DNS and service routing misbehave. <code>check</code> and <code>converge</code> warn when any stated host network — this one, <a href="#networkexternalcidr"><code>network.external.cidr</code></a>, <a href="#networkexternalanchor_cidr"><code>network.external.anchor_cidr</code></a> or a <a href="../metal/#metalgroupnetwork">metal group's</a> — collides, naming the key. The warning reads Talos's defaults, so a cluster that moves the subnets with a <code>cluster.network.podSubnets</code>/<code>serviceSubnets</code> patch under <a href="../general/#talosconfig_patches"><code>talos.config_patches</code></a> is outside what it can see; so is an address a DHCP server hands a link <code>cluster.yaml</code> does not describe, such as a metal machine's PXE NIC, which only the node's own diagnostic catches.</p>
+<h3 id="networkclustergateway"><code>network.cluster.gateway</code><a class="headerlink" href="#networkclustergateway" title="Permanent link">&para;</a></h3>
+<p>Optional · IPv4 address inside <code>cidr</code> · default none</p>
+<p>The default gateway on this network. A managed SDN uses the first host of <code>cidr</code> as its anycast gateway and OpenStack sets the subnet's gateway itself, so on the VM providers the value is read only on a DHCP-backed Proxmox bridge or VNet: with a jumbo <a href="#networkclustermtu"><code>network.cluster.mtu</code></a> it is the gateway of the default route the machine configuration restates with an MTU of 1500, and it must be the gateway the DHCP server actually hands out. <a href="../metal/">Metal</a> machines read it too, and need it: their links are statically addressed with DHCP off, so without a gateway the machine has no default route at all and reaches nothing beyond its own subnet. A group whose machines sit on a different L2 must name a gateway of its own under <a href="../metal/#metalgroupnetwork"><code>metal.&lt;group&gt;.network</code></a>, and one that rides this network — the default — requires the gateway to be set here (on a managed SDN or an OpenStack tenant network, the first host of <code>cidr</code>).</p>
+<h3 id="networkclustervlan"><code>network.cluster.vlan</code><a class="headerlink" href="#networkclustervlan" title="Permanent link">&para;</a></h3>
+<p>Optional · 1 to 4094 · default untagged</p>
+<p>VLAN tag for the node NIC. Proxmox only: it becomes the VM NIC tag, and it is refused together with a managed SDN and with <code>openstack</code>, whose tenant network carries no tag.</p>
+<h3 id="networkclustermtu"><code>network.cluster.mtu</code><a class="headerlink" href="#networkclustermtu" title="Permanent link">&para;</a></h3>
+<p>Optional · integer, at least 1280 · default <code>1500</code></p>
+<p>The MTU of this layer-2 network. Above 1500 it is written into the generated machine configuration: the node's link carries the MTU, and the default route on that link is clamped to 1500, so off-subnet TCP is MSS-clamped and UDP fragmented even when the gateway silently drops jumbo frames, while on-subnet traffic stays jumbo. On Proxmox the VM NIC is created with no MTU, so it inherits the bridge's and the bridge itself is the last link in that chain: <code>plan</code> warns when a compute node's bridge reads below this value (an interface without an explicit MTU reads as the 1500 default), and raising the bridge MTU on every node is the fix; a VM NIC carrying an explicit MTU has it stripped by converge so the NIC inherits — written to a stopped VM straight away and to a running one only at its next restart (<code>converge --reboot</code>), since Proxmox re-plugs a running VM's NIC and the re-plug takes the node off the pod network until flannel restarts. On OpenStack the tenant network is created stating this MTU so Neutron advertises it to the nodes, and the network phase warns when an existing network advertises less (one created by hand, or before converge stated it): a network left at the cloud default silently drops the large on-subnet frames the jumbo node links send, so its <code>mtu</code> must be raised on the cloud side. The route clamp applies wherever the tool knows the gateway — a managed SDN and an OpenStack subnet take the first host of <code>cidr</code> — and on a DHCP-backed Proxmox bridge or VNet only when <a href="#networkclustergateway"><code>network.cluster.gateway</code></a> is set; without it the DHCP-learned route keeps the link MTU. Every host on one layer-2 network must agree on the MTU, and changing it on a live cluster is a whole-cluster event — see <a href="#mtu">MTU</a>.</p>
+<h3 id="networkclusterkubeapi_vip"><code>network.cluster.kubeapi_vip</code><a class="headerlink" href="#networkclusterkubeapi_vip" title="Permanent link">&para;</a></h3>
+<p>Required with <code>proxmox</code> · one of <code>network.cluster</code> / <code>network.external</code> · IPv4 inside <code>cidr</code></p>
+<p>The address control planes share as a Layer 2 VIP for the Kubernetes API. With <code>proxmox</code> it is required: exactly one of <code>network.cluster</code> and <code>network.external</code> must set it, and the load refuses the cluster without it. Changing it later moves the API endpoint of the running cluster by re-applying it through the machine config; it is not guaranteed to avoid a restart. On a managed Proxmox SDN it may not collide with the anycast gateway, a node's static address, or any address the static layout reserves. It is refused with <code>openstack</code>, where converge reserves the API address as a port with a floating IP in front of it. Like <code>ingress_pool</code>, it must sit outside any DHCP range on that network; see <a href="#addresses-outside-the-dhcp-range">Addresses outside the DHCP range</a>.</p>
+<h2 id="networkexternal"><code>network.external</code><a class="headerlink" href="#networkexternal" title="Permanent link">&para;</a></h2>
+<p>Optional · mapping · default no external network</p>
+<p>The externally routed layer-2 network, for clusters that reach the outside world directly instead of through a provider-allocated network. Proxmox only: the bridge it is reached through stays in <a href="../proxmox/#proxmoxnetworkexternal"><code>proxmox.network.external</code></a>, and the block is refused with <code>openstack</code>, which allocates the external network itself from <a href="../openstack/#openstackexternal_net"><code>openstack.external_net</code></a> — a router plus floating IPs for the API and ingress ports — at converge.</p>
+<p>A cluster that has this network at all must describe it fully: <code>cidr</code>, <code>gateway</code> and <code>anchor_cidr</code> are required, and <code>cidr</code> must not overlap <code>network.cluster.cidr</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">network</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">external</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">cidr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">203.0.113.0/24</span>
+<span class="w">    </span><span class="nt">gateway</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">203.0.113.1</span>
+<span class="w">    </span><span class="nt">vlan</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
+<span class="w">    </span><span class="nt">kubeapi_vip</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">203.0.113.10</span>
+<span class="w">    </span><span class="nt">anchor_cidr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">169.254.32.0/20</span>
+<span class="w">    </span><span class="nt">ingress_pool</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">203.0.113.190-203.0.113.199</span>
+</code></pre></div>
+<h3 id="networkexternalcidr"><code>network.external.cidr</code><a class="headerlink" href="#networkexternalcidr" title="Permanent link">&para;</a></h3>
+<p>Required · IPv4 network</p>
+<p>The externally routed subnet. It must not overlap <code>network.cluster.cidr</code>.</p>
+<h3 id="networkexternalgateway"><code>network.external.gateway</code><a class="headerlink" href="#networkexternalgateway" title="Permanent link">&para;</a></h3>
+<p>Required · IPv4 address inside <code>cidr</code></p>
+<p>The subnet's gateway. Replies to externally initiated traffic are routed back through it.</p>
+<h3 id="networkexternalvlan"><code>network.external.vlan</code><a class="headerlink" href="#networkexternalvlan" title="Permanent link">&para;</a></h3>
+<p>Optional · 1 to 4094 · default untagged</p>
+<p>VLAN tag for the external NIC.</p>
+<h3 id="networkexternalmtu"><code>network.external.mtu</code><a class="headerlink" href="#networkexternalmtu" title="Permanent link">&para;</a></h3>
+<p>Optional · integer, at least 1280 · default <code>1500</code></p>
+<p>The MTU of the external network. Above 1500 it is stated explicitly on the external link's machine configuration, never inherited from another link (see <a href="#networkclustermtu"><code>network.cluster.mtu</code></a>), and the external default route — the one the ingress return path and an API VIP on the external network route their replies through — is clamped to 1500 like the private link's, so large replies survive a gateway that silently drops jumbo frames. On Proxmox the external NIC is created with no MTU, so it inherits the external bridge's, <code>plan</code> warns when that bridge reads below this value, and converge rewrites NICs of existing VMs that do not yet inherit.</p>
+<h3 id="networkexternalkubeapi_vip"><code>network.external.kubeapi_vip</code><a class="headerlink" href="#networkexternalkubeapi_vip" title="Permanent link">&para;</a></h3>
+<p>Required with <code>proxmox</code> · one of <code>network.cluster</code> / <code>network.external</code> · IPv4 inside <code>cidr</code>, outside <code>ingress_pool</code></p>
+<p>The API VIP on the external subnet. Set it here or under <code>network.cluster</code>, not both; see <a href="#networkclusterkubeapi_vip"><code>network.cluster.kubeapi_vip</code></a> for what moving it costs. Like <code>ingress_pool</code>, it must sit outside any DHCP range on that network; see <a href="#addresses-outside-the-dhcp-range">Addresses outside the DHCP range</a>.</p>
+<h3 id="networkexternalanchor_cidr"><code>network.external.anchor_cidr</code><a class="headerlink" href="#networkexternalanchor_cidr" title="Permanent link">&para;</a></h3>
+<p>Required · IPv4 network inside <code>169.254.0.0/16</code></p>
+<p>The range each machine draws a deterministic link-local <code>/32</code> anchor address from, because Talos will not use an interface without an address. Use <code>/20</code> or larger; an address collision aborts the run.</p>
+<h3 id="networkexternalingress_pool"><code>network.external.ingress_pool</code><a class="headerlink" href="#networkexternalingress_pool" title="Permanent link">&para;</a></h3>
+<p>Optional · <code>start-end</code> IPv4 range inside <code>cidr</code> · default none</p>
+<p>The range reserved in your address plan for MetalLB ingress. Install and configure MetalLB separately to announce it; core taloscluster does not create an address pool. When it is set, every machine runs a small static pod that marks connections entering the external NIC so replies to reverse-NATed traffic return through the external gateway; edits apply through the machine config on the next converge. See <a href="../../load-balancer/#proxmox">Load balancers and ingress</a>.</p>
+<h2 id="addresses-outside-the-dhcp-range">Addresses outside the DHCP range<a class="headerlink" href="#addresses-outside-the-dhcp-range" title="Permanent link">&para;</a></h2>
+<p><code>kubeapi_vip</code> and <code>ingress_pool</code> name addresses taloscluster hands to the cluster itself, so they must lie outside any DHCP range serving that layer-2 network, and outside the addresses your own hosts use. taloscluster cannot see the DHCP server's pool and does not check this: a VIP inside the pool works until the day the server leases it to something else.</p>
+<h2 id="mtu">MTU<a class="headerlink" href="#mtu" title="Permanent link">&para;</a></h2>
+<p>There is no path MTU discovery inside a subnet: a packet larger than a peer's MTU is dropped at layer 2 and no ICMP comes back, so the sender never learns to send smaller. Every host on the network — the nodes, the hypervisors, the gateway, anything else on that wire — must therefore carry the same MTU as <a href="#networkclustermtu"><code>network.cluster.mtu</code></a> (or <a href="#networkexternalmtu"><code>network.external.mtu</code></a> on the external network), not just the nodes taloscluster writes it on. Changing an <code>mtu</code> on a live cluster is a whole-cluster event, not a rolling change: the machine configuration states it on every node, and on Proxmox the bridge MTU must be raised on every node with it.</p>
+<p>The tool checks what it can see — <code>plan</code> warns when a compute node's cluster or external bridge reads below the configured MTU, and when the OpenStack tenant network advertises below the cluster MTU — but the gateway's MTU is outside its view, so where the default route is not clamped to 1500 (a DHCP-backed Proxmox network without <a href="#networkclustergateway"><code>network.cluster.gateway</code></a>) off-subnet traffic rides the DHCP-learned route at the link MTU and the gateway's jumbo support is on you. Verify what the path really carries from any Linux host on the network:</p>
+<div class="highlight"><pre><span></span><code>ping<span class="w"> </span>-M<span class="w"> </span><span class="k">do</span><span class="w"> </span>-s<span class="w"> </span><span class="m">8972</span><span class="w"> </span><span class="m">10</span>.0.0.1
+</code></pre></div>
+<p><code>-M do</code> forbids fragmentation, and 8972 bytes of payload plus the 28 bytes of IP and ICMP headers is exactly the 9000-byte packet a jumbo MTU promises, so a reply proves the path to that address — another host on the L2 or the gateway — really carries it; silence or <code>message too long</code> means a hop is still at 1500.</p>
+<h2 id="networkdns"><code>network.dns</code><a class="headerlink" href="#networkdns" title="Permanent link">&para;</a></h2>
+<p>Required · list of IP address strings, may be empty except on managed Proxmox SDN</p>
+<p>On OpenStack, these are the subnet's DHCP nameservers; converge reconciles them on the existing subnet in place, so editing the list applies to the running cluster (a changed list is reported by <code>plan</code>). On Proxmox managed SDN, they are applied to each node through Talos <code>ResolverConfig</code>, including on later converges. Proxmox on an existing bridge or VNet uses DHCP-provided DNS; this list does not override it, so converge warns that <code>network.dns</code> has no effect there — the reason the Proxmox scaffold ships an empty list, which a switch to managed SDN (no DHCP) needs filled in.</p>
+<h2 id="networkntp"><code>network.ntp</code><a class="headerlink" href="#networkntp" title="Permanent link">&para;</a></h2>
+<p>Required · list of hostnames or addresses</p>
+<p>NTP servers configured on every node.</p>
+<h2 id="moving-from-the-old-keys">Moving from the old keys<a class="headerlink" href="#moving-from-the-old-keys" title="Permanent link">&para;</a></h2>
+<p>The L2 settings used to live partly under <code>network.cidr</code> and partly under <code>proxmox.network</code>. They are now all in <code>network.cluster</code> / <code>network.external</code>, and the old locations are refused at load with the name of their new home, so an old <code>cluster.yaml</code> fails fast instead of converging against half a configuration:</p>
+<table>
+<thead>
+<tr>
+<th>Old key</th>
+<th>New key</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>network.cidr</code></td>
+<td><code>network.cluster.cidr</code></td>
+</tr>
+<tr>
+<td><code>proxmox.network.cluster.vlan</code></td>
+<td><code>network.cluster.vlan</code></td>
+</tr>
+<tr>
+<td><code>proxmox.network.cluster.kubeapi_vip</code></td>
+<td><code>network.cluster.kubeapi_vip</code></td>
+</tr>
+<tr>
+<td><code>proxmox.network.external.cidr</code></td>
+<td><code>network.external.cidr</code></td>
+</tr>
+<tr>
+<td><code>proxmox.network.external.gateway</code></td>
+<td><code>network.external.gateway</code></td>
+</tr>
+<tr>
+<td><code>proxmox.network.external.anchor_cidr</code></td>
+<td><code>network.external.anchor_cidr</code></td>
+</tr>
+<tr>
+<td><code>proxmox.network.external.kubeapi_vip</code></td>
+<td><code>network.external.kubeapi_vip</code></td>
+</tr>
+<tr>
+<td><code>proxmox.network.external.vlan</code></td>
+<td><code>network.external.vlan</code></td>
+</tr>
+<tr>
+<td><code>proxmox.network.external.ingress_pool</code></td>
+<td><code>network.external.ingress_pool</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>proxmox.network.cluster</code> keeps only <code>bridge</code>, <code>vnet</code> or <code>sdn</code>, and <code>proxmox.network.external</code> only <code>bridge</code>: the Proxmox section says which link the network is reached through, the <code>network</code> section says what is on it. Moving the keys changes no addresses, so a cluster converged from the old shape stays as it is.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

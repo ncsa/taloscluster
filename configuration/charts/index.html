@@ -1,0 +1,2058 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Declarative Talos Linux clusters on OpenStack or Proxmox, optionally alongside bare metal">
+      
+      
+      
+        <link rel="canonical" href="https://ncsa.github.io/taloscluster/configuration/charts/">
+      
+      
+        <link rel="prev" href="../argocd/">
+      
+      
+        <link rel="next" href="../../concepts/plugins/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Charts plugin - taloscluster</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#charts-plugin" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="taloscluster" class="md-header__button md-logo" aria-label="taloscluster" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            taloscluster
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Charts plugin
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/ncsa/taloscluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="taloscluster" class="md-nav__button md-logo" aria-label="taloscluster" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    taloscluster
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ncsa/taloscluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Usage
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../maintenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Maintenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Live workflow testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../load-balancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Load balancing and ingress
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Planning and building
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/machines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Machines and access
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/proxmox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/openstack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenStack setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/talos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Why Talos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../general/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    General
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node pools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openstack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenStack
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../proxmox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tailscale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tailscale
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rancher/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rancher plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../argocd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ArgoCD plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Charts plugin
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Charts plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#clusteryaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cluster.yaml
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="cluster.yaml">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#known-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known entries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generic-entry-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generic entry keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Generic entry keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#chartsentryenabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.enabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartsentryversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.version
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartsentryrepo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.repo
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartsentrymanifest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.manifest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartsentrynamespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.namespace
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartsentryvalues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.values
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cert-manager-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cert-manager keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="cert-manager keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#chartscert-manageremail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.cert-manager.email
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartscert-managerstaging-and-chartscert-managerprod" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.cert-manager.staging and charts.cert-manager.prod
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nfs-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        nfs keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="nfs keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#chartsnfsstorageclasses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.nfs.storageClasses
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ceph-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ceph keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ceph keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#chartscephclusterid-and-chartscephmonitors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.ceph.clusterID and charts.ceph.monitors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartscephrbd-and-chartscephfs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.ceph.rbd and charts.ceph.fs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gathering-the-values-from-ceph" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gathering the values from Ceph
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secretsyaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        secrets.yaml
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="secrets.yaml">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#chartscephuserid-and-chartscephuserkey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.ceph.userID and charts.ceph.userKey
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#clusteryaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cluster.yaml
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="cluster.yaml">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#known-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known entries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generic-entry-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generic entry keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Generic entry keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#chartsentryenabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.enabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartsentryversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.version
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartsentryrepo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.repo
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartsentrymanifest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.manifest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartsentrynamespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.namespace
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartsentryvalues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.&lt;entry&gt;.values
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cert-manager-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cert-manager keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="cert-manager keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#chartscert-manageremail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.cert-manager.email
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartscert-managerstaging-and-chartscert-managerprod" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.cert-manager.staging and charts.cert-manager.prod
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nfs-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        nfs keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="nfs keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#chartsnfsstorageclasses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.nfs.storageClasses
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ceph-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ceph keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ceph keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#chartscephclusterid-and-chartscephmonitors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.ceph.clusterID and charts.ceph.monitors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chartscephrbd-and-chartscephfs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.ceph.rbd and charts.ceph.fs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gathering-the-values-from-ceph" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gathering the values from Ceph
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secretsyaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        secrets.yaml
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="secrets.yaml">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#chartscephuserid-and-chartscephuserkey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        charts.ceph.userID and charts.ceph.userKey
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/ncsa/taloscluster/edit/main/docs/configuration/charts.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="charts-plugin">Charts plugin<a class="headerlink" href="#charts-plugin" title="Permanent link">&para;</a></h1>
+<p>Back to the <a href="../">configuration index</a>.</p>
+<p>The charts plugin installs Helm charts and plain manifests into the cluster itself during converge, so a cluster gets its platform pieces (load balancer, ingress, certificates, storage) without an external GitOps server. It is skipped, and shown as <code>not configured</code> by <code>taloscluster plugin list</code>, unless the merged configuration enables at least one entry — or every entry is disabled while something is still installed for it to remove. <code>taloscluster init</code> scaffolds one with every known chart present but <code>enabled: false</code>, which leaves the plugin inactive; flipping <code>enabled</code> is the whole activation story. An enabled entry needs <code>helm</code> and <code>kubectl</code> on the management machine's PATH. See <a href="../../concepts/plugins/#how-plugins-run">Plugins</a> for what converge, plan, destroy, status and check do.</p>
+<p>Converge is drift-driven: a release is installed or upgraded only when it is missing, a pinned <code>version</code> differs from the installed chart (compared without the leading <code>v</code> some charts tag, so <code>1.21.2</code> and <code>v1.21.2</code> are the same version), a <code>latest</code> entry has a newer chart version upstream, the merged values differ from what the release was last installed with, or the release is not in helm's <code>deployed</code> state. A release left <code>failed</code> by an interrupted converge is upgraded again on the next run; one stuck in a <code>pending-*</code> or <code>uninstalling</code> state — which helm refuses to upgrade over with <code>another operation (install/upgrade/rollback) is in progress</code> — is uninstalled first and installed fresh. Releases are looked up across every helm state, since plain <code>helm list</code> hides the <code>pending-*</code> ones. Namespaces, the Gateway API manifests, the MetalLB pool and the cert-manager issuers are applied only when missing or drifted. <code>plan</code> prints a single <code>up to date</code> line for anything that would not change, and for a release that would install or upgrade it shows the helm command plus the merged values with secret-looking keys (<code>password</code>, <code>token</code>, <code>secret</code>, <code>key</code>, <code>credential</code>) redacted. <code>check</code> applies the same drift rules — a release that is missing, not <code>deployed</code>, pinned to a different version, or carrying different values fails the entry — and for <code>latest</code> entries reports whether an upgrade is available. <code>destroy</code> uninstalls the releases in reverse order before deleting any namespaces, then removes the namespaces it created — those carry an <code>app.kubernetes.io/managed-by: taloscluster</code> label, which the plugin writes only when it creates the namespace, never on one that already existed (a pre-existing namespace still gets its Pod Security labels converged, just not the marker) — so a namespace without it (one that pre-existed or was created by something else), one that another entry still uses, and the cluster's own <code>default</code>, <code>kube-system</code> and <code>kube-public</code> are left in place. Entries converge one at a time, so a failing entry — a <code>version: latest</code> Gateway API manifest when the GitHub releases API is rate limited or unreachable, say — is warned about and fails the run only after the other entries have converged. The same lookup failure does not stop <code>check</code>, which reports an enabled manifest entry it cannot probe as <code>not_installed</code> and a disabled one as <code>absent</code>, nor <code>destroy</code>, which skips the manifests it cannot name with a warning and still removes everything else. Before the first bootstrap there is no kubeconfig, so <code>plan</code> reports the charts as deferred instead of failing on it, even when <code>helm</code> is not installed yet.</p>
+<p>During converge's validate phase, before any core change, the plugin refuses a malformed <code>charts:</code> section: a non-mapping section, an unknown entry without <code>repo</code> or <code>manifest</code>, an entry with both, a key an entry does not use (for example <code>email</code> on anything but <code>cert-manager</code>, or <code>values</code> on a manifest entry), a <code>version</code> on a manifest entry, an enabled <code>nfs</code> without <code>storageClasses</code>, an enabled <code>ceph</code> without <code>clusterID</code> and <code>monitors</code>, a <code>cert-manager</code> with issuers on but no <code>email</code>, or a component enabled under both <code>charts:</code> and the per-app sections of the <a href="../argocd/">argocd</a> plugin (MetalLB, Traefik, cert-manager, sealed-secrets, NFS), which that plugin's validate hook refuses because ArgoCD's self-healing would fight helm over the one release. It also refuses cert-manager's letsencrypt issuers alongside a traefik <code>values</code> block that configures its own ACME resolver, since the two clients fight over the HTTP-01 challenge path.</p>
+<p>Entries are converged in dependency order: <code>gateway</code> before <code>traefik</code> (whose Gateway provider needs the CRDs), and <code>metallb</code> and its pool before <code>traefik</code> claims an address from it. Other entries follow in <code>cluster.yaml</code> order.</p>
+<h2 id="clusteryaml">cluster.yaml<a class="headerlink" href="#clusteryaml" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="nt">charts</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">gateway</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">latest</span>
+<span class="w">  </span><span class="nt">metallb</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">latest</span>
+<span class="w">  </span><span class="nt">traefik</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">latest</span>
+<span class="w">  </span><span class="nt">cert-manager</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">email</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">acme@example.edu</span>
+<span class="w">    </span><span class="nt">staging</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">prod</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">sealed-secrets</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">nfs</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">storageClasses</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nfs-data</span>
+<span class="w">        </span><span class="nt">server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nfs.example.edu</span>
+<span class="w">        </span><span class="nt">share</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/exports/data</span>
+<span class="w">        </span><span class="nt">defaultClass</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">ceph</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">clusterID</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2f6a1c0e-0000-4000-8000-000000000000</span>
+<span class="w">    </span><span class="nt">monitors</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">mon-a.example.edu</span><span class="p p-Indicator">:</span><span class="nv">6789</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">mon-b.example.edu</span><span class="p p-Indicator">:</span><span class="nv">6789</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">rbd</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pool</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kubernetes</span>
+<span class="w">      </span><span class="nt">defaultClass</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">fs</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">fsName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cephfs</span>
+<span class="w">  </span><span class="nt">my-chart</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">repo</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://charts.example.com</span>
+<span class="w">    </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-namespace</span>
+<span class="w">    </span><span class="nt">values</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{}</span>
+</code></pre></div>
+<h3 id="known-entries">Known entries<a class="headerlink" href="#known-entries" title="Permanent link">&para;</a></h3>
+<p>Entries the plugin knows by name ship a chart repository, an install namespace with Pod Security Admission labels, and common values. A <code>values</code> mapping on the entry is deep-merged over the common values (mappings merge, lists replace).</p>
+<table>
+<thead>
+<tr>
+<th>Entry</th>
+<th>Installs</th>
+<th>Namespace</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gateway</code></td>
+<td>Gateway API <code>standard-install.yaml</code> from the kubernetes-sigs release</td>
+<td>—</td>
+<td>A manifest entry; <code>version</code> is a release tag (<code>v1.6.2</code>) or <code>latest</code></td>
+</tr>
+<tr>
+<td><code>metallb</code></td>
+<td>The MetalLB chart</td>
+<td><code>metallb-system</code> (privileged)</td>
+<td>Renders an <code>IPAddressPool</code> and <code>L2Advertisement</code> from the provider's ingress pool into the entry's namespace; FRR is disabled</td>
+</tr>
+<tr>
+<td><code>traefik</code></td>
+<td>The Traefik chart</td>
+<td><code>traefik</code> (restricted)</td>
+<td>One replica, <code>LoadBalancer</code> service pinned to the pool's first address, HTTP redirected to HTTPS; enables the Gateway provider when <code>gateway</code> is enabled</td>
+</tr>
+<tr>
+<td><code>cert-manager</code></td>
+<td>The cert-manager chart with CRDs</td>
+<td><code>cert-manager</code> (restricted)</td>
+<td>Consumes <code>email</code>, <code>staging</code> and <code>prod</code>; the ingress shim defaults to the <code>letsencrypt-prod</code> ClusterIssuer</td>
+</tr>
+<tr>
+<td><code>sealed-secrets</code></td>
+<td>The Bitnami sealed-secrets controller</td>
+<td><code>sealed-secrets</code> (restricted)</td>
+<td>Named <code>sealed-secrets-controller</code> so <code>kubeseal</code> finds it</td>
+</tr>
+<tr>
+<td><code>nfs</code></td>
+<td>The <code>csi-driver-nfs</code> chart</td>
+<td><code>nfs</code> (privileged)</td>
+<td>Consumes <code>storageClasses</code></td>
+</tr>
+<tr>
+<td><code>ceph</code></td>
+<td>The <code>ceph-csi-rbd</code> and/or <code>ceph-csi-cephfs</code> charts</td>
+<td>one privileged namespace per chart</td>
+<td>Consumes <code>clusterID</code>, <code>monitors</code>, <code>rbd</code>, <code>fs</code> (booleans, or mappings that also create a StorageClass) and the optional <a href="#secretsyaml"><code>userID</code>/<code>userKey</code> credentials</a></td>
+</tr>
+</tbody>
+</table>
+<p>The MetalLB pool is never written in <code>charts</code>: it comes from the provider, the <a href="../network/#networkexternal"><code>ingress_pool</code></a> range on Proxmox, and is reused for the traefik service address.</p>
+<h3 id="generic-entry-keys">Generic entry keys<a class="headerlink" href="#generic-entry-keys" title="Permanent link">&para;</a></h3>
+<p>Each key below is accepted by the entries that consume it; a key an entry does not consume is refused.</p>
+<h4 id="chartsentryenabled"><code>charts.&lt;entry&gt;.enabled</code><a class="headerlink" href="#chartsentryenabled" title="Permanent link">&para;</a></h4>
+<p>Optional · boolean · default <code>true</code></p>
+<p><code>false</code> uninstalls the release or deletes the applied manifests, and removes the resources the plugin created for it. Namespace cleanup runs only after all entries converge successfully, so other releases keep their webhooks and Helm records during removal. A namespace another enabled entry still uses, including either Ceph driver namespace, is preserved. A disabled Gateway API entry using <code>version: latest</code> still activates cleanup when its resolved manifests are present.</p>
+<h4 id="chartsentryversion"><code>charts.&lt;entry&gt;.version</code><a class="headerlink" href="#chartsentryversion" title="Permanent link">&para;</a></h4>
+<p>Optional · string · default <code>latest</code></p>
+<p>A pinned chart version — a leading <code>v</code> is ignored when it is compared to the installed chart, so <code>1.21.2</code> matches a chart tagged <code>v1.21.2</code> — or a release tag for a manifest entry. <code>latest</code> upgrades only when a newer chart version exists upstream (read with <code>helm show chart</code>, so <code>plan</code> never mutates). Manifest entries with explicit URLs do not take a version.</p>
+<h4 id="chartsentryrepo"><code>charts.&lt;entry&gt;.repo</code><a class="headerlink" href="#chartsentryrepo" title="Permanent link">&para;</a></h4>
+<p>Required for an unknown chart entry · URL</p>
+<p>The Helm chart repository, passed as <code>helm --repo</code>. An unknown entry must set <code>repo</code> or <code>manifest</code>; a known chart entry may override its default repository.</p>
+<h4 id="chartsentrymanifest"><code>charts.&lt;entry&gt;.manifest</code><a class="headerlink" href="#chartsentrymanifest" title="Permanent link">&para;</a></h4>
+<p>Required for an unknown manifest entry · URL or list of URLs</p>
+<p>Manifests applied with <code>kubectl apply --server-side -f</code>, since a set like the Gateway API CRDs nearly fills the 256 KiB <code>last-applied-configuration</code> annotation client-side apply records. Mutually exclusive with <code>repo</code>. Manifest entries are removed with <code>kubectl delete -f</code> on disable or destroy.</p>
+<h4 id="chartsentrynamespace"><code>charts.&lt;entry&gt;.namespace</code><a class="headerlink" href="#chartsentrynamespace" title="Permanent link">&para;</a></h4>
+<p>Optional · name or mapping · default the entry's known namespace, else the entry name</p>
+<p>Either a namespace name or a mapping <code>{name, enforce, audit, warn}</code> whose three optional levels set the <code>pod-security.kubernetes.io/*</code> labels on the namespace the plugin creates. Manifest entries and <code>ceph</code> do not take a namespace: manifests apply wherever their documents say, and each ceph-csi chart runs in its own privileged namespace named after the chart. A namespace the plugin creates also carries <code>app.kubernetes.io/managed-by: taloscluster</code>, the marker disable and destroy look for before removing it; a namespace that pre-existed gets its Pod Security labels converged but never gains the marker, and is never removed. <code>default</code>, <code>kube-system</code> and <code>kube-public</code> are never removed.</p>
+<h4 id="chartsentryvalues"><code>charts.&lt;entry&gt;.values</code><a class="headerlink" href="#chartsentryvalues" title="Permanent link">&para;</a></h4>
+<p>Optional · mapping · default empty</p>
+<p>Overrides deep-merged over the plugin's common values and handed to <code>helm upgrade --install</code>; manifest entries do not take it.</p>
+<h3 id="cert-manager-keys">cert-manager keys<a class="headerlink" href="#cert-manager-keys" title="Permanent link">&para;</a></h3>
+<h4 id="chartscert-manageremail"><code>charts.cert-manager.email</code><a class="headerlink" href="#chartscert-manageremail" title="Permanent link">&para;</a></h4>
+<p>Required when <code>staging</code> or <code>prod</code> is on · string</p>
+<p>The ACME account address for the letsencrypt ClusterIssuers.</p>
+<h4 id="chartscert-managerstaging-and-chartscert-managerprod"><code>charts.cert-manager.staging</code> and <code>charts.cert-manager.prod</code><a class="headerlink" href="#chartscert-managerstaging-and-chartscert-managerprod" title="Permanent link">&para;</a></h4>
+<p>Optional · boolean · default <code>false</code> and <code>false</code></p>
+<p>Add a <code>letsencrypt-staging</code> or <code>letsencrypt-prod</code> ClusterIssuer using the HTTP-01 solver through the <code>traefik</code> ingress class. The issuers are applied after the chart is installed and deleted before it is uninstalled.</p>
+<h3 id="nfs-keys">nfs keys<a class="headerlink" href="#nfs-keys" title="Permanent link">&para;</a></h3>
+<h4 id="chartsnfsstorageclasses"><code>charts.nfs.storageClasses</code><a class="headerlink" href="#chartsnfsstorageclasses" title="Permanent link">&para;</a></h4>
+<p>Required when <code>nfs</code> is enabled · list of mappings</p>
+<p>One StorageClass per export. Each item needs <code>name</code>, <code>server</code> and <code>share</code>; <code>defaultClass: true</code> marks at most one class as the cluster default. Optional per class: <code>subDir</code> (default <code>&lt;cluster name&gt;/${pvc.metadata.namespace}-${pvc.metadata.name}-${pv.metadata.name}</code>), <code>onDelete</code> (default <code>retain</code>), <code>reclaimPolicy</code> (default <code>Retain</code>), <code>volumeBindingMode</code> (default <code>Immediate</code>), <code>mountOptions</code> (default <code>[nfsvers=4.1]</code>), <code>annotations</code> and <code>parameters</code>. Set either this or <code>values.storageClasses</code>, not both.</p>
+<h3 id="ceph-keys">ceph keys<a class="headerlink" href="#ceph-keys" title="Permanent link">&para;</a></h3>
+<h4 id="chartscephclusterid-and-chartscephmonitors"><code>charts.ceph.clusterID</code> and <code>charts.ceph.monitors</code><a class="headerlink" href="#chartscephclusterid-and-chartscephmonitors" title="Permanent link">&para;</a></h4>
+<p>Required when <code>ceph</code> is enabled · string, list of <code>host:port</code></p>
+<p>The Ceph cluster fsid and its monitor addresses, rendered into the <code>csiConfig</code> every enabled ceph-csi chart shares.</p>
+<h4 id="chartscephrbd-and-chartscephfs"><code>charts.ceph.rbd</code> and <code>charts.ceph.fs</code><a class="headerlink" href="#chartscephrbd-and-chartscephfs" title="Permanent link">&para;</a></h4>
+<p>Optional · boolean or mapping · default <code>false</code> and <code>false</code></p>
+<p>Install the <code>ceph-csi-rbd</code> (block) and <code>ceph-csi-cephfs</code> (shared file system) charts. At least one must be on when the entry is enabled; each runs in its own privileged namespace named after the chart. Converge, disable and destroy probe both charts, so turning one of the two off uninstalls its chart again and removes the csi Secret and namespace it came with. <code>true</code> installs the driver alone, so you create StorageClasses yourself. A mapping also has that chart create one StorageClass pointing at the entry's <code>clusterID</code>: <code>rbd</code> needs <code>pool</code>, and <code>fs</code> needs <code>fsName</code> with an optional <code>pool</code>. Both accept <code>name</code> (default the chart's own, <code>csi-rbd-sc</code> and <code>csi-cephfs-sc</code>), <code>defaultClass: true</code> on at most one of the two, <code>reclaimPolicy</code> (default <code>Retain</code>), <code>mountOptions</code>, <code>annotations</code>, and <code>parameters</code>, a mapping of extra <code>storageClass.*</code> chart values for that class such as <code>imageFeatures</code> or <code>fuseMountOptions</code>. Set either a mapping or <code>values.storageClass</code>, not both.</p>
+<h3 id="gathering-the-values-from-ceph">Gathering the values from Ceph<a class="headerlink" href="#gathering-the-values-from-ceph" title="Permanent link">&para;</a></h3>
+<p>Run these on any Ceph node (or wherever <code>ceph</code> has an admin keyring), for example a Proxmox host or a cephadm shell. The fsid is the <code>clusterID</code>:</p>
+<div class="highlight"><pre><span></span><code>ceph<span class="w"> </span>fsid
+</code></pre></div>
+<p>The monitors are the <code>mon.*</code> entries of the monitor map; take the v1 address of each and write it as <code>host:6789</code> (the v2 port <code>3300</code> also works with current ceph-csi):</p>
+<div class="highlight"><pre><span></span><code>ceph<span class="w"> </span>mon<span class="w"> </span>dump
+<span class="c1"># 0: [v2:192.0.2.11:3300/0,v1:192.0.2.11:6789/0] mon.a</span>
+<span class="c1"># 1: [v2:192.0.2.12:3300/0,v1:192.0.2.12:6789/0] mon.b</span>
+</code></pre></div>
+<p>With <code>rbd</code> on, always create and initialise the pool the images will live in before anything else; the user capabilities below and the StorageClass refer to it by name:</p>
+<div class="highlight"><pre><span></span><code>ceph<span class="w"> </span>osd<span class="w"> </span>pool<span class="w"> </span>create<span class="w"> </span>kubernetes
+rbd<span class="w"> </span>pool<span class="w"> </span>init<span class="w"> </span>kubernetes
+</code></pre></div>
+<p>With <code>fs</code> on, the file system must already exist. Its <code>name</code> is the <code>fsName</code>; the metadata and data pools on the same line belong to CephFS, and <code>fs.pool</code> only matters when a file system has several data pools:</p>
+<div class="highlight"><pre><span></span><code>ceph<span class="w"> </span>fs<span class="w"> </span>ls
+<span class="c1"># name: kubernetes, metadata pool: cephfs.kubernetes.meta, data pools: [cephfs.kubernetes.data ]</span>
+</code></pre></div>
+<p>Create a dedicated CephX user for the cluster instead of handing out <code>client.admin</code>. The plugin delivers a single <code>userID</code>/<code>userKey</code> pair to both ceph-csi charts, so the user needs the provisioner and node capabilities of every chart it enables (see the <a href="https://github.com/ceph/ceph-csi/blob/devel/docs/capabilities.md">ceph-csi capability list</a>):</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># rbd only</span>
+ceph<span class="w"> </span>auth<span class="w"> </span>get-or-create<span class="w"> </span>client.kubernetes<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>mon<span class="w"> </span><span class="s1">'profile rbd'</span><span class="w"> </span>mgr<span class="w"> </span><span class="s1">'allow rw'</span><span class="w"> </span>osd<span class="w"> </span><span class="s1">'profile rbd pool=kubernetes'</span>
+
+<span class="c1"># cephfs only</span>
+ceph<span class="w"> </span>auth<span class="w"> </span>get-or-create<span class="w"> </span>client.kubernetes<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>mon<span class="w"> </span><span class="s1">'allow r'</span><span class="w"> </span>mgr<span class="w"> </span><span class="s1">'allow rw'</span><span class="w"> </span>osd<span class="w"> </span><span class="s1">'allow rw tag cephfs *=*'</span><span class="w"> </span>mds<span class="w"> </span><span class="s1">'allow rw'</span>
+
+<span class="c1"># rbd and cephfs with one user</span>
+ceph<span class="w"> </span>auth<span class="w"> </span>get-or-create<span class="w"> </span>client.kubernetes<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>mon<span class="w"> </span><span class="s1">'allow r, profile rbd'</span><span class="w"> </span>mgr<span class="w"> </span><span class="s1">'allow rw'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>osd<span class="w"> </span><span class="s1">'allow rw tag cephfs *=*, profile rbd pool=kubernetes'</span><span class="w"> </span>mds<span class="w"> </span><span class="s1">'allow rw'</span>
+</code></pre></div>
+<p>The <code>userID</code> is the name without the <code>client.</code> prefix (<code>kubernetes</code>) and the <code>userKey</code> is its key:</p>
+<div class="highlight"><pre><span></span><code>ceph<span class="w"> </span>auth<span class="w"> </span>get-key<span class="w"> </span>client.kubernetes
+</code></pre></div>
+<p>Put the pool and the file system name into the <code>rbd</code> and <code>fs</code> mappings so each chart creates its StorageClass (the secret names and namespaces default to the ones the plugin delivers):</p>
+<div class="highlight"><pre><span></span><code><span class="nt">charts</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">ceph</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">clusterID</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2f6a1c0e-0000-4000-8000-000000000000</span>
+<span class="w">    </span><span class="nt">monitors</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">192.0.2.11</span><span class="p p-Indicator">:</span><span class="nv">6789</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">192.0.2.12</span><span class="p p-Indicator">:</span><span class="nv">6789</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">rbd</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pool</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kubernetes</span><span class="w">        </span><span class="c1"># the pool created above</span>
+<span class="w">      </span><span class="nt">defaultClass</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">fs</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">fsName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cephfs</span><span class="w">          </span><span class="c1"># a name from `ceph fs ls`</span>
+</code></pre></div>
+<p><code>values</code> is handed to every enabled ceph-csi chart, so it holds what both share (log level, resources); anything per class belongs in the <code>rbd</code> or <code>fs</code> mapping.</p>
+<p>The classes default to <code>reclaimPolicy: Retain</code>, so deleting a PVC keeps its image or subvolume and leaves the PV <code>Released</code>. Deleting that PV by hand removes only the Kubernetes object; to have ceph-csi delete the data as well, switch the Released PV to <code>Delete</code> and the controller reclaims it:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>patch<span class="w"> </span>pv<span class="w"> </span>&lt;pv&gt;<span class="w"> </span>-p<span class="w"> </span><span class="s1">'{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'</span>
+</code></pre></div>
+<p>A <code>Released</code> PV can instead be reattached by clearing its <code>claimRef</code> and creating a PVC that names it in <code>volumeName</code>.</p>
+<p>Once a Retained PV is deleted by hand, its image stays in the pool with nothing referencing it. <code>scripts/rbd-review.sh [POOL]</code>, run on a Ceph node, walks the ceph-csi images in a pool, shows each one's size, usage, claim and timestamps, skips images a node has mapped, and deletes the ones you confirm together with their ceph-csi journal records.</p>
+<h2 id="secretsyaml">secrets.yaml<a class="headerlink" href="#secretsyaml" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="nt">charts</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">ceph</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">userID</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kubernetes</span>
+<span class="w">    </span><span class="nt">userKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">AQC...</span>
+</code></pre></div>
+<h3 id="chartscephuserid-and-chartscephuserkey"><code>charts.ceph.userID</code> and <code>charts.ceph.userKey</code><a class="headerlink" href="#chartscephuserid-and-chartscephuserkey" title="Permanent link">&para;</a></h3>
+<p>Optional · string, string · set both or neither</p>
+<p>CephX credentials the ceph-csi provisioners use. They are ordinary keys of the <code>ceph</code> entry: the scaffold puts them in <code>secrets.yaml</code> under the same <code>charts.ceph</code> path, where they merge with the entry's <code>clusterID</code>, <code>monitors</code>, <code>rbd</code> and <code>fs</code> from <code>cluster.yaml</code>, but like every credential they may live in <code>cluster.yaml</code> or any included file. When present, converge delivers them as the <code>csi-rbd-secret</code> and <code>csi-cephfs-secret</code> Secrets in the ceph namespaces, only when missing or drifted. Leave them out to manage those Secrets yourself (for example with sealed-secrets); converge then warns that they are absent.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

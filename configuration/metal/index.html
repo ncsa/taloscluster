@@ -1,0 +1,1799 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Declarative Talos Linux clusters on OpenStack or Proxmox, optionally alongside bare metal">
+      
+      
+      
+        <link rel="canonical" href="https://ncsa.github.io/taloscluster/configuration/metal/">
+      
+      
+        <link rel="prev" href="../proxmox/">
+      
+      
+        <link rel="next" href="../network/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Metal - taloscluster</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#metal" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="taloscluster" class="md-header__button md-logo" aria-label="taloscluster" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            taloscluster
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Metal
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/ncsa/taloscluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="taloscluster" class="md-nav__button md-logo" aria-label="taloscluster" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    taloscluster
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ncsa/taloscluster" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Usage
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../maintenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Maintenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Live workflow testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../load-balancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Load balancing and ingress
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Planning and building
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/machines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Machines and access
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/proxmox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/openstack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenStack setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/metal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/talos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Why Talos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../general/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    General
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node pools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openstack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenStack
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../proxmox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#metal_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="metal">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#metalgrouprole" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.role
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupredfish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.redfish
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupdisk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.disk
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupextensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.extensions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupnetwork" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.network
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfacesnamerole" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces.&lt;name&gt;.role
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfacesnameip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces.&lt;name&gt;.ip
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfacesnamedns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces.&lt;name&gt;.dns
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfacesnamelink_name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces.&lt;name&gt;.link_name
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfacesnamevlan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces.&lt;name&gt;.vlan
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupboot_timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.boot_timeout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupauto_join" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.auto_join
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupbmc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.bmc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupservers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.servers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tailscale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tailscale
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rancher/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rancher plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../argocd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ArgoCD plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../charts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Charts plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#metal_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="metal">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#metalgrouprole" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.role
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupredfish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.redfish
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupdisk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.disk
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupextensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.extensions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupnetwork" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.network
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfacesnamerole" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces.&lt;name&gt;.role
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfacesnameip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces.&lt;name&gt;.ip
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfacesnamedns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces.&lt;name&gt;.dns
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfacesnamelink_name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces.&lt;name&gt;.link_name
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupinterfacesnamevlan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.interfaces.&lt;name&gt;.vlan
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupboot_timeout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.boot_timeout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupauto_join" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.auto_join
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupbmc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.bmc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metalgroupservers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metal.&lt;group&gt;.servers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/ncsa/taloscluster/edit/main/docs/configuration/metal.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="metal">Metal<a class="headerlink" href="#metal" title="Permanent link">&para;</a></h1>
+<p>Back to the <a href="../">configuration index</a>.</p>
+<p>A <code>metal:</code> section brings bare-metal machines into the cluster. It sits beside the one <a href="../openstack/">OpenStack</a> or <a href="../proxmox/">Proxmox</a> section — VMs and bare metal sharing one cluster — and is refused without it: one VM provider is always required, since the provider backend plans, converges and destroys the cluster the metal machines join. <code>taloscluster init --metal</code> scaffolds the example group below, beside a provider, with the group's BMC credentials as <code>CHANGE-ME</code> placeholders in <code>secrets.yaml</code>. See <a href="../../providers/metal/">Metal setup</a> for the preparation the machines and their BMCs need.</p>
+<h2 id="metal_1"><code>metal</code><a class="headerlink" href="#metal_1" title="Permanent link">&para;</a></h2>
+<p>Optional · mapping of group names to groups</p>
+<p>Each key names a group of bare-metal machines and maps to that group's settings, which must be a mapping. The section may also live in a file pulled in with <a href="../general/#include"><code>include</code></a>, so a long machine list can stay out of <code>cluster.yaml</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">metal</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">rack1</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">role</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">worker</span>
+<span class="w">    </span><span class="nt">redfish</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">disk</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/dev/sda</span>
+<span class="w">    </span><span class="nt">network</span><span class="p">:</span><span class="w">                            </span><span class="c1"># optional; defaults to network.cluster</span>
+<span class="w">      </span><span class="nt">cidr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">192.168.8.0/24</span>
+<span class="w">      </span><span class="nt">gateway</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">192.168.8.1</span>
+<span class="w">      </span><span class="nt">mtu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9000</span>
+<span class="w">    </span><span class="nt">interfaces</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">enp1s0f0</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> role</span><span class="p">:</span><span class="w"> </span><span class="nv">pxe</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">      </span><span class="nt">enp2s0f0</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> role</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">cluster</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">external</span><span class="p p-Indicator">],</span><span class="nt"> dns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">192.0.2.53</span><span class="p p-Indicator">]</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">    </span><span class="nt">servers</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">srv01</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">bmc</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> ip</span><span class="p">:</span><span class="w"> </span><span class="nv">192.168.8.51</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">        </span><span class="nt">interfaces</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">enp2s0f0</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> ip</span><span class="p">:</span><span class="w"> </span><span class="nv">192.168.8.11/24</span><span class="w"> </span><span class="p p-Indicator">}</span>
+</code></pre></div>
+<p>The group's BMC credentials are ordinary secrets: they live in <code>secrets.yaml</code> — or any file <a href="../general/#include"><code>include</code></a> names, the way <code>init --metal</code> scaffolds them — and merge into every machine in the group:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># secrets.yaml</span>
+<span class="nt">metal</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">rack1</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">bmc</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">root</span>
+<span class="w">      </span><span class="nt">password</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CHANGE-ME</span>
+</code></pre></div>
+<p>A group states the defaults every machine in <code>servers</code> starts from, and each server overrides them for its own machine: plain settings (<code>role</code>, <code>redfish</code>, <code>disk</code>, <code>network</code>, <code>boot_timeout</code>) are replaced when the server sets one, while <code>bmc</code> merges key by key and <code>interfaces</code> merge per interface, so the group can carry the credentials and the cabling plan and each server adds only its own addresses. The <a href="../../commands/#metal"><code>metal</code> commands</a> then join the machines: they boot them from the Talos install ISO (through the BMC's virtual media, or served over the LAN with <code>--serve</code>), push the generated machine configuration to each machine in maintenance mode, and verify it came back with it. Converge brings the machines of an <a href="#metalgroupauto_join"><code>auto_join</code></a> group in the same way during its compute phase; without the opt-in, joining is the <code>metal</code> commands' job alone.</p>
+<h3 id="metalgrouprole"><code>metal.&lt;group&gt;.role</code><a class="headerlink" href="#metalgrouprole" title="Permanent link">&para;</a></h3>
+<p>Required · <code>controlplane</code> or <code>worker</code></p>
+<p>The Kubernetes role of every machine in the group; a server may override it.</p>
+<h3 id="metalgroupredfish"><code>metal.&lt;group&gt;.redfish</code><a class="headerlink" href="#metalgroupredfish" title="Permanent link">&para;</a></h3>
+<p>Optional · boolean · default <code>false</code></p>
+<p>Whether taloscluster may talk to the machines' BMCs. Redfish is how the machines are powered and booted from their install media; <code>false</code> never touches the BMC, so the operator boots the machines into maintenance mode themselves (PXE, USB) and <a href="../../commands/#metal"><code>join</code></a> becomes wait, apply and verify, while <code>inspect</code>, <code>boot</code> and <code>eject</code> skip the BMC with a notice. Enabling it requires a BMC address and real BMC credentials for every machine in the group; see <a href="#metalgroupbmc"><code>metal.&lt;group&gt;.bmc</code></a>.</p>
+<h3 id="metalgroupdisk"><code>metal.&lt;group&gt;.disk</code><a class="headerlink" href="#metalgroupdisk" title="Permanent link">&para;</a></h3>
+<p>Required · non-empty string</p>
+<p>The device the machines install Talos onto, such as <code>/dev/sda</code>; a server may override it for hardware that names its disks differently.</p>
+<h3 id="metalgroupextensions"><code>metal.&lt;group&gt;.extensions</code><a class="headerlink" href="#metalgroupextensions" title="Permanent link">&para;</a></h3>
+<p>Optional · list of strings</p>
+<p>Additional Talos extensions for this group's machines, such as the drivers a GPU group needs. They merge with the cluster-wide <a href="../general/#talosextensions"><code>talos.extensions</code></a> and the base set into the one installer image all bare-metal machines share, so a driver lands on the metal machines without being installed on every VM pool. A server may override the group's list for its own machine, and anything any group or server asks for is baked into that shared installer. See <a href="../general/#talosextensions">Talos extensions</a> for activation and upgrade limitations.</p>
+<h3 id="metalgroupnetwork"><code>metal.&lt;group&gt;.network</code><a class="headerlink" href="#metalgroupnetwork" title="Permanent link">&para;</a></h3>
+<p>Optional · mapping · default <a href="../network/#networkcluster"><code>network.cluster</code></a></p>
+<p>The layer-2 network this group's machines sit on, with the same keys as <a href="../network/#networkcluster"><code>network.cluster</code></a> except <code>kubeapi_vip</code>: the API VIP is a cluster-wide address — with Proxmox read from <a href="../network/#networkclusterkubeapi_vip"><code>network.cluster</code></a> or <a href="../network/#networkexternalkubeapi_vip"><code>network.external</code></a>, with OpenStack the address converge reserves for the API on the tenant network — and a metal network naming its own is refused rather than silently ignored. A group on the same L2 as the VM provider's machines omits it, and a server may override it with an L2 of its own. Every metal network requires a <code>gateway</code> — the machine's links are statically addressed with DHCP off, so without one it has no default route and reaches nothing beyond its own subnet — and <a href="../general/#taloskubespan"><code>talos.kubespan</code></a> is required when the group sits on a different L2, the overlay being what carries the group's pod traffic to the rest of the cluster: the gateway there is the machine's only route to it. A group on the cluster L2 reads the gateway from <a href="../network/#networkclustergateway"><code>network.cluster.gateway</code></a>, which must then be set (on a managed SDN or an OpenStack tenant network, the first host of <code>cidr</code>). A network naming the cluster L2's <code>cidr</code> describes the same wire and must agree with it on <code>mtu</code> and <code>vlan</code>, which every host on one layer-2 network shares (see <a href="../network/#mtu">MTU</a>).</p>
+<h3 id="metalgroupinterfaces"><code>metal.&lt;group&gt;.interfaces</code><a class="headerlink" href="#metalgroupinterfaces" title="Permanent link">&para;</a></h3>
+<p>Optional · mapping of interface name to interface</p>
+<p>Each key is a machine's interface name as the OS will see it, and each interface says what the link is for and, where it is statically addressed, with which address. A server may override an interface's settings by name and add interfaces of its own. The merged cabling plan of every machine is checked when the configuration loads, so a machine that could never be joined refuses to load instead of failing at first <a href="../../commands/#metal"><code>metal join</code></a>: exactly one interface carries the <code>cluster</code> role and its static address, at most one carries the <code>external</code> role, and an <code>external</code> role requires a <a href="../network/#networkexternal"><code>network.external</code></a> block.</p>
+<h3 id="metalgroupinterfacesnamerole"><code>metal.&lt;group&gt;.interfaces.&lt;name&gt;.role</code><a class="headerlink" href="#metalgroupinterfacesnamerole" title="Permanent link">&para;</a></h3>
+<p>Required · <code>cluster</code>, <code>external</code>, <code>pxe</code>, or a list of those</p>
+<p>What the link is for: <code>pxe</code> is the boot/maintenance link, <code>cluster</code> carries the <a href="../network/#networkcluster"><code>network.cluster</code></a> node network and <code>external</code> the <a href="../network/#networkexternal"><code>network.external</code></a> one. One interface may carry several roles as a list — a NIC that sits on both the cluster and the external network is <code>[cluster, external]</code> — with each role named at most once.</p>
+<p>The roles decide what the generated machine configuration puts on the link. Every link states <code>dhcp: false</code>, so nothing picks up an unexpected lease. A <code>cluster</code> link carries its static address and the default route via the group network's gateway; a jumbo group network states the MTU on the link and clamps the route to 1500. An <code>external</code> link's configuration rides a VLAN child of the port, created on top of the parent: it carries the machine's anchor address from <a href="../network/#networkexternalanchor_cidr"><code>network.external.anchor_cidr</code></a> and the routes to the external network, and the machine runs the <a href="../../providers/metal/">return-path static pod</a> that marks connections entering the child so replies return through the external gateway. A control plane states the API VIP on the link that carries it — its <code>cluster</code> link, or the <code>external</code> link's VLAN child when <a href="../network/#networkexternalkubeapi_vip"><code>network.external.kubeapi_vip</code></a> holds the VIP — so a control plane whose VIP rides the external network needs an <code>external</code> link, and one without it is refused when the configuration is generated rather than left unable to hold the address. A <code>pxe</code> link carries nothing else — it exists so the machine can boot and be reached in maintenance mode.</p>
+<h3 id="metalgroupinterfacesnameip"><code>metal.&lt;group&gt;.interfaces.&lt;name&gt;.ip</code><a class="headerlink" href="#metalgroupinterfacesnameip" title="Permanent link">&para;</a></h3>
+<p>Optional · IPv4 address with an optional <code>/prefix</code> · default none</p>
+<p>The static address of the link. Without a <code>/prefix</code> the link network's prefix length is used. On a link carrying both roles the address belongs to the <code>cluster</code> side; a dedicated <code>external</code> link's address rides its VLAN child. A <code>cluster</code> link must carry one — it is the only address the machine is known to answer on — and it must sit inside the machine's own L2, carrying that L2's prefix length when one is written, must not be that L2's network or broadcast address, and must not be one of its gateways — the machine's own route points there, and a group restating the cluster L2's <code>cidr</code> shares the wire with the VM nodes whose gateway <a href="../network/#networkclustergateway"><code>network.cluster.gateway</code></a> names. It must not be the <a href="../network/#networkclusterkubeapi_vip"><code>kubeapi_vip</code></a> or another machine's address either: the loader refuses any of these rather than letting two machines answer for one address. On a managed <a href="../proxmox/#proxmoxnetworkclustersdn">SDN</a> the VM nodes' static addresses are assigned from the layout derived from <a href="../network/#networkclustercidr"><code>network.cluster.cidr</code></a> — the anycast gateway, the controlplane range and one block per worker pool — so a machine on that same L2 must take an address outside it, or a pool scaled tomorrow would claim the machine's address.</p>
+<h3 id="metalgroupinterfacesnamedns"><code>metal.&lt;group&gt;.interfaces.&lt;name&gt;.dns</code><a class="headerlink" href="#metalgroupinterfacesnamedns" title="Permanent link">&para;</a></h3>
+<p>Optional · list of IP addresses · default none</p>
+<p>The resolvers written into the machine's generated configuration; the first interface that sets them wins, since Talos keeps one resolver list per machine. With none set on any interface, <a href="../network/#networkdns"><code>network.dns</code></a> is used.</p>
+<h3 id="metalgroupinterfacesnamelink_name"><code>metal.&lt;group&gt;.interfaces.&lt;name&gt;.link_name</code><a class="headerlink" href="#metalgroupinterfacesnamelink_name" title="Permanent link">&para;</a></h3>
+<p>Optional · non-empty string · default <code>&lt;interface&gt;.&lt;vlan&gt;</code></p>
+<p>The name of the VLAN child link an <code>external</code> role creates, instead of the default <code>&lt;interface&gt;.&lt;vlan&gt;</code>. It describes that child and nothing else, so an interface without the <code>external</code> role is refused for setting it.</p>
+<h3 id="metalgroupinterfacesnamevlan"><code>metal.&lt;group&gt;.interfaces.&lt;name&gt;.vlan</code><a class="headerlink" href="#metalgroupinterfacesnamevlan" title="Permanent link">&para;</a></h3>
+<p>Optional · integer 1-4094 · default <a href="../network/#networkexternalvlan"><code>network.external.vlan</code></a></p>
+<p>The VLAN id tagged on an <code>external</code> link's VLAN child, instead of the external network's own. Like <code>link_name</code>, it is refused on an interface without the <code>external</code> role.</p>
+<h3 id="metalgroupboot_timeout"><code>metal.&lt;group&gt;.boot_timeout</code><a class="headerlink" href="#metalgroupboot_timeout" title="Permanent link">&para;</a></h3>
+<p>Optional · seconds · default <code>600</code></p>
+<p>How long a machine is given to answer the maintenance-mode apid after it is booted, for both <code>metal wait</code>/<code>metal join</code> and the converge phase that joins the machines of an <a href="#metalgroupauto_join"><code>auto_join</code></a> group. Cold hardware can spend many minutes in POST, firmware and NIC initialisation before Talos starts, so a group of slow machines raises this once for every machine in it and a single slow machine overrides it further:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">metal</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">rack1</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">boot_timeout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1800</span><span class="w">      </span><span class="c1"># 30m: these take a long time from cold</span>
+<span class="w">    </span><span class="nt">servers</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">srv01</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">boot_timeout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3600</span><span class="w">  </span><span class="c1"># and this one longer still</span>
+</code></pre></div>
+<p>A machine that does not answer within its budget is reported and skipped; the rest of the converge is unaffected and the next run picks it up, but the run exits nonzero — the converge is incomplete, not a clean no-op.</p>
+<h3 id="metalgroupauto_join"><code>metal.&lt;group&gt;.auto_join</code><a class="headerlink" href="#metalgroupauto_join" title="Permanent link">&para;</a></h3>
+<p>Optional · boolean · default <code>false</code></p>
+<p>Whether converge may join the group's unjoined machines itself. A machine the section lists that the cluster does not have is brought in by converge's compute phase when this is <code>true</code> — applied in maintenance mode straight away, or booted from the install media and waited out first when <a href="#metalgroupredfish"><code>redfish</code></a> allows, exactly the flow <a href="../../commands/#metal"><code>metal join</code></a> runs for one machine — and left alone when it is <code>false</code>, so joining stays with an explicit <code>metal join</code> and the machine's absence reads as expected rather than as an incomplete converge. A server may override the group for its own machine, and a machine that does not answer within its <a href="#metalgroupboot_timeout"><code>boot_timeout</code></a> is reported and skipped as before.</p>
+<p>The opt-in is deliberate: a machine in maintenance mode runs no configuration yet, so its API accepts any client, and the apply sends the full machine configuration — the cluster's credentials with it — to whatever answers at the machine's cluster address. <code>metal join</code> does this once, to the machine the operator pointed it at; converge doing it on every run would hand the configuration to anything that answers on the group's L2, so it only happens where the configuration asks for it. See <a href="../../providers/metal/">Metal setup</a> for the trust this puts in the metal network.</p>
+<h3 id="metalgroupbmc"><code>metal.&lt;group&gt;.bmc</code><a class="headerlink" href="#metalgroupbmc" title="Permanent link">&para;</a></h3>
+<p>Optional · mapping</p>
+<p>The Redfish settings every machine in the group starts from: <code>ip</code> (the BMC's IPv4 address, written bare — no <code>/prefix</code>, since it is the host of the Redfish URL and is refused with one), <code>username</code>, <code>password</code>, <code>scheme</code> (the Redfish transport, <code>https</code> by default) and <code>tls_verify</code> (how the <code>https</code> transport treats the BMC's certificate, described below). The credentials are ordinary cluster settings: like every other key they may live in <code>secrets.yaml</code> or any included file instead of <code>cluster.yaml</code> — where <code>init --metal</code> scaffolds them. A <a href="#metalgroupredfish"><code>redfish</code></a> group must end up with an <code>ip</code> and a real <code>username</code> and <code>password</code> for every machine once each server's overrides merge in — a machine without the address, or with an empty or still-scaffolded <code>CHANGE-ME</code> credential, refuses to load.</p>
+<p><code>https</code> is the only transport that protects the BMC password, so there is no automatic plaintext fallback: a controller that serves no TLS opts into <code>http</code> per machine or group with <code>scheme</code>, knowing the credentials then ride the wire unencrypted.</p>
+<p><code>tls_verify</code> decides whether the <code>https</code> transport also checks who it is talking to. BMC controllers ship self-signed certificates, so verification is off by default: the password is protected from eavesdropping, but on a management network where an attacker could impersonate the BMC it would hand the credentials to the impostor. Setting <code>tls_verify: true</code> checks the BMC's certificate against the system trust store, and naming a CA bundle file pins exactly the signer to trust — the same values as <a href="../proxmox/#proxmoxtls_verify"><code>proxmox.tls_verify</code></a>, so a group whose BMCs sit behind a site CA names that CA's bundle.</p>
+<h3 id="metalgroupservers"><code>metal.&lt;group&gt;.servers</code><a class="headerlink" href="#metalgroupservers" title="Permanent link">&para;</a></h3>
+<p>Optional · mapping of machine name to overrides</p>
+<p>Each key names one machine and maps to the settings that machine overrides, which are the group's own keys except <code>servers</code>. The name must be a valid hostname, the same name may not appear in two groups, and a machine with no overrides inherits the group as written.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
