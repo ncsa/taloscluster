@@ -4410,6 +4410,7 @@ def test_join_metal_touches_nothing_in_a_dry_run(monkeypatch):
     """Plan reports what a converge would join and mutates nothing."""
     monkeypatch.setattr(converge.metal_talos, "cluster_ip", lambda _s: "192.0.2.61")
     monkeypatch.setattr(converge.talosctl, "maintenance_reachable", lambda _ip: False)
+    monkeypatch.setattr(converge.talosctl, "reachable", lambda *_a, **_k: False)
     monkeypatch.setattr(converge, "dry_run", lambda: True)
     monkeypatch.setattr(
         converge.metal_redfish,
