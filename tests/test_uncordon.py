@@ -295,19 +295,19 @@ def test_reconcile_talos_keeps_the_secureboot_installer_where_it_is_enforced(mon
     assert upgrades == [SB_IMAGE]
 
 
-def test_reconcile_talos_keeps_the_secureboot_installer_on_an_unreadable_state(monkeypatch):
-    """A probe that cannot decide is not a verdict: the target installer is used
-    rather than the probe aborting or silently downgrading the node."""
+def test_reconcile_talos_refuses_upgrade_on_an_unreadable_security_state(monkeypatch):
+    """Unknown firmware state must never select either installer by guesswork."""
     cfg, machines, inventory, upgrades = _upgrade_image_guard_setup(monkeypatch, None)
 
-    converge._reconcile_talos(
-        cfg, machines, inventory, NetworkResult(),
-        {("base",): SB_IMAGE}, {("base",): "sch-123"},
-        Path("talosconfig"), Path("kubeconfig"),
-        plain_installer_images={("base",): PLAIN_IMAGE},
-    )
+    with pytest.raises(ReconcileError, match="cannot determine Secure Boot"):
+        converge._reconcile_talos(
+            cfg, machines, inventory, NetworkResult(),
+            {("base",): SB_IMAGE}, {("base",): "sch-123"},
+            Path("talosconfig"), Path("kubeconfig"),
+            plain_installer_images={("base",): PLAIN_IMAGE},
+        )
 
-    assert upgrades == [SB_IMAGE]
+    assert upgrades == []
 
 
 def test_reconcile_talos_probes_secure_boot_only_with_a_fallback_available(monkeypatch):

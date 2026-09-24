@@ -81,7 +81,7 @@ def still_installed(ctx: Context) -> bool:
             continue
         try:
             if entry.is_manifest:
-                if any(kube.exists(ctx.root, url) for url in entry.urls()):
+                if any(kube.exists(ctx.root, url) for url in _manifest_urls(entry)):
                     return True
             elif entry.name == "ceph":
                 if any(
@@ -187,23 +187,38 @@ def converge(ctx: Context, assume_yes: bool = False) -> dict:
     failed: list[str] = []
     for entry in _ordered(cfg.entries):
         try:
-            result[entry.name] = _converge_entry(entry, ctx, cfg.entries, pool, gateway_on)
+            result[entry.name] = _converge_entry(entry, ctx, pool, gateway_on)
         except ReconcileError as e:
             warn(f"charts: {e}")
             failed.append(entry.name)
     if failed:
         raise ReconcileError(f"charts: {', '.join(failed)} failed to converge")
+    # Namespace deletion is last: other disabled releases may still need their
+    # webhooks and Helm records, and enabled entries may share a Ceph namespace.
+    namespaces: dict[str, None] = {}
+    for entry in cfg.entries.values():
+        if entry.name == "ceph":
+            wanted = charts.ceph_charts(entry) if entry.enabled else ()
+            for chart in charts.CEPH_CHARTS:
+                if chart not in wanted:
+                    namespaces[chart] = None
+        elif not entry.enabled and entry.namespace:
+            namespaces[entry.namespace.name] = None
+    for namespace in namespaces:
+        _delete_namespace(
+            ctx.root, namespace, shared_with=_namespace_sharers(cfg.entries, namespace)
+        )
     return {"entries": result}
 
 
 def _converge_entry(
-    entry: Entry, ctx: Context, entries: dict[str, Entry], pool: tuple[str, ...], gateway_on: bool
+    entry: Entry, ctx: Context, pool: tuple[str, ...], gateway_on: bool
 ) -> dict:
     if entry.is_manifest:
         return _converge_manifest(entry, ctx)
     if entry.name == "ceph":
         return _converge_ceph(entry, ctx)
-    return _converge_chart(entry, ctx, entries, pool, gateway_on)
+    return _converge_chart(entry, ctx, pool, gateway_on)
 
 
 def _converge_manifest(entry: Entry, ctx: Context) -> dict:
@@ -241,7 +256,7 @@ def _converge_manifest(entry: Entry, ctx: Context) -> dict:
 
 
 def _converge_chart(
-    entry: Entry, ctx: Context, entries: dict[str, Entry], pool: tuple[str, ...], gateway_on: bool
+    entry: Entry, ctx: Context, pool: tuple[str, ...], gateway_on: bool
 ) -> dict:
     root, kubeconfig = ctx.root, ctx.kubeconfig
     namespace = _namespace_of(entry)
@@ -256,10 +271,6 @@ def _converge_chart(
             _delete_issuers(root, entry)
         if record is not None:
             helm.uninstall(kubeconfig, entry.name, namespace)
-        if entry.namespace:
-            _delete_namespace(
-                root, entry.namespace.name, shared_with=_namespace_sharers(entries, entry)
-            )
         return {"action": "removed" if record is not None else "absent", "kind": "chart"}
 
     if entry.namespace:
@@ -408,8 +419,6 @@ def _converge_ceph(entry: Entry, ctx: Context) -> dict:
                 helm.uninstall(kubeconfig, chart, chart)
         if secrets:
             _delete_ceph_secrets(root, secrets)
-        for chart in charts.CEPH_CHARTS:
-            _delete_namespace(root, chart)
         return {"action": "removed" if present else "absent", "kind": "chart"}
 
     charts_result: dict[str, Any] = {}
@@ -476,20 +485,19 @@ def _delete_ceph_secrets(root, secrets: CephSecrets) -> None:
 
 
 def _remove_ceph_chart(root, kubeconfig, chart: str, secrets: CephSecrets | None) -> bool:
-    """Uninstall one no-longer-wanted ceph chart with its Secret and namespace.
+    """Uninstall one no-longer-wanted ceph chart with its Secret.
 
     The deploy loop only ever touches the charts the entry's rbd:/fs: flags
     still enable, so a chart whose flag was turned off is invisible to it;
     probing both charts and removing the unwanted one keeps the release from
     being orphaned with the privileged namespace it ships with. Returns
-    whether the release was present.
+    whether the release was present. Converge cleans up namespaces last.
     """
     present = helm.release(kubeconfig, chart, chart) is not None
     if present:
         helm.uninstall(kubeconfig, chart, chart)
     if secrets:
         _delete_ceph_secret(root, secrets, chart)
-    _delete_namespace(root, chart)
     return present
 
 
@@ -554,21 +562,15 @@ def _converge_namespace(namespace: Namespace, root) -> None:
 PROTECTED_NAMESPACES = frozenset({"default", "kube-system", "kube-public"})
 
 
-def _namespace_sharers(entries: dict[str, Entry], entry: Entry) -> tuple[str, ...]:
-    """The other enabled entries converging into this entry's namespace.
-
-    A disable may not remove a namespace another enabled entry still uses;
-    destroy passes none, since every entry goes and nothing shares it after.
-    """
-    if not entry.namespace:
-        return ()
+def _namespace_sharers(entries: dict[str, Entry], namespace: str) -> tuple[str, ...]:
+    """Enabled entries still using a namespace, including Ceph's implicit ones."""
     return tuple(
         name
-        for name, other in entries.items()
-        if name != entry.name
-        and other.enabled
-        and other.namespace
-        and other.namespace.name == entry.namespace.name
+        for name, entry in entries.items()
+        if entry.enabled and (
+            (entry.namespace and entry.namespace.name == namespace)
+            or (name == "ceph" and namespace in charts.ceph_charts(entry))
+        )
     )
 
 
@@ -793,6 +795,7 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
     preflight_tools(["helm", "kubectl"])
     root, kubeconfig = ctx.root, ctx.kubeconfig
     pool = _ingress_pool(ctx)
+    namespaces: dict[str, None] = {}
 
     for entry in reversed(_ordered(cfg.entries)):
         if entry.is_manifest:
@@ -818,7 +821,7 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
             if secrets:
                 _delete_ceph_secrets(root, secrets)
             for chart in charts.CEPH_CHARTS:
-                _delete_namespace(root, chart)
+                namespaces[chart] = None
             continue
         namespace = _namespace_of(entry)
         if entry.name == "metallb" and pool:
@@ -832,7 +835,11 @@ def destroy(ctx: Context, assume_yes: bool = False) -> None:
         if helm.release(kubeconfig, entry.name, namespace) is not None:
             helm.uninstall(kubeconfig, entry.name, namespace)
         if entry.namespace:
-            _delete_namespace(root, entry.namespace.name)
+            namespaces[entry.namespace.name] = None
+    # A namespace can hold several releases (including their webhooks and
+    # Helm records). Remove it only after every release has been uninstalled.
+    for namespace in namespaces:
+        _delete_namespace(root, namespace)
     info("done")
 
 

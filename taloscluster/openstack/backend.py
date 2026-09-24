@@ -6,7 +6,6 @@ import functools
 import shlex
 
 from keystoneauth1.exceptions import ClientException, RetriableConnectionFailure
-
 from openstack import exceptions as os_exceptions
 
 from .. import naming

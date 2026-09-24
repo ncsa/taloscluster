@@ -19,9 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from openstack.connection import Connection
-
 from openstack import exceptions
+from openstack.connection import Connection
 
 from .. import naming
 from ..config import Config, Machine

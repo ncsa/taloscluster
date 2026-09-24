@@ -16,9 +16,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from openstack.connection import Connection
-
 import openstack
+from openstack.connection import Connection
 
 from .. import naming
 from ..config import Config

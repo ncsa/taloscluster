@@ -2367,13 +2367,18 @@ def _reconcile_talos(
         # a SecureBoot (UKI) installer is only for a node whose firmware reports
         # Secure Boot enforced: one that booted the plain ISO never enrolled the
         # factory keys, and the UKI boot path there is unverified. An unreadable
-        # state leaves the target image, like the other unreadable reads.
+        # state cannot safely select either installer, so stop the rollout.
         image = want_image
-        if plain_image and plain_image != want_image and (
-            talosctl.secureboot_enforced(talosconfig, endpoint, address) is False
-        ):
-            info(f"{host}: Secure Boot not enforced; keeping the plain installer image")
-            image = plain_image
+        if plain_image and plain_image != want_image:
+            enforced = talosctl.secureboot_enforced(talosconfig, endpoint, address)
+            if enforced is None:
+                raise ReconcileError(
+                    f"{host}: cannot determine Secure Boot state; refusing to choose an "
+                    "installer image. Check the node's securitystate resource and retry."
+                )
+            if not enforced:
+                info(f"{host}: Secure Boot not enforced; keeping the plain installer image")
+                image = plain_image
         reason = "extensions changed" if cur_ver == cfg.talos_version else str(cur_ver or "?")
         info(f"{host}: {reason} -> {cfg.talos_version} ({image})")
         talosctl.upgrade(talosconfig, endpoint, address, image)

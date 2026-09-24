@@ -96,3 +96,21 @@ def test_protocol_is_complete():
     for hook in ("init", "validate", "configured", "converge", "destroy", "status", "check"):
         assert callable(getattr(taloscluster_charts, hook, None)), hook
     assert taloscluster_charts.CONFIG_SECTIONS == ("charts",)
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_disabled_latest_gateway_activation_probes_resolved_manifest(
+    tmp_path, monkeypatch, present
+):
+    _write_cluster(tmp_path, {"charts": {"gateway": {"enabled": False, "version": "latest"}}})
+    (tmp_path / "kubeconfig").write_text("")
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: "v1.7.0")
+    probed = []
+    monkeypatch.setattr(
+        reconcile.kube, "exists", lambda root, url: probed.append(url) or present
+    )
+    assert taloscluster_charts.configured(_Ctx(tmp_path)) is present
+    assert probed == [
+        "https://github.com/kubernetes-sigs/gateway-api/releases/download/"
+        "v1.7.0/standard-install.yaml"
+    ]

@@ -4,7 +4,7 @@ All notable changes to taloscluster are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - Unreleased
 
 ### Added
 
@@ -85,6 +85,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Version the bundled plugins 0.8.0 and require `taloscluster>=0.8.0`, the earliest release whose APIs they import.
 
 ### Fixed
+
+- Align the core package version with bundled plugins requiring `taloscluster>=0.8.0`.
+- Keep disabled `latest` Gateway API manifests eligible for cleanup.
+- Remove chart namespaces only after all releases are removed, preserving namespaces shared with enabled charts or Ceph.
+- Bound Secure Boot probes and refuse upgrades when the installer variant cannot be determined.
+- Keep OpenStack import sorting consistent between clean checkouts and local cluster directories.
 
 - Fix stale docs: the OpenStack server refusal, the NIC MTU restart deferral, charts plugin coverage and the live workflow test's VM-only scope.
 - Stop `init` re-runs from appending a commented plugin secrets example again.

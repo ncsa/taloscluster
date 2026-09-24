@@ -944,16 +944,17 @@ def secureboot_enforced(talosconfig: Path, endpoint: str, node: str) -> bool | N
     (UKI) installer: a node created before Secure Boot support booted the plain
     ISO and never enrolled keys, and such a node must keep the plain installer.
     An unreadable read or a reply without the state returns None rather than
-    raising: the caller decides what an unknown means, and the probe must never
-    abort an upgrade rollout the surrounding reads already validated.
+    raising. The caller must refuse to choose an installer on unknown state.
+    The read is bounded like the other rollout probes.
     """
     try:
         out = _run(
             _talos(talosconfig, endpoint, node, "get", "securitystate", "-o", "yaml"),
             capture=True,
             quiet_stderr=True,
+            timeout=PROBE_TIMEOUT_S,
         )
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     for doc in _resource_docs(out):
         value = (doc.get("spec") or {}).get("secureBoot")

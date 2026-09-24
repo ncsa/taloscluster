@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import openstack
 import pytest
 
 from taloscluster.errors import ReconcileError
+from taloscluster.openstack import session
 from taloscluster.openstack.session import Inventory
 
 CLUSTER = "mycluster"
@@ -90,9 +92,6 @@ def test_project_name_uses_auth_access_when_available():
 
 def test_connect_uses_the_configured_region(monkeypatch):
     """The session region comes from cluster.yaml's openstack.region, not RegionOne."""
-    import openstack
-    from taloscluster.openstack import session
-
     seen = {}
     monkeypatch.setattr(openstack, "connect", lambda **kw: seen.update(kw) or object())
     cfg = SimpleNamespace(

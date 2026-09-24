@@ -394,8 +394,7 @@ spec:
 
 
 def test_secureboot_enforced_reads_the_security_state_resource(monkeypatch):
-    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, quiet_stderr=False:
-                        SECURITYSTATE_OUTPUT)
+    monkeypatch.setattr(talosctl, "_run", lambda *a, **k: SECURITYSTATE_OUTPUT)
     assert talosctl.secureboot_enforced(
         Path("/dev/null/talosconfig"), "192.0.2.1", "node-01"
     ) is True
@@ -405,7 +404,7 @@ def test_secureboot_enforced_reports_an_unenforced_node(monkeypatch):
     """A node created before Secure Boot support booted the plain ISO, so its
     spec says secureBoot: false -- the caller must keep the plain installer."""
     out = SECURITYSTATE_OUTPUT.replace("secureBoot: true", "secureBoot: false")
-    monkeypatch.setattr(talosctl, "_run", lambda args, capture=False, quiet_stderr=False: out)
+    monkeypatch.setattr(talosctl, "_run", lambda *a, **k: out)
     assert talosctl.secureboot_enforced(
         Path("/dev/null/talosconfig"), "192.0.2.1", "node-01"
     ) is False
@@ -413,7 +412,7 @@ def test_secureboot_enforced_reports_an_unenforced_node(monkeypatch):
 
 def test_secureboot_enforced_none_on_a_failed_read(monkeypatch):
     """A node that does not answer the read is an unknown, not a verdict."""
-    def fail(args, capture=False, quiet_stderr=False):
+    def fail(args, capture=False, quiet_stderr=False, timeout=None):
         raise subprocess.CalledProcessError(1, "talosctl")
 
     monkeypatch.setattr(talosctl, "_run", fail)
@@ -424,7 +423,7 @@ def test_secureboot_enforced_none_on_a_failed_read(monkeypatch):
 
 def test_secureboot_enforced_none_on_garbage_output(monkeypatch):
     monkeypatch.setattr(
-        talosctl, "_run", lambda args, capture=False, quiet_stderr=False: "nonsense"
+        talosctl, "_run", lambda args, capture=False, quiet_stderr=False, timeout=None: "nonsense"
     )
     assert talosctl.secureboot_enforced(
         Path("/dev/null/talosconfig"), "192.0.2.1", "node-01"
@@ -434,7 +433,7 @@ def test_secureboot_enforced_none_on_garbage_output(monkeypatch):
 def test_secureboot_enforced_targets_the_securitystate_resource(monkeypatch):
     args_seen: list[list[str]] = []
     monkeypatch.setattr(talosctl, "_run",
-                        lambda args, capture=False, quiet_stderr=False:
+                        lambda args, capture=False, quiet_stderr=False, timeout=None:
                         args_seen.append(args) or "")
     talosctl.secureboot_enforced(Path("/dev/null/talosconfig"), "192.0.2.1", "node-01")
     assert args_seen and args_seen[0][-4:] == ["get", "securitystate", "-o", "yaml"]
@@ -1562,3 +1561,12 @@ def test_gen_config_reports_talosctl_error_for_a_bad_patch(tmp_path):
     msg = str(excinfo.value)
     assert "talosctl gen config failed" in msg
     assert "noSuchField" in msg
+
+
+def test_secureboot_probe_is_bounded_and_timeout_is_unknown(monkeypatch):
+    def timeout(args, **kwargs):
+        assert kwargs.get("timeout") == talosctl.PROBE_TIMEOUT_S
+        raise subprocess.TimeoutExpired("talosctl", kwargs["timeout"])
+
+    monkeypatch.setattr(talosctl, "_run", timeout)
+    assert talosctl.secureboot_enforced(Path("talosconfig"), "192.0.2.1", "192.0.2.2") is None

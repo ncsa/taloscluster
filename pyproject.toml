@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taloscluster"
-version = "0.7.0"
+version = "0.8.0"
 description = "Converge and manage a Talos Kubernetes cluster on OpenStack or Proxmox, optionally alongside bare metal, from a declarative cluster.yaml"
 requires-python = ">=3.10"
 dependencies = [
@@ -78,6 +78,9 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["openstack"]
 
 [tool.mypy]
 python_version = "3.10"

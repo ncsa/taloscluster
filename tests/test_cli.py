@@ -6,9 +6,13 @@ import subprocess
 
 import pytest
 import yaml
+from openstack import exceptions as os_exceptions
 
 from taloscluster import cli
 from taloscluster import plugins as _plugins
+from taloscluster.openstack import backend as os_backend
+from taloscluster.openstack.session import Inventory
+from taloscluster.output import set_dry_run
 
 
 def _stub_plugin(name, **hooks):
@@ -116,11 +120,6 @@ def test_openstack_sdk_error_exits_cleanly_through_cli_main(
     backend boundary, so cli.main prints one ``ERROR:`` line and exits 1 instead
     of leaking a traceback (the SDKException subclasses only Exception and cli.main
     does not handle it directly)."""
-    from openstack import exceptions as os_exceptions
-    from taloscluster.openstack import backend as os_backend
-    from taloscluster.openstack.session import Inventory
-    from taloscluster.output import set_dry_run
-
     (tmp_path / "secrets.yaml").write_text(
         "openstack:\n"
         "  credential_id: cred-id\n"

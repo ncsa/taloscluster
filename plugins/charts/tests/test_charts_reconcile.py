@@ -217,6 +217,7 @@ def test_still_installed_sees_an_applied_manifest(tmp_path, monkeypatch):
     (tmp_path / "kubeconfig").write_text("")
     monkeypatch.setattr(reconcile.kube, "exists", lambda root, target, **k: True)
     # a `latest` gateway cannot be named without upstream, and reads as gone
+    monkeypatch.setattr(reconcile.upstream, "gateway_latest_version", lambda: None)
     ctx = _pool_ctx(tmp_path, {"gateway": {"enabled": False, "version": "latest"}})
     assert reconcile.still_installed(ctx) is False
     pinned = _pool_ctx(tmp_path, {"gateway": {"enabled": False, "version": "v1.6.2"}})
@@ -484,12 +485,12 @@ def test_destroy_order(tmp_path, monkeypatch):
     reconcile.destroy(_pool_ctx(tmp_path, charts))
     assert log == [
         "uninstall traefik",
-        "delete namespace traefik",
         "delete metallb pool resources",  # before the chart: helm uninstall removes the CRDs
         "uninstall metallb",
-        "delete namespace metallb-system",
         "delete https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2"
         "/standard-install.yaml",
+        "delete namespace traefik",
+        "delete namespace metallb-system",
     ]
 
 
@@ -555,8 +556,8 @@ def test_destroy_never_deletes_the_clusters_own_namespaces(tmp_path, monkeypatch
     reconcile.destroy(_pool_ctx(tmp_path, charts))
     assert log == [
         "uninstall zzz",
+        "uninstall aaa",
         "delete namespace zzz-ns",
-        "uninstall aaa",  # processed after the skipped namespace: no abort
     ]
     assert "delete namespace kube-system" not in log
     assert "one of the cluster's own" in capsys.readouterr().err
@@ -1228,3 +1229,60 @@ def test_check_fails_while_a_turned_off_chart_is_still_installed(tmp_path, fake_
     report = reconcile.check(_pool_ctx(tmp_path, {"ceph": dict(CEPH)}))
     assert report["ok"] is False
     assert report["entries"]["ceph"] == "drifted"
+
+
+@pytest.mark.parametrize("ceph", [False, True])
+def test_destroy_removes_shared_namespaces_after_all_releases(tmp_path, monkeypatch, ceph):
+    log = []
+    namespace = "ceph-csi-rbd" if ceph else "shared"
+    first = "ceph-csi-rbd" if ceph else "metallb"
+    _stub(monkeypatch, log, releases=(first, "custom"), exists=True)
+    entries = {
+        "ceph": dict(CEPH),
+        "custom": {"repo": "https://charts.example.com", "namespace": namespace},
+    } if ceph else {
+        "metallb": {"namespace": namespace},
+        "custom": {"repo": "https://charts.example.com", "namespace": namespace},
+    }
+    reconcile.destroy(_pool_ctx(tmp_path, entries))
+    deletion = f"delete namespace {namespace}"
+    assert log.count(deletion) == 1
+    assert log.index(deletion) > log.index(f"uninstall {first}")
+    assert log.index(deletion) > log.index("uninstall custom")
+
+
+def test_disabling_shared_entries_keeps_namespace_until_both_are_removed(tmp_path, monkeypatch):
+    log = []
+    _stub(monkeypatch, log, releases=("metallb", "custom"), exists=True)
+    entries = {
+        "metallb": {"namespace": "shared", "enabled": False},
+        "custom": {
+            "repo": "https://charts.example.com", "namespace": "shared", "enabled": False,
+        },
+    }
+    reconcile.converge(_pool_ctx(tmp_path, entries))
+    assert log.count("delete namespace shared") == 1
+    assert log.index("delete namespace shared") > log.index("uninstall custom")
+
+
+@pytest.mark.parametrize("disabled_ceph", [True, False])
+def test_disable_respects_namespaces_shared_with_ceph(
+    tmp_path, fake_helm, no_kube, monkeypatch, disabled_ceph
+):
+    deleted = []
+    monkeypatch.setattr(
+        reconcile.kube, "namespace_labels",
+        lambda *a: {MANAGED_BY_KEY: MANAGED_BY_VALUE},
+    )
+    monkeypatch.setattr(
+        reconcile.kube, "delete", lambda *a, **k: deleted.append(k.get("label"))
+    )
+    entries = {
+        "ceph": dict(CEPH, enabled=not disabled_ceph),
+        "custom": {
+            "repo": "https://charts.example.com", "namespace": "ceph-csi-rbd",
+            "enabled": disabled_ceph,
+        },
+    }
+    reconcile.converge(_pool_ctx(tmp_path, entries))
+    assert "namespace ceph-csi-rbd" not in deleted
